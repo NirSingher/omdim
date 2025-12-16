@@ -19,19 +19,21 @@ Slack bot for managing you Daily Standups. Build to be serverless hosted for fre
 
 | Platform | Best For | Cron Support | Free Tier Limit |
 |----------|----------|--------------|-----------------|
-| **Vercel** | Simplest setup | ⚠️ Limited | 1 cron/day (need external cron) |
-| **Netlify** | Good alternative | ✅ Scheduled functions | Unlimited |
-| **Cloudflare** | Fastest performance | ✅ Cron Triggers | Unlimited |
+| **Cloudflare** ⭐ | Recommended | ✅ Cron Triggers | Unlimited |
+| **Vercel** | Alternative | ⚠️ Limited | 1 cron/day (need external cron) |
+| **Netlify** | Alternative | ✅ Scheduled functions | Unlimited |
 | **Supabase** | All-in-one (DB + functions) | ✅ pg_cron | Unlimited |
 
-> **Note**: Vercel free tier only allows 1 cron job per day. For the 30-min prompt loop, use Netlify/Cloudflare/Supabase, or add an external cron service (see below).
+> **Note**: This codebase is optimized for **Cloudflare Workers**. Other platforms would require adapting the entry point structure. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Database Options (All Free, No Credit Card)
 
-| Service | Free Tier |
-|---------|-----------|
-| **Supabase** | 500MB storage |
-| **Neon** | 3GB storage |
+| Service | Free Tier | Notes |
+|---------|-----------|-------|
+| **Neon** ⭐ | 3GB storage | Required for Cloudflare Workers |
+| **Supabase** | 500MB storage | Works with Vercel/Netlify |
+
+> **Note**: Cloudflare Workers requires the Neon serverless driver (WebSocket-based). Local PostgreSQL is not supported for development - use Neon's free tier instead.
 
 ---
 
@@ -103,81 +105,7 @@ psql --version
 ```
 </details>
 
-### 3. Deploy
-
-Choose one platform:
-
----
-
-#### Option A: Vercel
-
-> ⚠️ Vercel free tier only allows 1 cron/day. You'll need an external cron service for the 30-min prompts.
-
-1. Sign up at [vercel.com](https://vercel.com) (no credit card)
-
-2. Install and deploy:
-   ```bash
-   npm i -g vercel
-   npm install
-   vercel
-   ```
-
-3. Set environment variables in Vercel dashboard:
-   | Variable | Value |
-   |----------|-------|
-   | `SLACK_BOT_TOKEN` | `xoxb-...` |
-   | `SLACK_SIGNING_SECRET` | From Slack app |
-   | `DATABASE_URL` | Your Postgres connection string |
-   | `CRON_SECRET` | Random string for securing cron endpoints |
-
-4. Set up external cron (free):
-   - Go to [cron-job.org](https://cron-job.org) (free, no credit card)
-   - Create a job for `https://your-project.vercel.app/api/cron/prompt?secret=YOUR_CRON_SECRET`
-   - Schedule: `*/30 * * * *` (every 30 minutes)
-   - Create another for `/api/cron/cleanup` at `0 3 * * 0` (weekly)
-
-5. Your app URL: `https://your-project.vercel.app`
-
----
-
-#### Option B: Netlify
-
-1. Sign up at [netlify.com](https://netlify.com) (no credit card)
-
-2. Create `netlify.toml`:
-   ```toml
-   [build]
-     command = "npm run build"
-     functions = "netlify/functions"
-
-   [functions]
-     node_bundler = "esbuild"
-
-   # Cron job for prompts (every 30 min)
-   [[edge_functions]]
-     schedule = "*/30 * * * *"
-     path = "/api/cron/prompt"
-
-   # Cron job for cleanup (weekly)
-   [[edge_functions]]
-     schedule = "0 3 * * 0"
-     path = "/api/cron/cleanup"
-   ```
-
-3. Deploy:
-   ```bash
-   npm i -g netlify-cli
-   npm install
-   netlify deploy --prod
-   ```
-
-4. Set environment variables in Netlify dashboard → Site settings → Environment variables
-
-5. Your app URL: `https://your-site.netlify.app`
-
----
-
-#### Option C: Cloudflare Workers
+### 3. Deploy to Cloudflare Workers
 
 1. Sign up at [cloudflare.com](https://cloudflare.com) (no credit card)
 
@@ -203,45 +131,6 @@ Choose one platform:
 5. Your app URL: `https://standup-bot.<your-subdomain>.workers.dev`
 
 > **Note**: Cloudflare free tier doesn't support day-of-week in cron, so cleanup runs daily at 3am UTC instead of weekly.
-
----
-
-#### Option D: Supabase (All-in-One)
-
-Use Supabase for both database AND functions:
-
-1. Sign up at [supabase.com](https://supabase.com) (no credit card)
-
-2. Create project and run `schema.sql` in SQL Editor
-
-3. Create Edge Functions:
-   ```bash
-   supabase init
-   supabase functions new slack-commands
-   supabase functions new slack-interact
-   supabase functions new cron-prompt
-   ```
-
-4. Deploy:
-   ```bash
-   supabase functions deploy
-   ```
-
-5. Set up cron in SQL Editor:
-   ```sql
-   SELECT cron.schedule(
-     'standup-prompt',
-     '*/30 * * * *',
-     $$SELECT net.http_post(
-       url := 'https://your-project.supabase.co/functions/v1/cron-prompt',
-       headers := '{"Authorization": "Bearer YOUR_ANON_KEY"}'::jsonb
-     )$$
-   );
-   ```
-
-6. Your app URL: `https://your-project.supabase.co/functions/v1`
-
----
 
 ### 4. Configure Slack URLs
 
@@ -342,11 +231,11 @@ In Slack:
 
 ## Local Development
 
-### Cloudflare Workers
+### Cloudflare Workers (Recommended)
 
 ```bash
 cp .dev.vars.example .dev.vars
-# Edit .dev.vars with your credentials
+# Edit .dev.vars with your Neon DATABASE_URL and Slack credentials
 
 npm install
 npm run dev
@@ -355,38 +244,13 @@ npm run dev
 curl http://localhost:8787/api/health
 ```
 
-### Vercel
-
-```bash
-cp .env.example .env
-# Edit .env with your credentials
-
-npm install
-vercel dev
-
-# Test health endpoint
-curl http://localhost:3000/api/health
-```
-
-### Netlify
-
-```bash
-cp .env.example .env
-# Edit .env with your credentials
-
-npm install
-netlify dev
-
-# Test health endpoint
-curl http://localhost:8888/api/health
-```
+> **Important**: You must use a Neon DATABASE_URL even for local development. See [CONTRIBUTING.md](CONTRIBUTING.md) for full setup instructions.
 
 ### Testing with Slack
 
-For local Slack testing, use [ngrok](https://ngrok.com) to expose your local server:
+Use [ngrok](https://ngrok.com) to expose your local server:
 
 ```bash
-# Pick the port for your platform: 8787 (Cloudflare), 3000 (Vercel), 8888 (Netlify)
 ngrok http 8787
 
 # Update Slack app URLs to ngrok URL temporarily
