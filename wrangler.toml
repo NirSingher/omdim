@@ -1,6 +1,13 @@
 name = "standup-bot"
 main = "api/index.ts"
 compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Bundle yaml files as text
+[[rules]]
+type = "Text"
+globs = ["**/*.yaml", "**/*.yml"]
+fallthrough = false
 
 [triggers]
 # Prompt: every 30 minutes

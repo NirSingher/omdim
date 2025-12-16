@@ -254,7 +254,10 @@ Now that you have your app URL, go back to your Slack app settings:
    - **Command**: `/standup`
    - **Request URL**: `https://YOUR-APP-URL/api/slack/commands`
    - **Description**: Manage daily standups
+   - **Escape channels, users, and links sent to your app**: ✅ Check this box
 3. Save
+
+> **Important**: The "Escape channels, users, and links" option is required for @mentions to work in commands like `/standup add @user daily-name`.
 
 #### Interactivity
 

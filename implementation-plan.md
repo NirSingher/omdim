@@ -3,7 +3,7 @@
 ## Prerequisites
 
 ### Slack App
-- [ ] Create Slack app at api.slack.com/apps
+- [x] Create Slack app at api.slack.com/apps
 
 ### Hosting Platform (choose one - all free, no credit card)
 - [ ] **Vercel** - vercel.com
@@ -16,7 +16,7 @@
 - [x] **Neon Postgres** - 3GB free
 
 ### Environment Variables
-- [ ] Configure `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DATABASE_URL`
+- [x] Configure `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DATABASE_URL`
 
 ---
 
@@ -30,44 +30,45 @@
 - [x] Create Cloudflare Workers entry point (`api/index.ts`)
 - [x] Create health endpoint (`api/health.ts`)
 - [x] Create platform configs (`wrangler.toml`, `vercel.json`)
-- [ ] Run schema.sql on database
+- [x] Run schema.sql on database
 
-**🧪 Checkpoint 1**: Deploy to chosen platform, verify `/api/health` returns 200
+**🧪 Checkpoint 1**: ✅ Deploy to chosen platform, verify `/api/health` returns 200
 
 ---
 
-## Step 2: Config Loading
+## Step 2: Config Loading ✅
 
 - [x] Create `config.yaml.example` with test daily and schedule
-- [ ] Copy to `config.yaml` and customize
-- [ ] Implement `lib/config.ts` to parse YAML
-- [ ] Validate config structure on load
+- [x] Copy to `config.yaml` and customize
+- [x] Implement `lib/config.ts` to parse YAML
+- [x] Validate config structure on load
+- [x] Set up local Docker PostgreSQL for development
 
-**🧪 Checkpoint 2**: Log loaded config on deploy, verify structure
-
----
-
-## Step 3: Slack Auth & Slash Command Base
-
-- [ ] Implement request signature verification (`lib/slack.ts`)
-- [ ] Create `/api/slack/commands.ts` endpoint
-- [ ] Parse command text, route to handlers
-- [ ] Respond with ephemeral acknowledgment
-
-**🧪 Checkpoint 3**: `/standup help` returns usage text in Slack
+**🧪 Checkpoint 2**: ✅ Log loaded config on deploy, verify structure
 
 ---
 
-## Step 4: Admin Commands
+## Step 3: Slack Auth & Slash Command Base ✅
 
-- [ ] Implement `/standup add @user daily-name`
+- [x] Implement request signature verification (`lib/slack.ts`)
+- [x] Create `/api/slack/commands` endpoint in `api/index.ts`
+- [x] Parse command text, route to handlers
+- [x] Respond with ephemeral acknowledgment
+
+**🧪 Checkpoint 3**: ✅ `/standup help` returns usage text in Slack
+
+---
+
+## Step 4: Admin Commands ✅
+
+- [x] Implement `/standup add @user daily-name`
   - Parse user ID from mention
   - Check admin permission
   - Insert into participants table
-- [ ] Implement `/standup remove @user daily-name`
-- [ ] Implement `/standup list daily-name`
+- [x] Implement `/standup remove @user daily-name`
+- [x] Implement `/standup list daily-name`
 
-**🧪 Checkpoint 4**: Add/remove/list users via Slack, verify in DB
+**🧪 Checkpoint 4**: ✅ Add/remove/list users via Slack, verify in DB
 
 ---
 

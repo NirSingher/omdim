@@ -3,5 +3,9 @@
 
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_SIGNING_SECRET=your-signing-secret
-DATABASE_URL=postgres://user:password@host:5432/database
+
+# Must be a Neon DATABASE_URL (Cloudflare Workers doesn't support standard pg driver)
+# Get this from your Neon project dashboard
+DATABASE_URL=postgresql://user:password@ep-xxx-xxx-123456.us-east-2.aws.neon.tech/database?sslmode=require
+
 CRON_SECRET=your-random-secret-string
