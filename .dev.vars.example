@@ -1,0 +1,7 @@
+# Cloudflare Workers local development secrets
+# Copy to .dev.vars: cp .dev.vars.example .dev.vars
+
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_SIGNING_SECRET=your-signing-secret
+DATABASE_URL=postgres://user:password@host:5432/database
+CRON_SECRET=your-random-secret-string

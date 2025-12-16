@@ -2,20 +2,40 @@
 
 ## Overview
 
-Serverless architecture on Vercel (recommended) or AWS Lambda. Event-driven design with Slack webhooks and scheduled cron jobs.
+Serverless architecture with multiple hosting options. Event-driven design with Slack webhooks and scheduled cron jobs.
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Slack     │────▶│   Vercel     │────▶│  Database   │
+│   Slack     │────▶│  Serverless  │────▶│  Database   │
 │  Webhooks   │     │  Functions   │     │  (Postgres) │
 └─────────────┘     └──────────────┘     └─────────────┘
                            ▲
                            │
                     ┌──────┴──────┐
                     │  Cron Jobs  │
-                    │  (Vercel)   │
                     └─────────────┘
 ```
+
+---
+
+## Hosting Options (No Credit Card Required)
+
+| Platform | Functions | Cron | Free Tier | Notes |
+|----------|-----------|------|-----------|-------|
+| **Vercel** | ✅ Native | ⚠️ 1/day | 100K invocations/mo | Needs external cron service |
+| **Netlify** | ✅ Native | ✅ Unlimited | 125K invocations/mo | Recommended - full cron support |
+| **Cloudflare** | ✅ Workers | ✅ Unlimited | 100K requests/day | Fastest cold starts |
+| **Supabase** | ✅ Edge Functions | ✅ pg_cron | 500K invocations/mo | DB + functions in one |
+
+> **Vercel limitation**: Free tier allows only 1 cron job per day. Use [cron-job.org](https://cron-job.org) (free) to trigger endpoints externally, or choose Netlify/Cloudflare/Supabase.
+
+### Database Options
+
+| Service | Free Tier | Notes |
+|---------|-----------|-------|
+| **Supabase** | 500MB, 2 projects | Postgres + Auth + Edge Functions |
+| **Neon** | 3GB, 1 project | Serverless Postgres, auto-suspend |
+| **PlanetScale** | 1 billion row reads/mo | MySQL (not Postgres) |
 
 ---
 
@@ -23,10 +43,10 @@ Serverless architecture on Vercel (recommended) or AWS Lambda. Event-driven desi
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Runtime | Node.js / TypeScript | Best Slack SDK support, Vercel-native |
-| Framework | Next.js API routes or plain Vercel functions | Simple, built-in cron support |
-| Database | Neon / Supabase (Postgres) | Free tier, serverless-friendly |
-| Slack SDK | `@slack/bolt` or `@slack/web-api` | Official, well-maintained |
+| Runtime | Node.js / TypeScript | Best Slack SDK support, works on all platforms |
+| Hosting | Vercel / Netlify / Cloudflare / Supabase | All have free tiers, no credit card |
+| Database | Supabase / Neon (Postgres) | Free tier, serverless-friendly |
+| Slack SDK | `@slack/web-api` | Official, lightweight |
 | Config | YAML file in repo | Simple, version-controlled |
 
 ---
@@ -288,11 +308,17 @@ DATABASE_URL=postgres://...
 
 ## Cost Estimate
 
-| Service | Free Tier | Expected Usage |
-|---------|-----------|----------------|
-| Vercel | 100K fn invocations/mo | ~5K/mo (20 users) |
-| Neon Postgres | 3GB storage, 1 compute | < 100MB |
-| **Total** | **$0/mo** | |
+All platforms support this bot on free tier:
+
+| Setup | Functions | Database | Cost |
+|-------|-----------|----------|------|
+| Vercel + Neon | 100K/mo | 3GB | $0 |
+| Vercel + Supabase | 100K/mo | 500MB | $0 |
+| Netlify + Supabase | 125K/mo | 500MB | $0 |
+| Cloudflare + Neon | 100K/day | 3GB | $0 |
+| Supabase (all-in-one) | 500K/mo | 500MB | $0 |
+
+Expected usage for 20 users: ~5K function calls/month, <100MB storage
 
 ---
 

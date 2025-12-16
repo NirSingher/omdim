@@ -1,0 +1,34 @@
+# Standup Bot Configuration
+# Copy this file to config.yaml and customize for your team
+
+dailies:
+  - name: "engineering"
+    channel: "#eng-standup"
+    schedule: "il-team"
+    questions:
+      - text: "Any PRs needing review?"
+        required: false
+      - text: "OOO tomorrow?"
+        required: false
+
+  # Example: second daily for a different team
+  # - name: "product"
+  #   channel: "#product-standup"
+  #   schedule: "us-team"
+  #   questions:
+  #     - text: "Customer calls today?"
+  #       required: false
+
+schedules:
+  - name: "il-team"
+    days: [sun, mon, tue, wed, thu]
+    default_time: "09:00"
+
+  - name: "us-team"
+    days: [mon, tue, wed, thu, fri]
+    default_time: "09:00"
+
+# Slack user IDs who can manage the bot
+# Find your ID: Slack profile → ⋮ menu → "Copy member ID"
+admins:
+  - "U12345678"

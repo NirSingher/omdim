@@ -1,0 +1,14 @@
+name = "standup-bot"
+main = "api/index.ts"
+compatibility_date = "2024-01-01"
+
+[triggers]
+# Prompt: every 30 minutes
+# Cleanup: daily at 3am UTC (Cloudflare doesn't support day-of-week)
+crons = ["*/30 * * * *", "0 3 * * *"]
+
+# Environment variables - set secrets via: wrangler secret put <NAME>
+# Required secrets:
+#   wrangler secret put SLACK_BOT_TOKEN
+#   wrangler secret put SLACK_SIGNING_SECRET
+#   wrangler secret put DATABASE_URL

@@ -138,6 +138,19 @@ Digests are private - sent only to requester via DM.
 
 ---
 
+## Infrastructure Requirements
+
+**Hosting** (any serverless platform with cron support):
+- Vercel, Netlify, Cloudflare Workers, or Supabase Edge Functions
+- All offer free tiers without credit card
+
+**Database**:
+- Postgres (Supabase or Neon - both free tier)
+
+**Cost**: $0/month on free tiers
+
+---
+
 ## Out of Scope (v1)
 - Self-enrollment
 - Jira/Linear/GitHub integration
