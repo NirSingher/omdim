@@ -32,7 +32,7 @@ interface RichTextBlock {
 }
 
 // Parse rich_text_input value to mrkdwn string with @mentions
-function parseRichText(richText: RichTextBlock): string {
+function parseRichText(richText: RichTextBlock | undefined): string {
   if (!richText?.elements) return '';
 
   const parts: string[] = [];
@@ -389,7 +389,7 @@ export default {
           }
 
           // Build and open modal
-          const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || []);
+          const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order);
           const opened = await openModal(env.SLACK_BOT_TOKEN, triggerId, modal);
 
           if (!opened) {
@@ -445,7 +445,7 @@ export default {
 
           const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
           const todayPlans = parseLines(values.today_plans?.plans_input?.value);
-          const blockers = values.blockers?.blockers_input?.value || '';
+          const blockers = parseRichText(values.blockers?.blockers_input?.rich_text) || '';
 
           // Parse custom question answers (rich_text_input format)
           const daily = getDaily(dailyName);

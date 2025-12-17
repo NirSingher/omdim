@@ -7,6 +7,8 @@ Slack bot for managing you Daily Standups. Build to be serverless hosted for fre
 - **Timezone-aware prompts** - Each user gets prompted at their local time
 - **Continuity tracking** - Yesterday's plans shown as checkboxes, incomplete items carry forward
 - **Flexible schedules** - Support for different work weeks (Sun-Thu, Mon-Fri, etc.)
+- **Custom questions** - Add team-specific questions with @mention support
+- **Configurable field order** - Control the order of all fields in the standup modal
 - **On-demand digests** - Daily and weekly summaries via DM
 - **Zero cost** - Runs entirely on free tiers, no credit card required
 
@@ -169,9 +171,18 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "il-team"
+    # Control field order (lower numbers appear first)
+    field_order:
+      unplanned: 10
+      today_plans: 20
+      blockers: 30
     questions:
+      - text: "How're you feeling?"
+        required: false
+        order: 5      # Appears before unplanned (10)
       - text: "Any PRs needing review?"
         required: false
+        order: 25     # Appears between today_plans (20) and blockers (30)
 
 schedules:
   - name: "il-team"
@@ -184,6 +195,8 @@ schedules:
 admins:
   - "U12345678"  # Your Slack user ID
 ```
+
+**Field ordering**: Standard fields (`unplanned`, `today_plans`, `blockers`) and custom questions are sorted by their `order` value. Lower numbers appear earlier in the modal.
 
 **Finding your Slack user ID**: Click your profile in Slack → three dots menu → "Copy member ID"
 

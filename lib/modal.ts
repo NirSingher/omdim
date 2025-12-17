@@ -2,7 +2,7 @@
  * Slack Block Kit modal builder for standup form
  */
 
-import { Question } from './config';
+import { Question, FieldOrder } from './config';
 
 interface TextObject {
   type: 'plain_text' | 'mrkdwn';
@@ -42,18 +42,43 @@ export interface YesterdayData {
   incomplete: string[];
 }
 
+// Default field order values
+const DEFAULT_FIELD_ORDER: Required<FieldOrder> = {
+  unplanned: 10,
+  today_plans: 20,
+  blockers: 30,
+};
+
+// Field type for ordering
+type FieldType = 'unplanned' | 'today_plans' | 'blockers' | 'custom';
+
+interface OrderedField {
+  type: FieldType;
+  order: number;
+  question?: Question;
+  questionIndex?: number;
+}
+
 /**
- * Build the standup modal
+ * Build the standup modal with configurable field ordering
  */
 export function buildStandupModal(
   dailyName: string,
   yesterday: YesterdayData | null,
-  customQuestions: Question[] = []
+  customQuestions: Question[] = [],
+  fieldOrder?: FieldOrder
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
 
-  // Header section
+  // Merge field order with defaults
+  const order = {
+    unplanned: fieldOrder?.unplanned ?? DEFAULT_FIELD_ORDER.unplanned,
+    today_plans: fieldOrder?.today_plans ?? DEFAULT_FIELD_ORDER.today_plans,
+    blockers: fieldOrder?.blockers ?? DEFAULT_FIELD_ORDER.blockers,
+  };
+
+  // Header section (always first)
   blocks.push({
     type: 'section',
     text: {
@@ -64,7 +89,7 @@ export function buildStandupModal(
 
   blocks.push({ type: 'divider' });
 
-  // Yesterday's plans as checkboxes (if not first day)
+  // Yesterday's plans as checkboxes (if not first day) - always after header
   if (!isFirstDay && yesterday && yesterday.plans.length > 0) {
     const options: Option[] = yesterday.plans.map((plan, index) => ({
       text: { type: 'mrkdwn', text: plan },
@@ -101,96 +126,122 @@ export function buildStandupModal(
     blocks.push({ type: 'divider' });
   }
 
-  // Unplanned work (things done that weren't in yesterday's plan)
-  blocks.push({
-    type: 'input',
-    block_id: 'unplanned',
-    optional: true,
-    element: {
-      type: 'plain_text_input',
-      action_id: 'unplanned_input',
-      multiline: true,
-      placeholder: {
-        type: 'plain_text',
-        text: 'Any work you completed that wasn\'t planned? (one per line)',
-      },
-    },
-    label: {
-      type: 'plain_text',
-      text: 'Unplanned completions',
-    },
+  // Build ordered list of fields (standard + custom)
+  const orderedFields: OrderedField[] = [
+    { type: 'unplanned', order: order.unplanned },
+    { type: 'today_plans', order: order.today_plans },
+    { type: 'blockers', order: order.blockers },
+  ];
+
+  // Add custom questions with their indices
+  customQuestions.forEach((question, index) => {
+    orderedFields.push({
+      type: 'custom',
+      order: question.order ?? 999,
+      question,
+      questionIndex: index,
+    });
   });
 
-  blocks.push({ type: 'divider' });
+  // Sort by order
+  orderedFields.sort((a, b) => a.order - b.order);
 
-  // Today's plans - pre-fill with incomplete items from yesterday
+  // Pre-calculate values needed for today_plans
   const prefillPlans = yesterday?.incomplete?.join('\n') || '';
 
-  blocks.push({
-    type: 'input',
-    block_id: 'today_plans',
-    element: {
-      type: 'plain_text_input',
-      action_id: 'plans_input',
-      multiline: true,
-      placeholder: {
-        type: 'plain_text',
-        text: 'What do you plan to work on today? (one per line)',
-      },
-      ...(prefillPlans ? { initial_value: prefillPlans } : {}),
-    },
-    label: {
-      type: 'plain_text',
-      text: 'Today\'s plans',
-    },
-  });
+  // Render fields in order
+  orderedFields.forEach((field, idx) => {
+    // Add divider between fields (except before first)
+    if (idx > 0) {
+      blocks.push({ type: 'divider' });
+    }
 
-  blocks.push({ type: 'divider' });
-
-  // Blockers
-  blocks.push({
-    type: 'input',
-    block_id: 'blockers',
-    optional: true,
-    element: {
-      type: 'plain_text_input',
-      action_id: 'blockers_input',
-      multiline: true,
-      placeholder: {
-        type: 'plain_text',
-        text: 'Any blockers or things you need help with?',
-      },
-    },
-    label: {
-      type: 'plain_text',
-      text: 'Blockers',
-    },
-  });
-
-  // Custom questions from config (using rich_text_input to support @mentions)
-  if (customQuestions.length > 0) {
-    blocks.push({ type: 'divider' });
-
-    customQuestions.forEach((question, index) => {
-      blocks.push({
-        type: 'input',
-        block_id: `custom_${index}`,
-        optional: !question.required,
-        element: {
-          type: 'rich_text_input',
-          action_id: `custom_input_${index}`,
-          placeholder: {
-            type: 'plain_text',
-            text: 'Your answer... (you can @mention teammates)',
+    switch (field.type) {
+      case 'unplanned':
+        blocks.push({
+          type: 'input',
+          block_id: 'unplanned',
+          optional: true,
+          element: {
+            type: 'plain_text_input',
+            action_id: 'unplanned_input',
+            multiline: true,
+            placeholder: {
+              type: 'plain_text',
+              text: 'Any work you completed that wasn\'t planned? (one item per line)',
+            },
           },
-        },
-        label: {
-          type: 'plain_text',
-          text: question.text,
-        },
-      });
-    });
-  }
+          label: {
+            type: 'plain_text',
+            text: 'Unplanned completions',
+          },
+        });
+        break;
+
+      case 'today_plans':
+        blocks.push({
+          type: 'input',
+          block_id: 'today_plans',
+          element: {
+            type: 'plain_text_input',
+            action_id: 'plans_input',
+            multiline: true,
+            placeholder: {
+              type: 'plain_text',
+              text: 'What do you plan to work on today? (one item per line)',
+            },
+            ...(prefillPlans ? { initial_value: prefillPlans } : {}),
+          },
+          label: {
+            type: 'plain_text',
+            text: 'Today\'s plans',
+          },
+        });
+        break;
+
+      case 'blockers':
+        blocks.push({
+          type: 'input',
+          block_id: 'blockers',
+          optional: true,
+          element: {
+            type: 'rich_text_input',
+            action_id: 'blockers_input',
+            placeholder: {
+              type: 'plain_text',
+              text: 'Any blockers or things you need help with?',
+            },
+          },
+          label: {
+            type: 'plain_text',
+            text: 'Blockers',
+          },
+        });
+        break;
+
+      case 'custom':
+        if (field.question && field.questionIndex !== undefined) {
+          blocks.push({
+            type: 'input',
+            block_id: `custom_${field.questionIndex}`,
+            optional: !field.question.required,
+            element: {
+              type: 'rich_text_input',
+              action_id: `custom_input_${field.questionIndex}`,
+              placeholder: {
+                type: 'plain_text',
+                text: 'Your answer...',
+              },
+            },
+            label: {
+              type: 'plain_text',
+              text: field.question.text,
+            },
+          });
+        }
+        break;
+    }
+  });
 
   return {
     type: 'modal',

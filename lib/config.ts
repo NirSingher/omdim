@@ -7,12 +7,20 @@ import configYaml from '../config.yaml';
 export interface Question {
   text: string;
   required: boolean;
+  order?: number;  // Lower numbers appear first. Defaults to 999 if not specified.
+}
+
+export interface FieldOrder {
+  unplanned?: number;    // Default: 10
+  today_plans?: number;  // Default: 20
+  blockers?: number;     // Default: 30
 }
 
 export interface Daily {
   name: string;
   channel: string;
   schedule: string;
+  field_order?: FieldOrder;
   questions?: Question[];
 }
 

@@ -5,19 +5,36 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "il-team"
+    # Field order: lower numbers appear first in the modal
+    # Standard fields: unplanned (default 10), today_plans (default 20), blockers (default 30)
+    # Custom questions use their own 'order' value to interleave with standard fields
+    field_order:
+      unplanned: 10
+      today_plans: 20
+      blockers: 30
     questions:
+      - text: "How're you feeling?"
+        required: false
+        order: 5      # Appears first (before unplanned)
       - text: "Any PRs needing review?"
         required: false
+        order: 25     # Appears between today_plans and blockers
       - text: "OOO tomorrow?"
         required: false
+        order: 35     # Appears last (after blockers)
 
   # Example: second daily for a different team
   # - name: "product"
   #   channel: "#product-standup"
   #   schedule: "us-team"
+  #   field_order:
+  #     unplanned: 10
+  #     today_plans: 20
+  #     blockers: 30
   #   questions:
   #     - text: "Customer calls today?"
   #       required: false
+  #       order: 15
 
 schedules:
   - name: "il-team"
