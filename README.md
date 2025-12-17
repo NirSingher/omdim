@@ -5,7 +5,7 @@ Slack bot for managing you Daily Standups. Build to be serverless hosted for fre
 ## Features
 
 - **Timezone-aware prompts** - Each user gets prompted at their local time
-- **Continuity tracking** - Yesterday's plans shown as checkboxes, incomplete items carry forward
+- **Continuity tracking** - Yesterday's plans with Done/Continue/Drop options per item
 - **Flexible schedules** - Support for different work weeks (Sun-Thu, Mon-Fri, etc.)
 - **Custom questions** - Add team-specific questions with @mention support
 - **Configurable field order** - Control the order of all fields in the standup modal
@@ -229,9 +229,12 @@ In Slack:
 
 1. Receive a DM at your scheduled time with "Open Standup" button
 2. Click to open the standup form
-3. Check off completed items from yesterday
-4. Add any unplanned work you did
-5. Enter today's plans and any blockers
+3. For each of yesterday's plans, choose:
+   - ✅ **Done** - Mark as completed
+   - ➡️ **Continue** - Carry over to today (default)
+   - ❌ **Drop** - Remove from plans
+4. Add any unplanned work you completed
+5. Enter today's new plans and any blockers
 6. Submit → Your update posts to the team channel
 
 ### For Admins

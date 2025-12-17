@@ -52,6 +52,13 @@ const DEFAULT_FIELD_ORDER: Required<FieldOrder> = {
 // Field type for ordering
 type FieldType = 'unplanned' | 'today_plans' | 'blockers' | 'custom';
 
+// Radio button options for yesterday's items
+const YESTERDAY_ITEM_OPTIONS = [
+  { text: { type: 'plain_text' as const, text: '✅ Done', emoji: true }, value: 'done' },
+  { text: { type: 'plain_text' as const, text: '➡️ Continue', emoji: true }, value: 'continue' },
+  { text: { type: 'plain_text' as const, text: '❌ Drop', emoji: true }, value: 'drop' },
+];
+
 interface OrderedField {
   type: FieldType;
   order: number;
@@ -89,38 +96,33 @@ export function buildStandupModal(
 
   blocks.push({ type: 'divider' });
 
-  // Yesterday's plans as checkboxes (if not first day) - always after header
-  if (!isFirstDay && yesterday && yesterday.plans.length > 0) {
-    const options: Option[] = yesterday.plans.map((plan, index) => ({
-      text: { type: 'mrkdwn', text: plan },
-      value: `plan_${index}`,
-    }));
-
-    // Pre-select completed items
-    const initialOptions = yesterday.completed.map((_, index) => options[index]).filter(Boolean);
-
+  // Yesterday's plans with radio buttons (Done/Continue/Drop) - always after header
+  const yesterdayPlans = yesterday?.plans || [];
+  if (!isFirstDay && yesterdayPlans.length > 0) {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: '*Yesterday\'s plans* - check off what you completed:',
+        text: '*What happened to yesterday\'s plans?*',
       },
     });
 
-    blocks.push({
-      type: 'input',
-      block_id: 'yesterday_completed',
-      optional: true,
-      element: {
-        type: 'checkboxes',
-        action_id: 'completed_items',
-        options,
-        ...(initialOptions.length > 0 ? { initial_options: initialOptions } : {}),
-      },
-      label: {
-        type: 'plain_text',
-        text: 'Completed items',
-      },
+    // Add a radio button group for each yesterday's plan item
+    yesterdayPlans.forEach((plan, index) => {
+      blocks.push({
+        type: 'input',
+        block_id: `yesterday_item_${index}`,
+        element: {
+          type: 'radio_buttons',
+          action_id: `item_status_${index}`,
+          options: YESTERDAY_ITEM_OPTIONS,
+          initial_option: YESTERDAY_ITEM_OPTIONS[1], // Default to "Continue"
+        },
+        label: {
+          type: 'plain_text',
+          text: plan.length > 75 ? plan.substring(0, 72) + '...' : plan,
+        },
+      });
     });
 
     blocks.push({ type: 'divider' });
@@ -145,9 +147,6 @@ export function buildStandupModal(
 
   // Sort by order
   orderedFields.sort((a, b) => a.order - b.order);
-
-  // Pre-calculate values needed for today_plans
-  const prefillPlans = yesterday?.incomplete?.join('\n') || '';
 
   // Render fields in order
   orderedFields.forEach((field, idx) => {
@@ -190,7 +189,6 @@ export function buildStandupModal(
               type: 'plain_text',
               text: 'What do you plan to work on today? (one item per line)',
             },
-            ...(prefillPlans ? { initial_value: prefillPlans } : {}),
           },
           label: {
             type: 'plain_text',
@@ -246,7 +244,7 @@ export function buildStandupModal(
   return {
     type: 'modal',
     callback_id: 'standup_submission',
-    private_metadata: JSON.stringify({ dailyName }),
+    private_metadata: JSON.stringify({ dailyName, yesterdayPlans }),
     title: {
       type: 'plain_text',
       text: 'Daily Standup',

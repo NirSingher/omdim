@@ -139,9 +139,18 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "il-team"
+    # Field order: lower numbers appear first in modal
+    field_order:
+      unplanned: 10
+      today_plans: 20
+      blockers: 30
     questions:
+      - text: "How're you feeling?"
+        required: false
+        order: 5      # Before unplanned
       - text: "PRs needing review?"
         required: false
+        order: 25     # Between today_plans and blockers
 
 schedules:
   - name: "il-team"
@@ -180,14 +189,19 @@ admins:
 2. /api/slack/interact receives interaction
 3. Fetch user's last submission (for yesterday's plans)
 4. Build modal:
-   - If has yesterday: show plans as checkboxes
-   - Pre-fill "Today's plans" with yesterday's incomplete items
-   - Add custom questions from config
+   - If has yesterday's plans: show each item with radio buttons
+     (✅ Done / ➡️ Continue / ❌ Drop), defaulting to "Continue"
+   - Add custom questions from config (sorted by order)
+   - Add standard fields: unplanned, today_plans, blockers (sorted by order)
 5. User fills form, submits
 6. /api/slack/interact receives submission
-7. Parse modal values, save to submissions table
-8. Post formatted message to configured channel
-9. Mark prompts.submitted = true
+7. Parse radio selections:
+   - "Done" items → yesterdayCompleted
+   - "Continue" items → yesterdayIncomplete (carried over)
+   - "Drop" items → discarded
+8. Save to submissions table
+9. Post formatted message to configured channel
+10. Mark prompts.submitted = true
 ```
 
 ### Slash Commands

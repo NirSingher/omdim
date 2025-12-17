@@ -342,7 +342,8 @@ export default {
             state: {
               values: Record<string, Record<string, {
                 value?: string;
-                selected_options?: Array<{ value: string }>;
+                selected_option?: { value: string };  // For radio buttons
+                selected_options?: Array<{ value: string }>;  // For checkboxes
                 rich_text?: RichTextBlock;
               }>>;
             };
@@ -404,8 +405,12 @@ export default {
         if (payload.type === 'view_submission' && payload.view?.callback_id === 'standup_submission') {
           const userId = payload.user.id;
           const values = payload.view.state.values;
-          const metadata = JSON.parse(payload.view.private_metadata) as { dailyName: string };
+          const metadata = JSON.parse(payload.view.private_metadata) as {
+            dailyName: string;
+            yesterdayPlans?: string[];
+          };
           const dailyName = metadata.dailyName;
+          const yesterdayPlanItems = metadata.yesterdayPlans || [];
 
           console.log('Modal submitted for', dailyName, 'by', userId);
 
@@ -415,27 +420,24 @@ export default {
           const userDate = getUserDate(tzOffset);
           const todayStr = formatDate(userDate);
 
-          // Get previous submission to know what items were planned
           const db = getDb(env.DATABASE_URL);
-          const previousSubmission = await getPreviousSubmission(db, userId, dailyName, todayStr);
 
-          // Parse previous submission's plans
-          let previousPlans: string[] = [];
-          if (previousSubmission?.today_plans) {
-            previousPlans = Array.isArray(previousSubmission.today_plans)
-              ? previousSubmission.today_plans
-              : JSON.parse(previousSubmission.today_plans as unknown as string);
-          }
+          // Parse radio button selections for yesterday's items
+          // Each item can be: done, continue, or drop
+          const yesterdayCompleted: string[] = [];
+          const yesterdayIncomplete: string[] = [];
 
-          // Get checked items (completed from previous plans)
-          const completedValues = values.yesterday_completed?.completed_items?.selected_options || [];
-          const completedIndices = completedValues.map((opt: { value: string }) => {
-            const match = opt.value.match(/plan_(\d+)/);
-            return match ? parseInt(match[1]) : -1;
-          }).filter((i: number) => i >= 0);
+          yesterdayPlanItems.forEach((item, index) => {
+            const selectedOption = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
+            const status = selectedOption?.value || 'continue'; // Default to continue if somehow missing
 
-          const yesterdayCompleted = completedIndices.map((i: number) => previousPlans[i]).filter(Boolean);
-          const yesterdayIncomplete = previousPlans.filter((_, i) => !completedIndices.includes(i));
+            if (status === 'done') {
+              yesterdayCompleted.push(item);
+            } else if (status === 'continue') {
+              yesterdayIncomplete.push(item);
+            }
+            // 'drop' items are intentionally not added to either list
+          });
 
           // Parse text inputs (split by newlines, trim, filter empty)
           const parseLines = (text: string | undefined): string[] => {

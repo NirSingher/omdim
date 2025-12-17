@@ -50,12 +50,12 @@ export function formatStandupBlocks(
 
   // Completed items with checked checkbox
   for (const item of data.yesterdayCompleted) {
-    yesterdayItems.push(`- [x] ${item}`);
+    yesterdayItems.push(`☑️ ${item}`);
   }
 
   // Unplanned completions with checked checkbox (they were completed!)
   for (const item of data.unplanned) {
-    yesterdayItems.push(`- [x] ${item} _(unplanned)_`);
+    yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
   }
 
   if (yesterdayItems.length > 0) {
@@ -73,7 +73,7 @@ export function formatStandupBlocks(
 
   // Carried over items first (unchecked)
   for (const item of data.yesterdayIncomplete) {
-    todayItems.push(`- [ ] ${item} _(carried over)_`);
+    todayItems.push(`⬜ ${item} _(carried over)_`);
   }
 
   // Add separator if we have both carried over and new items
@@ -83,7 +83,7 @@ export function formatStandupBlocks(
 
   // New plans (unchecked)
   for (const item of data.todayPlans) {
-    todayItems.push(`- [ ] ${item}`);
+    todayItems.push(`⬜ ${item}`);
   }
 
   if (todayItems.length > 0) {
