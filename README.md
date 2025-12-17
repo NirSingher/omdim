@@ -189,7 +189,16 @@ admins:
 
 Redeploy after changing config.
 
-### 6. Add Team Members
+### 6. Add Bot to Channel
+
+The bot needs to be in the channel to post standups:
+
+1. Go to your standup channel (e.g., `#daily-standup`)
+2. Click the channel name → **Settings** → **Integrations**
+3. Click **Add apps**
+4. Find and add your Standup Bot
+
+### 7. Add Team Members
 
 In Slack:
 
