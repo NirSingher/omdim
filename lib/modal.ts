@@ -52,10 +52,10 @@ const DEFAULT_FIELD_ORDER: Required<FieldOrder> = {
 // Field type for ordering
 type FieldType = 'unplanned' | 'today_plans' | 'blockers' | 'custom';
 
-// Radio button options for yesterday's items
+// Dropdown options for yesterday's items
 const YESTERDAY_ITEM_OPTIONS = [
+  { text: { type: 'plain_text' as const, text: '➡️ Carry over', emoji: true }, value: 'continue' },
   { text: { type: 'plain_text' as const, text: '✅ Done', emoji: true }, value: 'done' },
-  { text: { type: 'plain_text' as const, text: '➡️ Continue', emoji: true }, value: 'continue' },
   { text: { type: 'plain_text' as const, text: '❌ Drop', emoji: true }, value: 'drop' },
 ];
 
@@ -67,16 +67,27 @@ interface OrderedField {
 }
 
 /**
+ * Format date for display (e.g., "Wednesday, Dec 18")
+ */
+function formatDisplayDate(date: Date): string {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
+}
+
+/**
  * Build the standup modal with configurable field ordering
  */
 export function buildStandupModal(
   dailyName: string,
   yesterday: YesterdayData | null,
   customQuestions: Question[] = [],
-  fieldOrder?: FieldOrder
+  fieldOrder?: FieldOrder,
+  userDate?: Date
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
+  const yesterdayPlans = yesterday?.plans || [];
 
   // Merge field order with defaults
   const order = {
@@ -85,55 +96,91 @@ export function buildStandupModal(
     blockers: fieldOrder?.blockers ?? DEFAULT_FIELD_ORDER.blockers,
   };
 
-  // Header section (always first)
+  // Header section with date context
+  const dateStr = userDate ? formatDisplayDate(userDate) : 'today';
   blocks.push({
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*${dailyName}* standup for today`,
+      text: `*${dailyName}* standup for *${dateStr}*`,
     },
   });
 
   blocks.push({ type: 'divider' });
 
-  // Yesterday's plans with radio buttons (Done/Continue/Drop) - always after header
-  const yesterdayPlans = yesterday?.plans || [];
+  // First-time user welcome message
+  if (isFirstDay) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: '👋 *Welcome to your first standup!* Just fill in your plans for today below.',
+      },
+    });
+    blocks.push({ type: 'divider' });
+  }
+
+  // Yesterday section: plans + unplanned (grouped as "what happened")
   if (!isFirstDay && yesterdayPlans.length > 0) {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: '*What happened to yesterday\'s plans?*',
+        text: '📋 *What happened to yesterday\'s plans?*',
       },
     });
 
-    // Add a radio button group for each yesterday's plan item
+    // Add a dropdown for each yesterday's plan item
     yesterdayPlans.forEach((plan, index) => {
       blocks.push({
-        type: 'input',
+        type: 'section',
         block_id: `yesterday_item_${index}`,
-        element: {
-          type: 'radio_buttons',
+        text: {
+          type: 'mrkdwn',
+          text: plan.length > 60 ? plan.substring(0, 57) + '...' : plan,
+        },
+        accessory: {
+          type: 'static_select',
           action_id: `item_status_${index}`,
           options: YESTERDAY_ITEM_OPTIONS,
-          initial_option: YESTERDAY_ITEM_OPTIONS[1], // Default to "Continue"
-        },
-        label: {
-          type: 'plain_text',
-          text: plan.length > 75 ? plan.substring(0, 72) + '...' : plan,
+          initial_option: YESTERDAY_ITEM_OPTIONS[0], // Default to "Carry over"
         },
       });
+    });
+
+    // Unplanned completions - grouped with yesterday (both are "what happened")
+    blocks.push({
+      type: 'input',
+      block_id: 'unplanned',
+      optional: true,
+      element: {
+        type: 'plain_text_input',
+        action_id: 'unplanned_input',
+        multiline: true,
+        placeholder: {
+          type: 'plain_text',
+          text: 'Fixed prod bug, Helped teammate with code review...',
+        },
+      },
+      label: {
+        type: 'plain_text',
+        text: '✨ Unplanned wins',
+      },
     });
 
     blocks.push({ type: 'divider' });
   }
 
-  // Build ordered list of fields (standard + custom)
-  const orderedFields: OrderedField[] = [
-    { type: 'unplanned', order: order.unplanned },
-    { type: 'today_plans', order: order.today_plans },
-    { type: 'blockers', order: order.blockers },
-  ];
+  // Build ordered list of remaining fields (exclude unplanned if already shown above)
+  const orderedFields: OrderedField[] = [];
+
+  // Only add unplanned to ordered fields if this is first day (wasn't shown above)
+  if (isFirstDay) {
+    orderedFields.push({ type: 'unplanned', order: order.unplanned });
+  }
+
+  orderedFields.push({ type: 'today_plans', order: order.today_plans });
+  orderedFields.push({ type: 'blockers', order: order.blockers });
 
   // Add custom questions with their indices
   customQuestions.forEach((question, index) => {
@@ -157,6 +204,7 @@ export function buildStandupModal(
 
     switch (field.type) {
       case 'unplanned':
+        // Only shown for first-time users (otherwise it's in the yesterday section)
         blocks.push({
           type: 'input',
           block_id: 'unplanned',
@@ -167,12 +215,12 @@ export function buildStandupModal(
             multiline: true,
             placeholder: {
               type: 'plain_text',
-              text: 'Any work you completed that wasn\'t planned? (one item per line)',
+              text: 'Fixed prod bug, Helped teammate with code review...',
             },
           },
           label: {
             type: 'plain_text',
-            text: 'Unplanned completions',
+            text: '✨ Unplanned wins',
           },
         });
         break;
@@ -187,12 +235,12 @@ export function buildStandupModal(
             multiline: true,
             placeholder: {
               type: 'plain_text',
-              text: 'What do you plan to work on today? (one item per line)',
+              text: 'Ship feature X\nReview open PRs\n1:1 with Bob',
             },
           },
           label: {
             type: 'plain_text',
-            text: 'Today\'s plans',
+            text: '🎯 Today\'s plans',
           },
         });
         break;
@@ -207,12 +255,12 @@ export function buildStandupModal(
             action_id: 'blockers_input',
             placeholder: {
               type: 'plain_text',
-              text: 'Any blockers or things you need help with?',
+              text: 'Waiting on API access, Need 15 min with @someone...',
             },
           },
           label: {
             type: 'plain_text',
-            text: 'Blockers',
+            text: '🤝 Need help or time from anyone? Need to get unblocked?',
           },
         });
         break;

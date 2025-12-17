@@ -390,7 +390,7 @@ export default {
           }
 
           // Build and open modal
-          const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order);
+          const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate);
           const opened = await openModal(env.SLACK_BOT_TOKEN, triggerId, modal);
 
           if (!opened) {
