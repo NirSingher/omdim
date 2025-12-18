@@ -33,7 +33,7 @@ export interface InteractionPayload {
         value?: string;
         selected_option?: { value: string };
         selected_options?: Array<{ value: string }>;
-        rich_text?: RichTextBlock;
+        rich_text_value?: RichTextBlock;  // Slack uses rich_text_value, not rich_text
       }>>;
     };
   };
@@ -150,14 +150,16 @@ export async function handleStandupSubmission(
   // Parse text inputs
   const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
-  const blockers = parseRichText(values.blockers?.blockers_input?.rich_text) || '';
+  const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
 
   // Parse custom question answers
   const daily = getDaily(dailyName);
   const customAnswers: Record<string, string> = {};
   if (daily?.questions) {
     daily.questions.forEach((q, index) => {
-      const richText = values[`custom_${index}`]?.[`custom_input_${index}`]?.rich_text;
+      const blockId = `custom_${index}`;
+      const actionId = `custom_input_${index}`;
+      const richText = values[blockId]?.[actionId]?.rich_text_value;
       if (richText) {
         const answer = parseRichText(richText);
         if (answer) {
