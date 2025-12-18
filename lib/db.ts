@@ -1,12 +1,23 @@
+/**
+ * Database access layer using Neon serverless PostgreSQL
+ * Handles all CRUD operations for participants, submissions, and prompts
+ */
+
 import { neon } from '@neondatabase/serverless';
 
-// Unified query interface
+// ============================================================================
+// Database Client
+// ============================================================================
+
+/** Unified query interface for database operations */
 export interface DbClient {
   query: <T = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<T[]>;
 }
 
-// Note: Cloudflare Workers doesn't support connection pooling across requests.
-// Use Neon's HTTP-based query function instead of Pool.
+/**
+ * Create a database client using Neon's serverless driver
+ * Note: Cloudflare Workers doesn't support connection pooling across requests
+ */
 export function getDb(databaseUrl: string): DbClient {
   const sql = neon(databaseUrl);
 
@@ -30,7 +41,10 @@ export function getDb(databaseUrl: string): DbClient {
   };
 }
 
-// Participant types
+// ============================================================================
+// Participants
+// ============================================================================
+
 export interface Participant {
   id: number;
   slack_user_id: string;
@@ -98,7 +112,10 @@ export async function getUserDailies(
   );
 }
 
-// Health check
+// ============================================================================
+// Health Check
+// ============================================================================
+
 export async function healthCheck(db: DbClient): Promise<boolean> {
   try {
     await db.query('SELECT 1');
@@ -109,7 +126,10 @@ export async function healthCheck(db: DbClient): Promise<boolean> {
   }
 }
 
-// Prompt types
+// ============================================================================
+// Prompts
+// ============================================================================
+
 export interface Prompt {
   id: number;
   slack_user_id: string;
@@ -184,7 +204,10 @@ export async function getAllParticipants(db: DbClient): Promise<Participant[]> {
   );
 }
 
-// Submission types
+// ============================================================================
+// Submissions
+// ============================================================================
+
 export interface Submission {
   id: number;
   slack_user_id: string;
@@ -340,7 +363,11 @@ export async function getParticipationStats(
   );
 }
 
-// Delete old submissions (older than specified date)
+// ============================================================================
+// Data Retention (Cleanup)
+// ============================================================================
+
+/** Delete old submissions (older than specified date) */
 export async function deleteOldSubmissions(
   db: DbClient,
   beforeDate: string
@@ -355,7 +382,7 @@ export async function deleteOldSubmissions(
   return parseInt(result[0]?.count || '0', 10);
 }
 
-// Delete old prompts (older than specified date)
+/** Delete old prompts (older than specified date) */
 export async function deleteOldPrompts(
   db: DbClient,
   beforeDate: string

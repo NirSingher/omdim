@@ -3,58 +3,16 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, isAdmin, getDaily } from '../lib/config';
-import {
-  verifySlackSignature,
-  parseCommandPayload,
-  parseUserId,
-  ephemeralResponse,
-} from '../lib/slack';
-import { getDb, addParticipant, removeParticipant, getParticipants, getPreviousSubmission, saveSubmission, markPromptSubmitted, updateSubmissionMessageTs, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, deleteOldSubmissions, deleteOldPrompts } from '../lib/db';
-import { postStandupToChannel, formatDailyDigest, formatWeeklySummary, sendDM } from '../lib/format';
-import { runPromptCron } from '../lib/prompt';
-import { buildStandupModal, openModal, YesterdayData } from '../lib/modal';
-import { formatDate, getUserDate, getUserTimezone } from '../lib/prompt';
+import { loadConfig, getDailies, getSchedules } from '../lib/config';
+import { verifySlackSignature, parseCommandPayload } from '../lib/slack';
+import { getDb, deleteOldSubmissions, deleteOldPrompts } from '../lib/db';
+import { runPromptCron, formatDate } from '../lib/prompt';
+import { handleCommand } from '../lib/handlers/commands';
+import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 
-// Rich text element types from Slack
-interface RichTextElement {
-  type: string;
-  text?: string;
-  user_id?: string;
-  channel_id?: string;
-  url?: string;
-  elements?: RichTextElement[];
-}
-
-interface RichTextBlock {
-  type: string;
-  elements?: RichTextElement[];
-}
-
-// Parse rich_text_input value to mrkdwn string with @mentions
-function parseRichText(richText: RichTextBlock | undefined): string {
-  if (!richText?.elements) return '';
-
-  const parts: string[] = [];
-
-  for (const block of richText.elements) {
-    if (block.elements) {
-      for (const el of block.elements) {
-        if (el.type === 'text' && el.text) {
-          parts.push(el.text);
-        } else if (el.type === 'user' && el.user_id) {
-          parts.push(`<@${el.user_id}>`);
-        } else if (el.type === 'channel' && el.channel_id) {
-          parts.push(`<#${el.channel_id}>`);
-        } else if (el.type === 'link' && el.url) {
-          parts.push(el.url);
-        }
-      }
-    }
-  }
-
-  return parts.join('').trim();
-}
+// ============================================================================
+// Types
+// ============================================================================
 
 export interface Env {
   SLACK_BOT_TOKEN: string;
@@ -62,6 +20,10 @@ export interface Env {
   DATABASE_URL: string;
   CRON_SECRET?: string;
 }
+
+// ============================================================================
+// HTTP Handler
+// ============================================================================
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -71,496 +33,27 @@ export default {
     try {
       // Health check
       if (path === '/api/health' || path === '/health') {
-        let configStatus = 'unknown';
-        let configDetails = {};
-
-        try {
-          const config = loadConfig();
-          configStatus = 'loaded';
-          configDetails = {
-            dailies: getDailies().map((d) => d.name),
-            schedules: getSchedules().map((s) => s.name),
-          };
-        } catch (e) {
-          configStatus = 'error';
-          configDetails = { error: String(e) };
-        }
-
-        return new Response(JSON.stringify({
-          status: 'healthy',
-          timestamp: new Date().toISOString(),
-          config: {
-            status: configStatus,
-            ...configDetails,
-          },
-        }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return handleHealthCheck();
       }
 
       // Slack commands
       if (path === '/api/slack/commands') {
-        if (request.method !== 'POST') {
-          return new Response('Method not allowed', { status: 405 });
-        }
-
-        const body = await request.text();
-        const timestamp = request.headers.get('x-slack-request-timestamp');
-        const signature = request.headers.get('x-slack-signature');
-
-        // Verify signature
-        const isValid = await verifySlackSignature(
-          env.SLACK_SIGNING_SECRET,
-          signature,
-          timestamp,
-          body
-        );
-
-        if (!isValid) {
-          return new Response('Invalid signature', { status: 401 });
-        }
-
-        const payload = parseCommandPayload(body);
-        const args = payload.text.trim().split(/\s+/);
-        const subcommand = args[0]?.toLowerCase() || 'help';
-
-        console.log('Command:', { subcommand, user_id: payload.user_id });
-
-        let response;
-
-        switch (subcommand) {
-          case 'help':
-            response = ephemeralResponse(
-              '*Standup Bot Commands*\n\n' +
-              '`/standup help` - Show this help message\n' +
-              '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
-              '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
-              '`/standup list <daily-name>` - List participants in a daily\n' +
-              '`/standup digest <daily-name>` - Get today\'s standup digest (DM)\n' +
-              '`/standup week <daily-name>` - Get weekly summary (DM)'
-            );
-            break;
-
-          case 'add': {
-            if (!isAdmin(payload.user_id)) {
-              response = ephemeralResponse('❌ Only admins can add users.');
-              break;
-            }
-            const addUserId = parseUserId(args[1] || '');
-            const addDailyName = args[2];
-            if (!addUserId || !addDailyName) {
-              response = ephemeralResponse('Usage: `/standup add @user <daily-name>`');
-              break;
-            }
-            const addDaily = getDaily(addDailyName);
-            if (!addDaily) {
-              response = ephemeralResponse(`❌ Daily "${addDailyName}" not found.`);
-              break;
-            }
-            try {
-              const db = getDb(env.DATABASE_URL);
-              await addParticipant(db, addUserId, addDailyName, addDaily.schedule);
-              response = ephemeralResponse(`✅ Added <@${addUserId}> to *${addDailyName}*`);
-            } catch (err) {
-              console.error('Failed to add participant:', err);
-              response = ephemeralResponse('❌ Failed to add user. Please try again.');
-            }
-            break;
-          }
-
-          case 'remove': {
-            if (!isAdmin(payload.user_id)) {
-              response = ephemeralResponse('❌ Only admins can remove users.');
-              break;
-            }
-            const removeUserId = parseUserId(args[1] || '');
-            const removeDailyName = args[2];
-            if (!removeUserId || !removeDailyName) {
-              response = ephemeralResponse('Usage: `/standup remove @user <daily-name>`');
-              break;
-            }
-            try {
-              const db = getDb(env.DATABASE_URL);
-              await removeParticipant(db, removeUserId, removeDailyName);
-              response = ephemeralResponse(`✅ Removed <@${removeUserId}> from *${removeDailyName}*`);
-            } catch (err) {
-              console.error('Failed to remove participant:', err);
-              response = ephemeralResponse('❌ Failed to remove user. Please try again.');
-            }
-            break;
-          }
-
-          case 'list': {
-            const listDailyName = args[1];
-            if (!listDailyName) {
-              const dailies = getDailies();
-              response = ephemeralResponse(
-                '*Available dailies:*\n' +
-                dailies.map(d => `• ${d.name} (${d.channel})`).join('\n')
-              );
-              break;
-            }
-            const listDaily = getDaily(listDailyName);
-            if (!listDaily) {
-              response = ephemeralResponse(`❌ Daily "${listDailyName}" not found.`);
-              break;
-            }
-            try {
-              const db = getDb(env.DATABASE_URL);
-              const participants = await getParticipants(db, listDailyName);
-              if (participants.length === 0) {
-                response = ephemeralResponse(`*${listDailyName}* has no participants yet.`);
-              } else {
-                const userList = participants.map(p => `• <@${p.slack_user_id}>`).join('\n');
-                response = ephemeralResponse(`*${listDailyName}* participants:\n${userList}`);
-              }
-            } catch (err) {
-              console.error('Failed to list participants:', err);
-              response = ephemeralResponse('❌ Failed to list participants. Please try again.');
-            }
-            break;
-          }
-
-          case 'digest': {
-            const digestDailyName = args[1];
-            if (!digestDailyName) {
-              response = ephemeralResponse('Usage: `/standup digest <daily-name>`');
-              break;
-            }
-            const digestDaily = getDaily(digestDailyName);
-            if (!digestDaily) {
-              response = ephemeralResponse(`❌ Daily "${digestDailyName}" not found.`);
-              break;
-            }
-            try {
-              const db = getDb(env.DATABASE_URL);
-              // Get user's timezone for today's date
-              const userInfo = await getUserTimezone(env.SLACK_BOT_TOKEN, payload.user_id);
-              const tzOffset = userInfo?.tz_offset || 0;
-              const userDate = getUserDate(tzOffset);
-              const todayStr = formatDate(userDate);
-
-              const submissions = await getSubmissionsForDate(db, digestDailyName, todayStr);
-              const digestText = formatDailyDigest(digestDailyName, todayStr, submissions);
-
-              // Send as DM
-              await sendDM(env.SLACK_BOT_TOKEN, payload.user_id, digestText);
-              response = ephemeralResponse(`📊 Digest sent to your DMs!`);
-            } catch (err) {
-              console.error('Failed to generate digest:', err);
-              response = ephemeralResponse('❌ Failed to generate digest. Please try again.');
-            }
-            break;
-          }
-
-          case 'week': {
-            const weekDailyName = args[1];
-            if (!weekDailyName) {
-              response = ephemeralResponse('Usage: `/standup week <daily-name>`');
-              break;
-            }
-            const weekDaily = getDaily(weekDailyName);
-            if (!weekDaily) {
-              response = ephemeralResponse(`❌ Daily "${weekDailyName}" not found.`);
-              break;
-            }
-            try {
-              const db = getDb(env.DATABASE_URL);
-              // Get user's timezone for date calculations
-              const userInfo = await getUserTimezone(env.SLACK_BOT_TOKEN, payload.user_id);
-              const tzOffset = userInfo?.tz_offset || 0;
-              const userDate = getUserDate(tzOffset);
-              const endDate = formatDate(userDate);
-
-              // Go back 7 days
-              const startDateObj = new Date(userDate);
-              startDateObj.setDate(startDateObj.getDate() - 6);
-              const startDate = formatDate(startDateObj);
-
-              const submissions = await getSubmissionsInRange(db, weekDailyName, startDate, endDate);
-              const stats = await getParticipationStats(db, weekDailyName, startDate, endDate);
-              const weekText = formatWeeklySummary(weekDailyName, startDate, endDate, submissions, stats);
-
-              // Send as DM
-              await sendDM(env.SLACK_BOT_TOKEN, payload.user_id, weekText);
-              response = ephemeralResponse(`📈 Weekly summary sent to your DMs!`);
-            } catch (err) {
-              console.error('Failed to generate weekly summary:', err);
-              response = ephemeralResponse('❌ Failed to generate weekly summary. Please try again.');
-            }
-            break;
-          }
-
-          default:
-            response = ephemeralResponse(
-              `Unknown command: \`${subcommand}\`\nTry \`/standup help\` for usage.`
-            );
-        }
-
-        return new Response(JSON.stringify(response), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return handleSlackCommands(request, env);
       }
 
       // Slack interactions (modals, buttons)
       if (path === '/api/slack/interact') {
-        if (request.method !== 'POST') {
-          return new Response('Method not allowed', { status: 405 });
-        }
-
-        const body = await request.text();
-        const timestamp = request.headers.get('x-slack-request-timestamp');
-        const signature = request.headers.get('x-slack-signature');
-
-        // Verify signature
-        const isValid = await verifySlackSignature(
-          env.SLACK_SIGNING_SECRET,
-          signature,
-          timestamp,
-          body
-        );
-
-        if (!isValid) {
-          return new Response('Invalid signature', { status: 401 });
-        }
-
-        // Parse interaction payload (it's URL encoded with a 'payload' field containing JSON)
-        const params = new URLSearchParams(body);
-        const payloadStr = params.get('payload');
-        if (!payloadStr) {
-          return new Response('Missing payload', { status: 400 });
-        }
-
-        const payload = JSON.parse(payloadStr) as {
-          type: string;
-          trigger_id: string;
-          user: { id: string };
-          actions?: Array<{ action_id: string; value: string }>;
-          view?: {
-            callback_id: string;
-            private_metadata: string;
-            state: {
-              values: Record<string, Record<string, {
-                value?: string;
-                selected_option?: { value: string };  // For radio buttons
-                selected_options?: Array<{ value: string }>;  // For checkboxes
-                rich_text?: RichTextBlock;
-              }>>;
-            };
-          };
-        };
-
-        console.log('Interaction:', { type: payload.type, user: payload.user.id });
-
-        // Handle button click (open_standup)
-        if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'open_standup') {
-          const dailyName = payload.actions[0].value;
-          const userId = payload.user.id;
-          const triggerId = payload.trigger_id;
-
-          // Get daily config
-          const daily = getDaily(dailyName);
-          if (!daily) {
-            console.error(`Daily "${dailyName}" not found`);
-            return new Response('', { status: 200 });
-          }
-
-          // Get user's timezone and calculate today's date
-          const userInfo = await getUserTimezone(env.SLACK_BOT_TOKEN, userId);
-          const tzOffset = userInfo?.tz_offset || 0;
-          const userDate = getUserDate(tzOffset);
-          const todayStr = formatDate(userDate);
-
-          // Get previous submission for pre-fill (most recent, regardless of how many days ago)
-          const db = getDb(env.DATABASE_URL);
-          const previousSubmission = await getPreviousSubmission(db, userId, dailyName, todayStr);
-
-          let yesterdayData: YesterdayData | null = null;
-          if (previousSubmission && previousSubmission.today_plans) {
-            // Parse the JSONB arrays
-            const plans = Array.isArray(previousSubmission.today_plans)
-              ? previousSubmission.today_plans
-              : JSON.parse(previousSubmission.today_plans as unknown as string);
-
-            yesterdayData = {
-              plans,
-              completed: [], // Will be selected by user
-              incomplete: [], // Don't pre-fill - carried over items are added automatically to the post
-            };
-          }
-
-          // Build and open modal
-          const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate);
-          const opened = await openModal(env.SLACK_BOT_TOKEN, triggerId, modal);
-
-          if (!opened) {
-            console.error('Failed to open modal');
-          }
-
-          // Acknowledge the button click
-          return new Response('', { status: 200 });
-        }
-
-        // Handle modal submission
-        if (payload.type === 'view_submission' && payload.view?.callback_id === 'standup_submission') {
-          const userId = payload.user.id;
-          const values = payload.view.state.values;
-          const metadata = JSON.parse(payload.view.private_metadata) as {
-            dailyName: string;
-            yesterdayPlans?: string[];
-          };
-          const dailyName = metadata.dailyName;
-          const yesterdayPlanItems = metadata.yesterdayPlans || [];
-
-          console.log('Modal submitted for', dailyName, 'by', userId);
-
-          // Get user's timezone and calculate today's date
-          const userInfo = await getUserTimezone(env.SLACK_BOT_TOKEN, userId);
-          const tzOffset = userInfo?.tz_offset || 0;
-          const userDate = getUserDate(tzOffset);
-          const todayStr = formatDate(userDate);
-
-          const db = getDb(env.DATABASE_URL);
-
-          // Parse radio button selections for yesterday's items
-          // Each item can be: done, continue, or drop
-          const yesterdayCompleted: string[] = [];
-          const yesterdayIncomplete: string[] = [];
-
-          yesterdayPlanItems.forEach((item, index) => {
-            const selectedOption = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
-            const status = selectedOption?.value || 'continue'; // Default to continue if somehow missing
-
-            if (status === 'done') {
-              yesterdayCompleted.push(item);
-            } else if (status === 'continue') {
-              yesterdayIncomplete.push(item);
-            }
-            // 'drop' items are intentionally not added to either list
-          });
-
-          // Parse text inputs (split by newlines, trim, filter empty)
-          const parseLines = (text: string | undefined): string[] => {
-            if (!text) return [];
-            return text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-          };
-
-          const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
-          const todayPlans = parseLines(values.today_plans?.plans_input?.value);
-          const blockers = parseRichText(values.blockers?.blockers_input?.rich_text) || '';
-
-          // Parse custom question answers (rich_text_input format)
-          const daily = getDaily(dailyName);
-          const customAnswers: Record<string, string> = {};
-          if (daily?.questions) {
-            daily.questions.forEach((q, index) => {
-              const richText = values[`custom_${index}`]?.[`custom_input_${index}`]?.rich_text;
-              if (richText) {
-                const answer = parseRichText(richText);
-                if (answer) {
-                  customAnswers[q.text] = answer;
-                }
-              }
-            });
-          }
-
-          // Save submission
-          const submission = await saveSubmission(db, {
-            slackUserId: userId,
-            dailyName,
-            date: todayStr,
-            yesterdayCompleted,
-            yesterdayIncomplete,
-            unplanned,
-            todayPlans,
-            blockers,
-            customAnswers,
-          });
-
-          // Mark prompt as submitted
-          await markPromptSubmitted(db, userId, dailyName, todayStr);
-
-          console.log('Submission saved:', { userId, dailyName, todayPlans: todayPlans.length });
-
-          // Post to channel
-          if (daily?.channel) {
-            const messageTs = await postStandupToChannel(
-              env.SLACK_BOT_TOKEN,
-              daily.channel,
-              userId,
-              dailyName,
-              {
-                yesterdayCompleted,
-                yesterdayIncomplete,
-                unplanned,
-                todayPlans,
-                blockers,
-                customAnswers,
-              }
-            );
-
-            // Store message timestamp for future reference
-            if (messageTs && submission.id) {
-              await updateSubmissionMessageTs(db, submission.id, messageTs);
-            }
-          }
-
-          // Return empty response to close modal
-          return new Response('', { status: 200 });
-        }
-
-        // Unknown interaction type
-        return new Response('', { status: 200 });
+        return handleSlackInteractions(request, env);
       }
 
       // Cron: prompt users
       if (path === '/api/cron/prompt') {
-        // Verify cron secret if using external cron
-        const secret = url.searchParams.get('secret');
-        if (env.CRON_SECRET && secret !== env.CRON_SECRET) {
-          return new Response('Unauthorized', { status: 401 });
-        }
-
-        // Force parameter skips time window checks (for testing)
-        const force = url.searchParams.get('force') === 'true';
-
-        const db = getDb(env.DATABASE_URL);
-        const stats = await runPromptCron(db, env.SLACK_BOT_TOKEN, force);
-
-        return new Response(JSON.stringify({
-          status: 'ok',
-          ...stats,
-        }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return handlePromptCron(url, env);
       }
 
       // Cron: cleanup old data
       if (path === '/api/cron/cleanup') {
-        const secret = url.searchParams.get('secret');
-        if (env.CRON_SECRET && secret !== env.CRON_SECRET) {
-          return new Response('Unauthorized', { status: 401 });
-        }
-
-        // Delete data older than 28 days
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - 28);
-        const cutoffStr = formatDate(cutoffDate);
-
-        const db = getDb(env.DATABASE_URL);
-        const deletedSubmissions = await deleteOldSubmissions(db, cutoffStr);
-        const deletedPrompts = await deleteOldPrompts(db, cutoffStr);
-
-        console.log(`Cleanup complete: ${deletedSubmissions} submissions, ${deletedPrompts} prompts deleted`);
-
-        return new Response(JSON.stringify({
-          status: 'ok',
-          cutoffDate: cutoffStr,
-          deletedSubmissions,
-          deletedPrompts,
-        }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return handleCleanupCron(url, env);
       }
 
       return new Response('Not found', { status: 404 });
@@ -572,10 +65,6 @@ export default {
 
   // Cloudflare cron trigger handler
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    // Determine which cron job based on the cron expression
-    // */30 * * * * = prompt (every 30 min)
-    // 0 3 * * * = cleanup (daily 3am UTC)
-
     const cronPattern = event.cron;
 
     if (cronPattern === '*/30 * * * *') {
@@ -585,17 +74,189 @@ export default {
       console.log('Prompt cron complete:', stats);
     } else if (cronPattern === '0 3 * * *') {
       console.log('Running cleanup cron job');
-      const db = getDb(env.DATABASE_URL);
-
-      // Delete data older than 28 days
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - 28);
-      const cutoffStr = formatDate(cutoffDate);
-
-      const deletedSubmissions = await deleteOldSubmissions(db, cutoffStr);
-      const deletedPrompts = await deleteOldPrompts(db, cutoffStr);
-
-      console.log(`Cleanup complete: ${deletedSubmissions} submissions, ${deletedPrompts} prompts deleted`);
+      await runCleanup(env);
     }
   },
 };
+
+// ============================================================================
+// Route Handlers
+// ============================================================================
+
+/** Health check endpoint */
+function handleHealthCheck(): Response {
+  let configStatus = 'unknown';
+  let configDetails = {};
+
+  try {
+    loadConfig();
+    configStatus = 'loaded';
+    configDetails = {
+      dailies: getDailies().map((d) => d.name),
+      schedules: getSchedules().map((s) => s.name),
+    };
+  } catch (e) {
+    configStatus = 'error';
+    configDetails = { error: String(e) };
+  }
+
+  return new Response(JSON.stringify({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    config: {
+      status: configStatus,
+      ...configDetails,
+    },
+  }), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/** Slack slash commands endpoint */
+async function handleSlackCommands(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405 });
+  }
+
+  const body = await request.text();
+  const timestamp = request.headers.get('x-slack-request-timestamp');
+  const signature = request.headers.get('x-slack-signature');
+
+  // Verify signature
+  const isValid = await verifySlackSignature(
+    env.SLACK_SIGNING_SECRET,
+    signature,
+    timestamp,
+    body
+  );
+
+  if (!isValid) {
+    return new Response('Invalid signature', { status: 401 });
+  }
+
+  const payload = parseCommandPayload(body);
+  const args = payload.text.trim().split(/\s+/);
+  const subcommand = args[0]?.toLowerCase() || 'help';
+
+  console.log('Command:', { subcommand, user_id: payload.user_id });
+
+  const db = getDb(env.DATABASE_URL);
+  const response = await handleCommand(subcommand, {
+    userId: payload.user_id,
+    args,
+    db,
+    slackToken: env.SLACK_BOT_TOKEN,
+  });
+
+  return new Response(JSON.stringify(response), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/** Slack interactions endpoint */
+async function handleSlackInteractions(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405 });
+  }
+
+  const body = await request.text();
+  const timestamp = request.headers.get('x-slack-request-timestamp');
+  const signature = request.headers.get('x-slack-signature');
+
+  // Verify signature
+  const isValid = await verifySlackSignature(
+    env.SLACK_SIGNING_SECRET,
+    signature,
+    timestamp,
+    body
+  );
+
+  if (!isValid) {
+    return new Response('Invalid signature', { status: 401 });
+  }
+
+  // Parse interaction payload
+  const params = new URLSearchParams(body);
+  const payloadStr = params.get('payload');
+  if (!payloadStr) {
+    return new Response('Missing payload', { status: 400 });
+  }
+
+  const payload = JSON.parse(payloadStr) as InteractionPayload;
+  console.log('Interaction:', { type: payload.type, user: payload.user.id });
+
+  const db = getDb(env.DATABASE_URL);
+  await handleInteraction(payload, {
+    db,
+    slackToken: env.SLACK_BOT_TOKEN,
+  });
+
+  // Always return 200 to acknowledge
+  return new Response('', { status: 200 });
+}
+
+/** Prompt cron endpoint (HTTP trigger) */
+async function handlePromptCron(url: URL, env: Env): Promise<Response> {
+  // Verify cron secret if using external cron
+  const secret = url.searchParams.get('secret');
+  if (env.CRON_SECRET && secret !== env.CRON_SECRET) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  // Force parameter skips time window checks (for testing)
+  const force = url.searchParams.get('force') === 'true';
+
+  const db = getDb(env.DATABASE_URL);
+  const stats = await runPromptCron(db, env.SLACK_BOT_TOKEN, force);
+
+  return new Response(JSON.stringify({
+    status: 'ok',
+    ...stats,
+  }), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/** Cleanup cron endpoint (HTTP trigger) */
+async function handleCleanupCron(url: URL, env: Env): Promise<Response> {
+  const secret = url.searchParams.get('secret');
+  if (env.CRON_SECRET && secret !== env.CRON_SECRET) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
+  const result = await runCleanup(env);
+
+  return new Response(JSON.stringify({
+    status: 'ok',
+    ...result,
+  }), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+// ============================================================================
+// Cleanup Logic
+// ============================================================================
+
+/** Delete data older than 28 days */
+async function runCleanup(env: Env): Promise<{
+  cutoffDate: string;
+  deletedSubmissions: number;
+  deletedPrompts: number;
+}> {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 28);
+  const cutoffStr = formatDate(cutoffDate);
+
+  const db = getDb(env.DATABASE_URL);
+  const deletedSubmissions = await deleteOldSubmissions(db, cutoffStr);
+  const deletedPrompts = await deleteOldPrompts(db, cutoffStr);
+
+  console.log(`Cleanup complete: ${deletedSubmissions} submissions, ${deletedPrompts} prompts deleted`);
+
+  return {
+    cutoffDate: cutoffStr,
+    deletedSubmissions,
+    deletedPrompts,
+  };
+}

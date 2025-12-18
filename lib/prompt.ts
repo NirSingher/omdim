@@ -1,65 +1,45 @@
 /**
  * Prompt logic for sending standup DMs to users
+ * - Determines when to prompt users based on timezone and schedule
+ * - Sends DM prompts with "Open Standup" button
+ * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, Prompt, getAllParticipants, getOrCreatePrompt, updatePromptSent } from './db';
-import { getSchedule, getDaily } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent } from './db';
+import { getSchedule } from './config';
+import { getUserInfo, postMessage } from './slack';
 
-// Day name mapping for schedule matching
+// ============================================================================
+// Constants
+// ============================================================================
+
+/** Day name mapping for schedule matching */
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
-// Prompt window: send prompts within 2 hours of scheduled time
+/** Prompt window: send prompts within 2 hours of scheduled time */
 const PROMPT_WINDOW_MINUTES = 120;
 
-// Minimum time between prompts (30 minutes)
+/** Minimum time between prompts (30 minutes) */
 const REPROMPT_INTERVAL_MINUTES = 30;
 
-interface UserInfo {
-  tz: string;
-  tz_offset: number;
-}
-
-interface PromptCandidate {
-  participant: Participant;
-  dailyName: string;
-  channelId: string;
-}
+// ============================================================================
+// User Timezone
+// ============================================================================
 
 /**
- * Get user info from Slack API (timezone)
+ * Get user timezone info from Slack API
+ * @deprecated Use getUserInfo from lib/slack.ts directly
  */
 export async function getUserTimezone(
   slackToken: string,
   userId: string
-): Promise<UserInfo | null> {
-  try {
-    const response = await fetch(`https://slack.com/api/users.info?user=${userId}`, {
-      headers: {
-        'Authorization': `Bearer ${slackToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = await response.json() as {
-      ok: boolean;
-      user?: { tz: string; tz_offset: number };
-      error?: string;
-    };
-
-    if (!data.ok || !data.user) {
-      console.error(`Failed to get user info for ${userId}:`, data.error);
-      return null;
-    }
-
-    return {
-      tz: data.user.tz,
-      tz_offset: data.user.tz_offset,
-    };
-  } catch (error) {
-    console.error(`Error fetching user info for ${userId}:`, error);
-    return null;
-  }
+): Promise<{ tz: string; tz_offset: number } | null> {
+  return getUserInfo(slackToken, userId);
 }
+
+// ============================================================================
+// Schedule Checks
+// ============================================================================
 
 /**
  * Check if today is a workday for the given schedule
@@ -105,8 +85,13 @@ export function shouldReprompt(lastPromptedAt: Date | null): boolean {
   return minutesSinceLastPrompt >= REPROMPT_INTERVAL_MINUTES;
 }
 
+// ============================================================================
+// Date Utilities
+// ============================================================================
+
 /**
- * Get the current date in user's timezone as YYYY-MM-DD
+ * Get the current date/time in user's timezone
+ * @param tzOffset - Timezone offset in seconds (from Slack API)
  */
 export function getUserDate(tzOffset: number): Date {
   const now = new Date();
@@ -122,6 +107,41 @@ export function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
+// ============================================================================
+// Prompt DM
+// ============================================================================
+
+/**
+ * Build the prompt DM blocks with "Open Standup" button
+ */
+function buildPromptBlocks(dailyName: string) {
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `Hey! It's time for your *${dailyName}* standup. :memo:`,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: {
+            type: 'plain_text',
+            text: 'Open Standup',
+            emoji: true,
+          },
+          style: 'primary',
+          action_id: 'open_standup',
+          value: dailyName,
+        },
+      ],
+    },
+  ];
+}
+
 /**
  * Send a DM to user with "Open Standup" button
  */
@@ -130,60 +150,19 @@ export async function sendPromptDM(
   userId: string,
   dailyName: string
 ): Promise<boolean> {
-  try {
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${slackToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        channel: userId, // DM to user
-        text: `Time for your *${dailyName}* standup!`,
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `Hey! It's time for your *${dailyName}* standup. :memo:`,
-            },
-          },
-          {
-            type: 'actions',
-            elements: [
-              {
-                type: 'button',
-                text: {
-                  type: 'plain_text',
-                  text: 'Open Standup',
-                  emoji: true,
-                },
-                style: 'primary',
-                action_id: 'open_standup',
-                value: dailyName,
-              },
-            ],
-          },
-        ],
-      }),
-    });
-
-    const data = await response.json() as { ok: boolean; error?: string };
-
-    if (!data.ok) {
-      console.error(`Failed to send DM to ${userId}:`, data.error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error(`Error sending DM to ${userId}:`, error);
-    return false;
-  }
+  const text = `Time for your *${dailyName}* standup!`;
+  const blocks = buildPromptBlocks(dailyName);
+  const result = await postMessage(slackToken, userId, text, blocks);
+  return result !== null;
 }
+
+// ============================================================================
+// Cron Job Logic
+// ============================================================================
 
 /**
  * Main prompt function - check all participants and send prompts as needed
+ * Called by cron job every 30 minutes
  * @param force - Skip time window checks (for testing)
  */
 export async function runPromptCron(

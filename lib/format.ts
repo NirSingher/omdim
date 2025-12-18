@@ -1,8 +1,19 @@
 /**
- * Format standup messages for posting to Slack channels
+ * Standup message formatting and channel posting
+ * - Formats submissions as Slack Block Kit blocks
+ * - Posts formatted standups to channels
+ * - Generates daily digests and weekly summaries
  */
 
 import { Submission, ParticipationStats } from './db';
+import { postMessage, sendDM as slackSendDM } from './slack';
+
+// Re-export sendDM for backward compatibility
+export { sendDM as sendDM } from './slack';
+
+// ============================================================================
+// Types
+// ============================================================================
 
 interface StandupData {
   yesterdayCompleted: string[];
@@ -26,8 +37,12 @@ interface Block {
   }>;
 }
 
+// ============================================================================
+// Standup Message Formatting
+// ============================================================================
+
 /**
- * Format a standup submission as Slack blocks
+ * Format a standup submission as Slack Block Kit blocks
  */
 export function formatStandupBlocks(
   userId: string,
@@ -136,7 +151,8 @@ export function formatStandupBlocks(
 }
 
 /**
- * Post a standup to a Slack channel
+ * Post a formatted standup to a Slack channel
+ * @returns Message timestamp if successful, null otherwise
  */
 export async function postStandupToChannel(
   slackToken: string,
@@ -146,40 +162,16 @@ export async function postStandupToChannel(
   data: StandupData
 ): Promise<string | null> {
   const blocks = formatStandupBlocks(userId, dailyName, data);
-
-  // Fallback text for notifications
   const fallbackText = `${dailyName} standup from <@${userId}>`;
-
-  try {
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${slackToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        channel,
-        text: fallbackText,
-        blocks,
-      }),
-    });
-
-    const result = await response.json() as { ok: boolean; ts?: string; error?: string };
-
-    if (!result.ok) {
-      console.error('Failed to post standup:', result.error);
-      return null;
-    }
-
-    return result.ts || null;
-  } catch (error) {
-    console.error('Error posting standup:', error);
-    return null;
-  }
+  return postMessage(slackToken, channel, fallbackText, blocks);
 }
 
+// ============================================================================
+// Digest & Summary Formatting
+// ============================================================================
+
 /**
- * Format daily digest message
+ * Format daily digest message (sent via DM)
  */
 export function formatDailyDigest(
   dailyName: string,
@@ -270,43 +262,11 @@ export function formatWeeklySummary(
   return lines.join('\n');
 }
 
-/**
- * Send a DM to a user
- */
-export async function sendDM(
-  slackToken: string,
-  userId: string,
-  text: string
-): Promise<boolean> {
-  try {
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${slackToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        channel: userId,
-        text,
-        mrkdwn: true,
-      }),
-    });
+// ============================================================================
+// Helpers
+// ============================================================================
 
-    const result = await response.json() as { ok: boolean; error?: string };
-
-    if (!result.ok) {
-      console.error('Failed to send DM:', result.error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Error sending DM:', error);
-    return false;
-  }
-}
-
-// Helper to parse JSONB arrays from DB
+/** Parse JSONB arrays from database (handles both array and string formats) */
 function parseJsonArray(value: string[] | null): string[] {
   if (!value) return [];
   if (Array.isArray(value)) return value;

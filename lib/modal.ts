@@ -1,8 +1,12 @@
 /**
  * Slack Block Kit modal builder for standup form
+ * Builds the modal view structure - actual opening is done via lib/slack.ts
  */
 
 import { Question, FieldOrder } from './config';
+
+// Re-export openModal from slack.ts for backward compatibility
+export { openModal } from './slack';
 
 interface TextObject {
   type: 'plain_text' | 'mrkdwn';
@@ -312,37 +316,3 @@ export function buildStandupModal(
   };
 }
 
-/**
- * Open a modal via Slack API
- */
-export async function openModal(
-  slackToken: string,
-  triggerId: string,
-  view: ModalView
-): Promise<boolean> {
-  try {
-    const response = await fetch('https://slack.com/api/views.open', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${slackToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        trigger_id: triggerId,
-        view,
-      }),
-    });
-
-    const data = await response.json() as { ok: boolean; error?: string };
-
-    if (!data.ok) {
-      console.error('Failed to open modal:', data.error);
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Error opening modal:', error);
-    return false;
-  }
-}
