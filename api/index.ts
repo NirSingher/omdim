@@ -3,7 +3,7 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules } from '../lib/config';
+import { loadConfig, getDailies, getSchedules, getConfigError } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts } from '../lib/db';
 import { runPromptCron, formatDate } from '../lib/prompt';
@@ -85,23 +85,19 @@ export default {
 
 /** Health check endpoint */
 function handleHealthCheck(): Response {
-  let configStatus = 'unknown';
-  let configDetails = {};
+  loadConfig(); // Attempt to load config
+  const error = getConfigError();
 
-  try {
-    loadConfig();
-    configStatus = 'loaded';
-    configDetails = {
-      dailies: getDailies().map((d) => d.name),
-      schedules: getSchedules().map((s) => s.name),
-    };
-  } catch (e) {
-    configStatus = 'error';
-    configDetails = { error: String(e) };
-  }
+  const configStatus = error ? 'error' : 'loaded';
+  const configDetails = error
+    ? { error }
+    : {
+        dailies: getDailies().map((d) => d.name),
+        schedules: getSchedules().map((s) => s.name),
+      };
 
   return new Response(JSON.stringify({
-    status: 'healthy',
+    status: error ? 'degraded' : 'healthy',
     timestamp: new Date().toISOString(),
     config: {
       status: configStatus,

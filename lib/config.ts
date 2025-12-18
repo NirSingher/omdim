@@ -37,21 +37,50 @@ export interface Config {
 }
 
 let cachedConfig: Config | null = null;
+let configError: string | null = null;
 
+/** Empty config used when config.yaml is invalid */
+const EMPTY_CONFIG: Config = {
+  dailies: [],
+  schedules: [],
+  admins: [],
+};
+
+/**
+ * Load and validate config.yaml
+ * Returns empty config if invalid (check getConfigError() for details)
+ */
 export function loadConfig(): Config {
   if (cachedConfig) {
     return cachedConfig;
+  }
+
+  // If we already tried and failed, return empty config
+  if (configError) {
+    return EMPTY_CONFIG;
   }
 
   try {
     const config = parse(configYaml) as Config;
     validateConfig(config);
     cachedConfig = config;
+    configError = null;
     return config;
   } catch (error) {
-    console.error('Failed to load config:', error);
-    throw new Error('Failed to load configuration');
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    configError = errorMsg;
+    console.error('❌ CONFIG ERROR:', errorMsg);
+    console.error('The bot will not function correctly until config.yaml is fixed.');
+    return EMPTY_CONFIG;
   }
+}
+
+/**
+ * Get the config error message, or null if config loaded successfully
+ */
+export function getConfigError(): string | null {
+  loadConfig(); // Ensure we've attempted to load
+  return configError;
 }
 
 function validateConfig(config: Config): void {
@@ -139,4 +168,5 @@ export function getSchedules(): Schedule[] {
 // Clear cache (useful for testing or hot reload)
 export function clearConfigCache(): void {
   cachedConfig = null;
+  configError = null;
 }

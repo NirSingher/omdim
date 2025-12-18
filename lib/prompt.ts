@@ -6,7 +6,7 @@
  */
 
 import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent } from './db';
-import { getSchedule } from './config';
+import { getSchedule, getConfigError } from './config';
 import { getUserInfo, postMessage } from './slack';
 
 // ============================================================================
@@ -169,8 +169,20 @@ export async function runPromptCron(
   db: DbClient,
   slackToken: string,
   force = false
-): Promise<{ prompted: number; skipped: number; errors: number }> {
-  const stats = { prompted: 0, skipped: 0, errors: 0 };
+): Promise<{ prompted: number; skipped: number; errors: number; configError?: string }> {
+  const stats: { prompted: number; skipped: number; errors: number; configError?: string } = {
+    prompted: 0,
+    skipped: 0,
+    errors: 0,
+  };
+
+  // Check for config errors first
+  const configErr = getConfigError();
+  if (configErr) {
+    console.error('Prompt cron aborted due to config error:', configErr);
+    stats.configError = configErr;
+    return stats;
+  }
 
   try {
     const participants = await getAllParticipants(db);

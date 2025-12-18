@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily } from '../config';
+import { getDaily, getConfigError } from '../config';
 import { DbClient, getPreviousSubmission, saveSubmission, markPromptSubmitted, updateSubmissionMessageTs } from '../db';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData } from '../modal';
@@ -225,6 +225,13 @@ export async function handleInteraction(
   payload: InteractionPayload,
   ctx: InteractionContext
 ): Promise<boolean> {
+  // Check for config errors
+  const configErr = getConfigError();
+  if (configErr) {
+    console.error('Interaction failed due to config error:', configErr);
+    return false;
+  }
+
   // Handle button click (open_standup)
   if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'open_standup') {
     return handleOpenStandup(payload, ctx);
