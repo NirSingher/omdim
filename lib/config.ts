@@ -1,40 +1,64 @@
 import { parse } from 'yaml';
+import { z } from 'zod';
 
 // Import config.yaml as text (bundled by wrangler/build tool)
 // @ts-ignore - imported as raw text via bundler
 import configYaml from '../config.yaml';
 
-export interface Question {
-  text: string;
-  required: boolean;
-  order?: number;  // Lower numbers appear first. Defaults to 999 if not specified.
-}
+// ============================================================================
+// Zod Schemas
+// ============================================================================
 
-export interface FieldOrder {
-  unplanned?: number;    // Default: 10
-  today_plans?: number;  // Default: 20
-  blockers?: number;     // Default: 30
-}
+const QuestionSchema = z.object({
+  text: z.string().min(1, 'Question text cannot be empty'),
+  required: z.boolean().default(false),
+  order: z.number().optional(),
+});
 
-export interface Daily {
-  name: string;
-  channel: string;
-  schedule: string;
-  field_order?: FieldOrder;
-  questions?: Question[];
-}
+const FieldOrderSchema = z.object({
+  unplanned: z.number().optional(),
+  today_plans: z.number().optional(),
+  blockers: z.number().optional(),
+});
 
-export interface Schedule {
-  name: string;
-  days: string[];
-  default_time: string;
-}
+const validDays = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+type ValidDay = typeof validDays[number];
 
-export interface Config {
-  dailies: Daily[];
-  schedules: Schedule[];
-  admins: string[];
-}
+const DaySchema = z.string().transform(d => d.toLowerCase() as ValidDay).refine(
+  d => validDays.includes(d as ValidDay),
+  { message: `Must be one of: ${validDays.join(', ')}` }
+);
+
+const ScheduleSchema = z.object({
+  name: z.string().min(1, 'Schedule name cannot be empty'),
+  days: z.array(DaySchema).min(1, 'Schedule must have at least one day'),
+  default_time: z.string().regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format'),
+});
+
+const DailySchema = z.object({
+  name: z.string().min(1, 'Daily name cannot be empty'),
+  channel: z.string().min(1, 'Channel cannot be empty'),
+  schedule: z.string().min(1, 'Schedule name cannot be empty'),
+  manager: z.string().optional(),
+  field_order: FieldOrderSchema.optional(),
+  questions: z.array(QuestionSchema).optional(),
+});
+
+const ConfigSchema = z.object({
+  dailies: z.array(DailySchema).min(1, 'Must have at least one daily'),
+  schedules: z.array(ScheduleSchema).min(1, 'Must have at least one schedule'),
+  admins: z.array(z.string()).min(1, 'Must have at least one admin'),
+});
+
+// ============================================================================
+// Types (inferred from Zod schemas)
+// ============================================================================
+
+export type Question = z.infer<typeof QuestionSchema>;
+export type FieldOrder = z.infer<typeof FieldOrderSchema>;
+export type Schedule = z.infer<typeof ScheduleSchema>;
+export type Daily = z.infer<typeof DailySchema>;
+export type Config = z.infer<typeof ConfigSchema>;
 
 let cachedConfig: Config | null = null;
 let configError: string | null = null;
@@ -46,10 +70,34 @@ const EMPTY_CONFIG: Config = {
   admins: [],
 };
 
+// ============================================================================
+// Config Loading
+// ============================================================================
+
 /**
- * Load and validate config.yaml
- * Returns empty config if invalid (check getConfigError() for details)
+ * Format Zod errors into a readable string
  */
+function formatZodError(error: z.ZodError): string {
+  // Zod v4 uses 'issues', older versions use 'errors'
+  const issues = (error as { issues?: z.ZodIssue[] }).issues || [];
+  return issues.map((e: z.ZodIssue) => {
+    const path = e.path.length > 0 ? `${e.path.join('.')}: ` : '';
+    return `${path}${e.message}`;
+  }).join('; ');
+}
+
+/**
+ * Validate that all dailies reference existing schedules
+ */
+function validateScheduleReferences(config: Config): void {
+  const scheduleNames = new Set(config.schedules.map(s => s.name));
+  for (const daily of config.dailies) {
+    if (!scheduleNames.has(daily.schedule)) {
+      throw new Error(`Daily "${daily.name}" references unknown schedule "${daily.schedule}"`);
+    }
+  }
+}
+
 export function loadConfig(): Config {
   if (cachedConfig) {
     return cachedConfig;
@@ -61,11 +109,19 @@ export function loadConfig(): Config {
   }
 
   try {
-    const config = parse(configYaml) as Config;
-    validateConfig(config);
-    cachedConfig = config;
+    const rawConfig = parse(configYaml);
+    const result = ConfigSchema.safeParse(rawConfig);
+
+    if (!result.success) {
+      throw new Error(formatZodError(result.error));
+    }
+
+    // Additional validation: check schedule references
+    validateScheduleReferences(result.data);
+
+    cachedConfig = result.data;
     configError = null;
-    return config;
+    return cachedConfig;
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     configError = errorMsg;
@@ -81,65 +137,6 @@ export function loadConfig(): Config {
 export function getConfigError(): string | null {
   loadConfig(); // Ensure we've attempted to load
   return configError;
-}
-
-function validateConfig(config: Config): void {
-  if (!config.dailies || !Array.isArray(config.dailies)) {
-    throw new Error('Config must have a "dailies" array');
-  }
-
-  if (!config.schedules || !Array.isArray(config.schedules)) {
-    throw new Error('Config must have a "schedules" array');
-  }
-
-  if (!config.admins || !Array.isArray(config.admins)) {
-    throw new Error('Config must have an "admins" array');
-  }
-
-  const scheduleNames = new Set(config.schedules.map((s) => s.name));
-
-  for (const daily of config.dailies) {
-    if (!daily.name) {
-      throw new Error('Each daily must have a "name"');
-    }
-    if (!daily.channel) {
-      throw new Error(`Daily "${daily.name}" must have a "channel"`);
-    }
-    if (!daily.schedule) {
-      throw new Error(`Daily "${daily.name}" must have a "schedule"`);
-    }
-    if (!scheduleNames.has(daily.schedule)) {
-      throw new Error(
-        `Daily "${daily.name}" references unknown schedule "${daily.schedule}"`
-      );
-    }
-  }
-
-  const validDays = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-
-  for (const schedule of config.schedules) {
-    if (!schedule.name) {
-      throw new Error('Each schedule must have a "name"');
-    }
-    if (!schedule.days || !Array.isArray(schedule.days)) {
-      throw new Error(`Schedule "${schedule.name}" must have a "days" array`);
-    }
-    for (const day of schedule.days) {
-      if (!validDays.includes(day.toLowerCase())) {
-        throw new Error(
-          `Schedule "${schedule.name}" has invalid day "${day}". Valid: ${validDays.join(', ')}`
-        );
-      }
-    }
-    if (!schedule.default_time) {
-      throw new Error(`Schedule "${schedule.name}" must have a "default_time"`);
-    }
-    if (!/^\d{2}:\d{2}$/.test(schedule.default_time)) {
-      throw new Error(
-        `Schedule "${schedule.name}" default_time must be in HH:MM format`
-      );
-    }
-  }
 }
 
 export function getDaily(name: string): Daily | undefined {
@@ -163,6 +160,11 @@ export function getDailies(): Daily[] {
 
 export function getSchedules(): Schedule[] {
   return loadConfig().schedules;
+}
+
+/** Get all dailies that have a manager configured */
+export function getDailiesWithManagers(): Daily[] {
+  return loadConfig().dailies.filter((d) => d.manager);
 }
 
 // Clear cache (useful for testing or hot reload)

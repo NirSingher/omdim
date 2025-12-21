@@ -4,7 +4,17 @@
  */
 
 import { getDaily, getConfigError } from '../config';
-import { DbClient, getPreviousSubmission, saveSubmission, markPromptSubmitted, updateSubmissionMessageTs } from '../db';
+import {
+  DbClient,
+  getPreviousSubmission,
+  saveSubmission,
+  markPromptSubmitted,
+  updateSubmissionMessageTs,
+  markItemsDone,
+  markItemsDropped,
+  incrementCarryCount,
+  createWorkItems,
+} from '../db';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData } from '../modal';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -134,6 +144,7 @@ export async function handleStandupSubmission(
   // Parse dropdown selections for yesterday's items
   const yesterdayCompleted: string[] = [];
   const yesterdayIncomplete: string[] = [];
+  const yesterdayDropped: string[] = [];
 
   yesterdayPlanItems.forEach((item, index) => {
     const selectedOption = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
@@ -143,8 +154,9 @@ export async function handleStandupSubmission(
       yesterdayCompleted.push(item);
     } else if (status === 'continue') {
       yesterdayIncomplete.push(item);
+    } else if (status === 'drop') {
+      yesterdayDropped.push(item);
     }
-    // 'drop' items are intentionally not added to either list
   });
 
   // Parse text inputs
@@ -184,6 +196,37 @@ export async function handleStandupSubmission(
 
   // Mark prompt as submitted
   await markPromptSubmitted(ctx.db, userId, dailyName, todayStr);
+
+  // Track work items for analytics
+  try {
+    // Mark yesterday's items based on status
+    if (yesterdayCompleted.length > 0) {
+      await markItemsDone(ctx.db, userId, dailyName, yesterdayCompleted, todayStr);
+    }
+    if (yesterdayDropped.length > 0) {
+      await markItemsDropped(ctx.db, userId, dailyName, yesterdayDropped);
+    }
+    if (yesterdayIncomplete.length > 0) {
+      await incrementCarryCount(ctx.db, userId, dailyName, yesterdayIncomplete);
+    }
+
+    // Create new work items for today's plans
+    if (todayPlans.length > 0) {
+      await createWorkItems(
+        ctx.db,
+        todayPlans.map(text => ({
+          slackUserId: userId,
+          dailyName,
+          text,
+          date: todayStr,
+          submissionId: submission.id,
+        }))
+      );
+    }
+  } catch (error) {
+    // Don't fail the submission if work item tracking fails
+    console.error('Failed to track work items:', error);
+  }
 
   console.log('Submission saved:', { userId, dailyName, todayPlans: todayPlans.length });
 

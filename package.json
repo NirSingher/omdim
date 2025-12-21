@@ -6,17 +6,23 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "build": "tsc",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
     "@slack/web-api": "^7.0.0",
-    "yaml": "^2.3.0"
+    "yaml": "^2.3.0",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251216.0",
     "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.0.16",
     "typescript": "^5.0.0",
+    "vitest": "^4.0.16",
     "wrangler": "^3.0.0"
   }
 }

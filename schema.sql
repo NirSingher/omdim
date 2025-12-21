@@ -39,9 +39,35 @@ CREATE TABLE IF NOT EXISTS prompts (
   UNIQUE(slack_user_id, daily_name, date)
 );
 
+-- Cached Slack user profiles (reduces API calls)
+CREATE TABLE IF NOT EXISTS slack_users (
+  slack_user_id TEXT PRIMARY KEY,
+  display_name TEXT,
+  tz TEXT,
+  tz_offset INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Track individual work items for analytics
+CREATE TABLE IF NOT EXISTS work_items (
+  id SERIAL PRIMARY KEY,
+  slack_user_id TEXT NOT NULL,
+  daily_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_date DATE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending, done, dropped, carried
+  carry_count INTEGER NOT NULL DEFAULT 0,
+  completed_date DATE,
+  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_participants_daily ON participants(daily_name);
 CREATE INDEX IF NOT EXISTS idx_submissions_date ON submissions(date);
 CREATE INDEX IF NOT EXISTS idx_submissions_user_daily ON submissions(slack_user_id, daily_name);
 CREATE INDEX IF NOT EXISTS idx_prompts_date ON prompts(date);
 CREATE INDEX IF NOT EXISTS idx_prompts_user_daily_date ON prompts(slack_user_id, daily_name, date);
+CREATE INDEX IF NOT EXISTS idx_slack_users_updated ON slack_users(updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_items_user_daily ON work_items(slack_user_id, daily_name);
+CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
+CREATE INDEX IF NOT EXISTS idx_work_items_carry ON work_items(carry_count) WHERE carry_count >= 3;

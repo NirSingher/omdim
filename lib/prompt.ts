@@ -5,9 +5,44 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent } from './db';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser } from './db';
 import { getSchedule, getConfigError } from './config';
 import { getUserInfo, postMessage } from './slack';
+
+// ============================================================================
+// User Timezone with Caching
+// ============================================================================
+
+/**
+ * Get user timezone, using cache when available
+ * Falls back to Slack API and updates cache
+ */
+async function getCachedUserTimezone(
+  db: DbClient,
+  slackToken: string,
+  userId: string
+): Promise<{ tz: string; tz_offset: number } | null> {
+  // Try cache first
+  const cached = await getCachedUser(db, userId);
+  if (cached && cached.tz) {
+    return { tz: cached.tz, tz_offset: cached.tz_offset };
+  }
+
+  // Fetch from Slack API
+  const userInfo = await getUserInfo(slackToken, userId);
+  if (!userInfo) {
+    return null;
+  }
+
+  // Update cache
+  await upsertCachedUser(db, {
+    slackUserId: userId,
+    tz: userInfo.tz,
+    tzOffset: userInfo.tz_offset,
+  });
+
+  return userInfo;
+}
 
 // ============================================================================
 // Constants
@@ -230,8 +265,8 @@ async function processParticipant(
     return 'error';
   }
 
-  // Get user timezone from Slack
-  const userInfo = await getUserTimezone(slackToken, userId);
+  // Get user timezone (from cache or Slack API)
+  const userInfo = await getCachedUserTimezone(db, slackToken, userId);
   if (!userInfo) {
     return 'error';
   }
