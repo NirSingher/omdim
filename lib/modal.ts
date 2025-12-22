@@ -163,7 +163,7 @@ export function buildStandupModal(
         multiline: true,
         placeholder: {
           type: 'plain_text',
-          text: 'Fixed prod bug, Helped teammate with code review...',
+          text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
         },
       },
       label: {

@@ -129,6 +129,7 @@ psql --version
    wrangler secret put SLACK_BOT_TOKEN
    wrangler secret put SLACK_SIGNING_SECRET
    wrangler secret put DATABASE_URL
+   wrangler secret put CRON_SECRET  # Optional: for HTTP-triggered crons
    ```
 
 5. Your app URL: `https://omdim.<your-subdomain>.workers.dev`

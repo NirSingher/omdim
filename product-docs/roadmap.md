@@ -13,6 +13,41 @@ See `requirements.md` and `architecture.md`
 
 ---
 
+## Phase 1.5: Operational Improvements
+
+### Dynamic Configuration
+- [ ] Hot-reload config changes without redeploying
+- [ ] Pause/resume dailies via config flag (`enabled: false`)
+- [ ] Admin command to reload config: `/standup config reload`
+- [ ] Store config overrides in DB (takes precedence over YAML)
+
+### Out of Office (OOO)
+- [ ] `/standup ooo tomorrow` - skip next prompt
+- [ ] `/standup ooo 2024-12-25 to 2025-01-02` - date range
+- [ ] `/standup ooo clear` - cancel OOO
+- [ ] Show OOO status in `/standup list`
+- [ ] Skip prompts and exclude from "missing" stats during OOO
+
+### Admin Management
+- [ ] `/standup admin add @user` - add admin (super-admin only)
+- [ ] `/standup admin remove @user` - remove admin
+- [ ] `/standup admin list` - show all admins
+- [ ] Define super-admins in config (can manage other admins)
+
+### Force Prompt Command
+- [ ] `/standup prompt all <daily>` - admin command to prompt all participants
+- [ ] Confirmation step before mass-prompting
+- [ ] Show summary: "Sent prompts to 7 users"
+
+### Visual Polish
+- [ ] Improve checkbox rendering in standup messages
+- [ ] Use `:white_check_mark:` / `:ballot_box_with_check:` for done items
+- [ ] Use `:arrow_right:` for continued items
+- [ ] Use `:x:` for dropped items
+- [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
+
+---
+
 ## Phase 2: Performance & Insights
 
 ### Cache Slack Data

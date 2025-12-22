@@ -11,11 +11,17 @@ fallthrough = false
 
 [triggers]
 # Prompt: every 30 minutes
-# Cleanup: daily at 3am UTC (Cloudflare doesn't support day-of-week)
+# Cleanup: daily at 3am UTC
 crons = ["*/30 * * * *", "0 3 * * *"]
+
+# Digest crons (requires paid plan for 5+ triggers, use HTTP endpoint instead):
+# Daily digest: curl "https://YOUR-URL/api/cron/digest?type=daily&secret=YOUR_CRON_SECRET"
+# Weekly digest: curl "https://YOUR-URL/api/cron/digest?type=weekly&secret=YOUR_CRON_SECRET"
 
 # Environment variables - set secrets via: wrangler secret put <NAME>
 # Required secrets:
 #   wrangler secret put SLACK_BOT_TOKEN
 #   wrangler secret put SLACK_SIGNING_SECRET
 #   wrangler secret put DATABASE_URL
+# Optional secrets:
+#   wrangler secret put CRON_SECRET  # For HTTP-triggered crons (e.g., external cron services)
