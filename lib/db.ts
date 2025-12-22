@@ -764,7 +764,7 @@ export async function snoozeItem(
 ): Promise<void> {
   await db.query(
     `UPDATE work_items
-     SET snoozed_until = CURRENT_DATE + $1
+     SET snoozed_until = CURRENT_DATE + ($1 || ' days')::INTERVAL
      WHERE id = $2`,
     [days, itemId]
   );
