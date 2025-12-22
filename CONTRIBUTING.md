@@ -13,7 +13,7 @@
 
 ```bash
 git clone <repo>
-cd standup-bot
+cd omdim
 npm install
 ```
 

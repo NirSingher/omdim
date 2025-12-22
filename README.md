@@ -1,4 +1,5 @@
-# omdim
+
+# Omdim
 
 Slack bot for managing you Daily Standups. Build to be serverless hosted for free. Oriented to keep track from one daily to another and help manager get the digest that they need.
 
@@ -45,7 +46,7 @@ Slack bot for managing you Daily Standups. Build to be serverless hosted for fre
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps)
 2. Click **Create New App** → **From scratch**
-3. Name it "Standup Bot" and select your workspace
+3. Name it "Omdim" and select your workspace
 
 #### OAuth & Permissions
 
@@ -130,7 +131,7 @@ psql --version
    wrangler secret put DATABASE_URL
    ```
 
-5. Your app URL: `https://standup-bot.<your-subdomain>.workers.dev`
+5. Your app URL: `https://omdim.<your-subdomain>.workers.dev`
 
 > **Note**: Cloudflare free tier doesn't support day-of-week in cron, so cleanup runs daily at 3am UTC instead of weekly.
 
@@ -209,7 +210,7 @@ The bot needs to be in the channel to post standups:
 1. Go to your standup channel (e.g., `#daily-standup`)
 2. Click the channel name → **Settings** → **Integrations**
 3. Click **Add apps**
-4. Find and add your Standup Bot
+4. Find and add your Omdim bot
 
 ### 7. Add Team Members
 

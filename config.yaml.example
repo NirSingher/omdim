@@ -1,10 +1,10 @@
-# Standup Bot Configuration
+# Omdim Configuration
 # Copy this file to config.yaml and customize for your team
 
 dailies:
   - name: "engineering"
     channel: "#eng-standup"
-    schedule: "il-team"
+    schedule: "i-team"
     # Field order: lower numbers appear first in the modal
     # Standard fields: unplanned (default 10), today_plans (default 20), blockers (default 30)
     # Custom questions use their own 'order' value to interleave with standard fields
@@ -37,7 +37,7 @@ dailies:
   #       order: 15
 
 schedules:
-  - name: "il-team"
+  - name: "i-team"
     days: [sun, mon, tue, wed, thu]
     default_time: "09:00"
 

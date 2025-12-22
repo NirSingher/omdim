@@ -5,7 +5,7 @@
  * - Generates daily digests and weekly summaries
  */
 
-import { Submission, ParticipationStats } from './db';
+import { Submission, ParticipationStats, TeamMemberStats } from './db';
 import { postMessage, sendDM as slackSendDM } from './slack';
 
 // Re-export sendDM for backward compatibility
@@ -257,6 +257,117 @@ export function formatWeeklySummary(
     }
   } else {
     lines.push('*Blockers this week:* None reported 🎉');
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
+// Manager Digest Formatting
+// ============================================================================
+
+export type DigestPeriod = 'daily' | 'weekly' | '4-week';
+
+interface DigestOptions {
+  dailyName: string;
+  period: DigestPeriod;
+  startDate: string;
+  endDate: string;
+  submissions: Submission[];
+  stats: TeamMemberStats[];
+  totalWorkdays: number;
+  missingToday?: string[];
+}
+
+/**
+ * Format a comprehensive manager digest with full team stats
+ */
+export function formatManagerDigest(options: DigestOptions): string {
+  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, missingToday } = options;
+
+  const periodLabel = period === 'daily' ? 'Daily'
+    : period === 'weekly' ? 'Weekly'
+    : '4-Week';
+
+  const dateRange = period === 'daily'
+    ? endDate
+    : `${startDate} to ${endDate}`;
+
+  const lines: string[] = [];
+
+  // Header
+  lines.push(`📊 *${dailyName} ${periodLabel} Digest*`);
+  lines.push(`_${dateRange}_\n`);
+
+  // Summary stats
+  const totalSubmissions = submissions.length;
+  const uniqueSubmitters = new Set(submissions.map(s => s.slack_user_id)).size;
+  const totalParticipants = stats.length;
+
+  lines.push(`*Summary:*`);
+  lines.push(`• ${totalSubmissions} submissions from ${uniqueSubmitters}/${totalParticipants} team members`);
+
+  if (totalWorkdays > 0) {
+    const avgRate = totalParticipants > 0
+      ? Math.round((totalSubmissions / (totalWorkdays * totalParticipants)) * 100)
+      : 0;
+    lines.push(`• ${avgRate}% overall participation rate`);
+  }
+
+  // Count blockers
+  const blockersCount = submissions.filter(s => s.blockers && s.blockers.trim()).length;
+  if (blockersCount > 0) {
+    lines.push(`• ⚠️ ${blockersCount} blocker${blockersCount !== 1 ? 's' : ''} reported`);
+  }
+  lines.push('');
+
+  // Missing submissions (for daily only)
+  if (period === 'daily' && missingToday && missingToday.length > 0) {
+    lines.push(`*Not yet submitted:*`);
+    for (const userId of missingToday) {
+      lines.push(`• <@${userId}>`);
+    }
+    lines.push('');
+  }
+
+  // Team member breakdown
+  lines.push(`*Team Performance:*`);
+  for (const member of stats) {
+    const rate = totalWorkdays > 0
+      ? Math.round((Number(member.submission_count) / totalWorkdays) * 100)
+      : 0;
+    const emoji = rate >= 80 ? '🟢' : rate >= 50 ? '🟡' : '🔴';
+
+    lines.push(`${emoji} <@${member.slack_user_id}>: ${member.submission_count}/${totalWorkdays} days (${rate}%)`);
+    if (Number(member.total_completed) > 0 || Number(member.total_planned) > 0) {
+      lines.push(`    ✅ ${member.total_completed} completed • 📋 ${member.total_planned} planned • ${member.avg_items_per_day}/day avg`);
+    }
+    if (Number(member.total_blockers) > 0) {
+      lines.push(`    ⚠️ ${member.total_blockers} days with blockers`);
+    }
+  }
+  lines.push('');
+
+  // Blockers detail (show recent ones)
+  const blockers: string[] = [];
+  for (const sub of submissions) {
+    if (sub.blockers && sub.blockers.trim()) {
+      blockers.push(`• <@${sub.slack_user_id}> (${sub.date}): ${sub.blockers.split('\n')[0]}`);
+    }
+  }
+
+  if (blockers.length > 0) {
+    lines.push(`*Blockers:*`);
+    // Show up to 5 for daily, 10 for weekly, all for 4-week
+    const limit = period === 'daily' ? 5 : period === 'weekly' ? 10 : 20;
+    for (const blocker of blockers.slice(0, limit)) {
+      lines.push(blocker);
+    }
+    if (blockers.length > limit) {
+      lines.push(`_...and ${blockers.length - limit} more_`);
+    }
+  } else {
+    lines.push(`*Blockers:* None reported 🎉`);
   }
 
   return lines.join('\n');

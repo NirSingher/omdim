@@ -1,4 +1,4 @@
-# Standup Bot - Claude Code Instructions
+# Omdim - Claude Code Instructions
 
 ## Project Overview
 Async daily standup Slack bot. Serverless on Vercel with Postgres.

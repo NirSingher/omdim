@@ -1,4 +1,4 @@
--- Standup Bot Database Schema
+-- Omdim Database Schema
 
 -- Assigned users to dailies
 CREATE TABLE IF NOT EXISTS participants (

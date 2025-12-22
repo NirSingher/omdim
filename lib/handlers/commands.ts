@@ -3,9 +3,9 @@
  * Handles: help, prompt, add, remove, list, digest, week
  */
 
-import { getDailies, getDaily, isAdmin, getConfigError } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies } from '../db';
-import { formatDailyDigest, formatWeeklySummary } from '../format';
+import { getDailies, getDaily, getSchedule, isAdmin, getConfigError } from '../config';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays } from '../db';
+import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, DigestPeriod } from '../format';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
 import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse } from '../slack';
 
@@ -30,14 +30,14 @@ export type CommandResponse = SlackCommandResponse;
 /** Show help message */
 export function handleHelp(): CommandResponse {
   return ephemeralResponse(
-    '*Standup Bot Commands*\n\n' +
+    '*Omdim Commands*\n\n' +
     '`/standup help` - Show this help message\n' +
     '`/standup prompt [daily-name]` - Send standup prompt to your DMs\n' +
     '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
     '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
     '`/standup list <daily-name>` - List participants in a daily\n' +
-    '`/standup digest [daily-name]` - Get today\'s digest (DM, all dailies if none specified)\n' +
-    '`/standup week <daily-name>` - Get weekly summary (DM)'
+    '`/standup digest <daily-name> [period]` - Get team digest (DM)\n' +
+    '    _period: `daily` (default), `weekly`, `4-week`_'
   );
 }
 
@@ -120,47 +120,75 @@ export async function handleList(ctx: CommandContext): Promise<CommandResponse> 
   }
 }
 
-/** Get today's digest (sent as DM) */
+/** Get team digest with full stats (sent as DM) */
 export async function handleDigest(ctx: CommandContext): Promise<CommandResponse> {
   const digestDailyName = ctx.args[1];
+  const periodArg = ctx.args[2]?.toLowerCase() || 'daily';
+
+  if (!digestDailyName) {
+    return ephemeralResponse('Usage: `/standup digest <daily-name> [daily|weekly|4-week]`');
+  }
+
+  // Validate period
+  const validPeriods = ['daily', 'weekly', '4-week'];
+  if (!validPeriods.includes(periodArg)) {
+    return ephemeralResponse(`❌ Invalid period "${periodArg}". Use: daily, weekly, or 4-week`);
+  }
+  const period = periodArg as DigestPeriod;
+
+  const digestDaily = getDaily(digestDailyName);
+  if (!digestDaily) {
+    return ephemeralResponse(`❌ Daily "${digestDailyName}" not found.`);
+  }
+
+  const schedule = getSchedule(digestDaily.schedule);
+  if (!schedule) {
+    return ephemeralResponse(`❌ Schedule "${digestDaily.schedule}" not found.`);
+  }
 
   try {
-    // Get user's timezone for today's date
+    // Get user's timezone for date calculations
     const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
     const tzOffset = userInfo?.tz_offset || 0;
     const userDate = getUserDate(tzOffset);
-    const todayStr = formatDate(userDate);
+    const endDate = formatDate(userDate);
 
-    // If specific daily provided, get just that one
-    if (digestDailyName) {
-      const digestDaily = getDaily(digestDailyName);
-      if (!digestDaily) {
-        return ephemeralResponse(`❌ Daily "${digestDailyName}" not found.`);
-      }
+    // Calculate start date based on period
+    const startDateObj = new Date(userDate);
+    if (period === 'daily') {
+      // Same day
+    } else if (period === 'weekly') {
+      startDateObj.setDate(startDateObj.getDate() - 6);
+    } else {
+      // 4-week
+      startDateObj.setDate(startDateObj.getDate() - 27);
+    }
+    const startDate = formatDate(startDateObj);
 
-      const submissions = await getSubmissionsForDate(ctx.db, digestDailyName, todayStr);
-      const digestText = formatDailyDigest(digestDailyName, todayStr, submissions);
+    // Get data
+    const submissions = await getSubmissionsInRange(ctx.db, digestDailyName, startDate, endDate);
+    const stats = await getTeamStats(ctx.db, digestDailyName, startDate, endDate);
+    const totalWorkdays = countWorkdays(schedule.days, startDate, endDate);
 
-      await sendDM(ctx.slackToken, ctx.userId, digestText);
-      return ephemeralResponse(`📊 Digest sent to your DMs!`);
+    // For daily digest, also get missing submissions
+    let missingToday: string[] | undefined;
+    if (period === 'daily') {
+      missingToday = await getMissingSubmissions(ctx.db, digestDailyName, endDate);
     }
 
-    // No daily specified - get all dailies
-    const allDailies = getDailies();
-    if (allDailies.length === 0) {
-      return ephemeralResponse('❌ No dailies configured.');
-    }
+    const digestText = formatManagerDigest({
+      dailyName: digestDailyName,
+      period,
+      startDate,
+      endDate,
+      submissions,
+      stats,
+      totalWorkdays,
+      missingToday,
+    });
 
-    // Build combined digest for all dailies
-    const digestParts: string[] = [];
-    for (const daily of allDailies) {
-      const submissions = await getSubmissionsForDate(ctx.db, daily.name, todayStr);
-      const digestText = formatDailyDigest(daily.name, todayStr, submissions);
-      digestParts.push(digestText);
-    }
-
-    await sendDM(ctx.slackToken, ctx.userId, digestParts.join('\n\n---\n\n'));
-    return ephemeralResponse(`📊 Digest for all ${allDailies.length} dailies sent to your DMs!`);
+    await sendDM(ctx.slackToken, ctx.userId, digestText);
+    return ephemeralResponse(`📊 ${period.charAt(0).toUpperCase() + period.slice(1)} digest sent to your DMs!`);
   } catch (err) {
     console.error('Failed to generate digest:', err);
     return ephemeralResponse('❌ Failed to generate digest. Please try again.');
@@ -220,42 +248,15 @@ export async function handlePrompt(ctx: CommandContext): Promise<CommandResponse
   }
 }
 
-/** Get weekly summary (sent as DM) */
+/** Get weekly summary - redirects to digest weekly */
 export async function handleWeek(ctx: CommandContext): Promise<CommandResponse> {
   const weekDailyName = ctx.args[1];
-
   if (!weekDailyName) {
-    return ephemeralResponse('Usage: `/standup week <daily-name>`');
+    return ephemeralResponse('Usage: `/standup digest <daily-name> weekly`\n_(Note: `/standup week` is deprecated)_');
   }
-
-  const weekDaily = getDaily(weekDailyName);
-  if (!weekDaily) {
-    return ephemeralResponse(`❌ Daily "${weekDailyName}" not found.`);
-  }
-
-  try {
-    // Get user's timezone for date calculations
-    const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
-    const tzOffset = userInfo?.tz_offset || 0;
-    const userDate = getUserDate(tzOffset);
-    const endDate = formatDate(userDate);
-
-    // Go back 7 days
-    const startDateObj = new Date(userDate);
-    startDateObj.setDate(startDateObj.getDate() - 6);
-    const startDate = formatDate(startDateObj);
-
-    const submissions = await getSubmissionsInRange(ctx.db, weekDailyName, startDate, endDate);
-    const stats = await getParticipationStats(ctx.db, weekDailyName, startDate, endDate);
-    const weekText = formatWeeklySummary(weekDailyName, startDate, endDate, submissions, stats);
-
-    // Send as DM
-    await sendDM(ctx.slackToken, ctx.userId, weekText);
-    return ephemeralResponse(`📈 Weekly summary sent to your DMs!`);
-  } catch (err) {
-    console.error('Failed to generate weekly summary:', err);
-    return ephemeralResponse('❌ Failed to generate weekly summary. Please try again.');
-  }
+  // Redirect to digest weekly
+  ctx.args = ['digest', weekDailyName, 'weekly'];
+  return handleDigest(ctx);
 }
 
 // ============================================================================

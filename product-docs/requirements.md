@@ -1,4 +1,4 @@
-# Standup Bot - Requirements
+# Omdim - Requirements
 
 ## Problem
 Daily standups interrupt flow when done synchronously. Team members across timezones struggle to find common meeting times. Written async standups lack structure and continuity between days.
@@ -23,20 +23,23 @@ A Slack bot that:
 **Modal Form**:
 | Section | Behavior |
 |---------|----------|
-| Yesterday's plans | Pre-filled checklist from previous standup. User checks off completed items. |
-| Unplanned completions | Free text to add things done that weren't planned |
-| Today's plans | Free text or structured list (auto-populated with incomplete items from yesterday) |
-| Blockers | Free text (can be empty) |
+| Yesterday's plans | Each item from previous standup shown with dropdown: ✅ Done, ➡️ Carry over, ❌ Drop |
+| Unplanned wins | Free text for things done that weren't planned (shown with yesterday section) |
+| Today's plans | Free text (one item per line) |
+| Blockers | Rich text with @mention support (can be empty) |
 | Custom questions | Configurable per-daily, marked as optional or required |
 
-**First day**: Skip "Yesterday's plans" section entirely.
+**First day**: Skip "Yesterday's plans" section entirely, show welcome message.
+
+**Field ordering**: All fields (except yesterday's plans) can be reordered via `field_order` config.
 
 **Output**: Individual post to configured channel showing:
 - ✅ Completed from plan
-- ❌ Not completed (carried over to today)
-- ➕ Unplanned completions
-- 📋 Today's plan
-- 🚧 Blockers (if any)
+- ➡️ Carried over to today
+- 🗑️ Dropped (won't do)
+- ✨ Unplanned wins
+- 📋 Today's plans
+- 🚧 Blockers (if any, with @mentions preserved)
 
 ### 2. Scheduling
 
@@ -54,8 +57,9 @@ Users assigned to a schedule inherit its defaults but can override time personal
 
 **Commands**:
 ```
-/standup add @user <daily-name>        # Assign user to a daily
-/standup remove @user <daily-name>     # Remove user from a daily
+/standup prompt [daily-name]           # Send standup prompt to your DMs (auto-selects if in one daily)
+/standup add @user <daily-name>        # Assign user to a daily (admin)
+/standup remove @user <daily-name>     # Remove user from a daily (admin)
 /standup list <daily-name>             # Show all participants
 /standup list @user                    # Show user's assigned dailies
 ```
@@ -73,9 +77,14 @@ dailies:
   - name: "engineering-daily"
     channel: "#eng-standup"
     schedule: "il-team"
+    field_order:              # Optional: reorder fields (lower = higher)
+      unplanned: 10
+      today_plans: 20
+      blockers: 30
     questions:
       - text: "Any PRs needing review?"
         required: false
+        order: 25             # Insert between today_plans and blockers
       - text: "OOO tomorrow?"
         required: false
 
@@ -107,10 +116,12 @@ Digests are private - sent only to requester via DM.
 ## User Flows
 
 ### Daily Flow (Team Member)
-1. Receive DM at scheduled time: "Time for standup! [Open Form]"
-2. Click button → Modal opens with yesterday's plans as checkboxes
-3. Check completed items, add unplanned work, write today's plan
+1. Receive DM at scheduled time: "Time for standup! [Open Standup]"
+2. Click button → Modal opens with yesterday's plans as dropdowns (Done/Carry over/Drop)
+3. Mark each item's status, add unplanned wins, write today's plans
 4. Submit → Bot posts to configured channel
+
+**Manual trigger**: Use `/standup prompt` anytime to get the standup DM on demand.
 
 ### Admin Flow
 1. Edit `config.yaml` to define dailies, schedules, custom questions

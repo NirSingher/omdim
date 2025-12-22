@@ -1,4 +1,4 @@
-# Standup Bot - Architecture
+# Omdim - Architecture
 
 ## Overview
 
@@ -241,7 +241,7 @@ Admins type human-readable names; bot parses the IDs from the payload.
 ## Project Structure
 
 ```
-standup-bot/
+omdim/
 ├── api/
 │   ├── slack/
 │   │   ├── commands.ts    # Slash command handler
