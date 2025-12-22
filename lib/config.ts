@@ -35,13 +35,44 @@ const ScheduleSchema = z.object({
   default_time: z.string().regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format'),
 });
 
+// Integration user mapping for GitHub/Linear
+const IntegrationUserMappingSchema = z.object({
+  slack_user_id: z.string(),
+  external_username: z.string(),
+});
+
+const GitHubIntegrationSchema = z.object({
+  enabled: z.boolean().default(false),
+  org: z.string().optional(),
+  user_mapping: z.array(IntegrationUserMappingSchema).optional(),
+});
+
+const LinearIntegrationSchema = z.object({
+  enabled: z.boolean().default(false),
+  team_id: z.string().optional(),
+  user_mapping: z.array(IntegrationUserMappingSchema).optional(),
+});
+
+const IntegrationsSchema = z.object({
+  github: GitHubIntegrationSchema.optional(),
+  linear: LinearIntegrationSchema.optional(),
+});
+
 const DailySchema = z.object({
   name: z.string().min(1, 'Daily name cannot be empty'),
   channel: z.string().min(1, 'Channel cannot be empty'),
   schedule: z.string().min(1, 'Schedule name cannot be empty'),
-  manager: z.string().optional(),
+  // Manager(s) who receive automatic digests
+  manager: z.string().optional(), // Legacy: single manager
+  managers: z.array(z.string()).optional(), // New: multiple managers
+  // Digest settings
+  weekly_digest_day: z.enum(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']).optional(),
+  bottleneck_threshold: z.number().min(1).optional(),
+  // Modal fields
   field_order: FieldOrderSchema.optional(),
   questions: z.array(QuestionSchema).optional(),
+  // Integrations (placeholder for GitHub/Linear)
+  integrations: IntegrationsSchema.optional(),
 });
 
 const ConfigSchema = z.object({
@@ -162,9 +193,47 @@ export function getSchedules(): Schedule[] {
   return loadConfig().schedules;
 }
 
-/** Get all dailies that have a manager configured */
+/** Get all managers for a daily (supports both legacy single manager and new managers array) */
+export function getDailyManagers(daily: Daily): string[] {
+  // New format takes precedence
+  if (daily.managers && daily.managers.length > 0) {
+    return daily.managers;
+  }
+  // Fallback to legacy single manager
+  if (daily.manager) {
+    return [daily.manager];
+  }
+  return [];
+}
+
+/** Get all dailies that have at least one manager configured */
 export function getDailiesWithManagers(): Daily[] {
-  return loadConfig().dailies.filter((d) => d.manager);
+  return loadConfig().dailies.filter((d) => getDailyManagers(d).length > 0);
+}
+
+/** Get the weekly digest day for a daily (defaults to friday) */
+export function getWeeklyDigestDay(daily: Daily): string {
+  return daily.weekly_digest_day || 'fri';
+}
+
+/** Get the bottleneck threshold for a daily (defaults to 3) */
+export function getBottleneckThreshold(daily: Daily): number {
+  return daily.bottleneck_threshold || 3;
+}
+
+/** Check if a daily has any integrations enabled */
+export function hasIntegrationsEnabled(daily: Daily): boolean {
+  if (!daily.integrations) return false;
+  return (daily.integrations.github?.enabled === true) ||
+         (daily.integrations.linear?.enabled === true);
+}
+
+/** Get integration status summary for a daily */
+export function getIntegrationStatus(daily: Daily): { github: boolean; linear: boolean } {
+  return {
+    github: daily.integrations?.github?.enabled === true,
+    linear: daily.integrations?.linear?.enabled === true,
+  };
 }
 
 // Clear cache (useful for testing or hot reload)

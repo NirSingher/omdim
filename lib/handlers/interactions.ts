@@ -14,6 +14,7 @@ import {
   markItemsDropped,
   incrementCarryCount,
   createWorkItems,
+  snoozeItem,
 } from '../db';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData } from '../modal';
@@ -257,6 +258,41 @@ export async function handleStandupSubmission(
 }
 
 // ============================================================================
+// Button Handler: Snooze Bottleneck
+// ============================================================================
+
+/**
+ * Handle "Snooze 7d" button click on bottleneck items
+ * Snoozes the item for 7 days so it won't appear in bottleneck reports
+ */
+export async function handleSnoozeBottleneck(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const valueStr = payload.actions?.[0]?.value;
+  if (!valueStr) {
+    console.error('No value in snooze_bottleneck action');
+    return false;
+  }
+
+  try {
+    const { itemId, dailyName } = JSON.parse(valueStr) as { itemId: number; dailyName: string };
+    const userId = payload.user.id;
+
+    console.log(`Snoozing bottleneck item ${itemId} for daily "${dailyName}" by user ${userId}`);
+
+    // Snooze the item for 7 days
+    await snoozeItem(ctx.db, itemId, 7);
+
+    console.log(`Successfully snoozed item ${itemId} for 7 days`);
+    return true;
+  } catch (error) {
+    console.error('Failed to snooze bottleneck item:', error);
+    return false;
+  }
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -278,6 +314,11 @@ export async function handleInteraction(
   // Handle button click (open_standup)
   if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'open_standup') {
     return handleOpenStandup(payload, ctx);
+  }
+
+  // Handle button click (snooze_bottleneck)
+  if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'snooze_bottleneck') {
+    return handleSnoozeBottleneck(payload, ctx);
   }
 
   // Handle modal submission

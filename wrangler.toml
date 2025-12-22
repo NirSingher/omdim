@@ -11,12 +11,11 @@ fallthrough = false
 
 [triggers]
 # Prompt: every 30 minutes
-# Cleanup: daily at 3am UTC
-crons = ["*/30 * * * *", "0 3 * * *"]
+# Digest: 2pm UTC daily (handles both daily + weekly based on config)
+crons = ["*/30 * * * *", "0 14 * * *"]
 
-# Digest crons (requires paid plan for 5+ triggers, use HTTP endpoint instead):
-# Daily digest: curl "https://YOUR-URL/api/cron/digest?type=daily&secret=YOUR_CRON_SECRET"
-# Weekly digest: curl "https://YOUR-URL/api/cron/digest?type=weekly&secret=YOUR_CRON_SECRET"
+# Cleanup runs via HTTP endpoint (free tier limit of 2 crons):
+# curl "https://YOUR-URL/api/cron/cleanup?secret=YOUR_CRON_SECRET"
 
 # Environment variables - set secrets via: wrangler secret put <NAME>
 # Required secrets:

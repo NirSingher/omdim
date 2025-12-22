@@ -60,39 +60,45 @@ See `requirements.md` and `architecture.md`
 - [ ] Prevent abuse of digest generation
 - [ ] Return friendly error on limit hit
 
-### Stats & Analytics
-- [ ] Completion rates by user/team
-- [ ] Average items per standup (planned vs completed)
-- [ ] Blocker frequency and resolution time
+### Stats & Analytics (Partially Done)
+- [x] Completion rates by user/team
+- [x] Average items per standup (planned vs completed)
+- [x] Blocker frequency
+- [x] Trend comparison to previous period (↑↓→ indicators)
+- [ ] Blocker resolution time tracking
 - [ ] Trend visualization (sparklines in Slack?)
 
-### Weekly Automation
-- [ ] Scheduled weekly digest (Friday PM or Monday AM)
-- [ ] Configurable per-daily (different cadence per team)
-- [ ] Channel post vs DM to managers option
+### Automated Digests ✅
+- [x] Scheduled daily digest at 2pm UTC
+- [x] Scheduled weekly digest on configurable day per-daily
+- [x] Multiple managers per daily
+- [x] Team rankings with scoring formula
+- [x] Bottleneck detection (carried items, high drop rates)
+- [x] Snooze button for bottleneck items (7-day snooze via interactive button)
 
-### Alerts & Thresholds
+### Alerts & Thresholds (Partially Done)
 Configurable alerts when patterns emerge:
 
-| Alert | Trigger | Action |
-|-------|---------|--------|
-| Carry-over streak | Same item carried 3+ days | DM user + optional manager flag |
-| High drop rate | >50% drops in a week | DM user |
-| Unplanned overload | >70% unplanned work | Team-level flag |
-| Missing standups | 2+ consecutive misses | DM user |
+| Alert | Trigger | Action | Status |
+|-------|---------|--------|--------|
+| Carry-over streak | Same item carried 3+ days | Shown in digest | ✅ Done |
+| High drop rate | >30% drops | Flagged in digest | ✅ Done |
+| Unplanned overload | >70% unplanned work | Team-level flag | Pending |
+| Missing standups | Not submitted today | Shown in daily digest | ✅ Done |
 
 ```yaml
-alerts:
-  carryover_threshold: 3  # days
-  drop_rate_threshold: 0.5
-  unplanned_threshold: 0.7
-  missing_threshold: 2
-  notify_managers: true
+dailies:
+  - name: "engineering"
+    managers: ["U123", "U456"]    # Multiple managers
+    weekly_digest_day: "fri"      # sun-sat
+    bottleneck_threshold: 3       # Days before flagging
 ```
 
 ---
 
 ## Phase 3: Integrations
+
+> **Note**: Config schema supports `integrations` placeholder for future GitHub/Linear integration. Currently displays "Not configured" in digests.
 
 ### GitHub Integration
 
@@ -109,15 +115,13 @@ alerts:
 - [ ] Alert on stale PRs (>48h without review)
 
 ```yaml
-github:
-  org: "your-org"
-  token_env: "GITHUB_TOKEN"
-  user_mapping:
-    U12345678: "github-username"
-  features:
-    work_alignment: true
-    pr_tracking: true
-    stale_pr_alert_hours: 48
+integrations:
+  github:
+    enabled: false
+    org: "your-org"
+    user_mapping:
+      - slack_user_id: "U123"
+        external_username: "github-user"
 ```
 
 ### Linear Integration

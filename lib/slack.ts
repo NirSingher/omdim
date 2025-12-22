@@ -233,6 +233,19 @@ export async function sendDM(
 }
 
 /**
+ * Send a DM with Block Kit blocks (for interactive elements like buttons)
+ */
+export async function sendDMWithBlocks(
+  slackToken: string,
+  userId: string,
+  text: string,
+  blocks: unknown[]
+): Promise<boolean> {
+  const result = await postMessage(slackToken, userId, text, blocks);
+  return result !== null;
+}
+
+/**
  * Open a modal dialog
  */
 export async function openModal(

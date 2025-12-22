@@ -15,6 +15,7 @@ import {
   formatDailyDigest,
   formatWeeklySummary,
   formatManagerDigest,
+  buildBottleneckBlocks,
 } from '../lib/format';
 
 describe('format utilities', () => {
@@ -460,6 +461,385 @@ describe('format utilities', () => {
 
       expect(result).toContain('None reported');
       expect(result).toContain('🎉');
+    });
+
+    it('shows bottleneck items when provided', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Fix auth timeout issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' },
+          { id: 2, text: 'Update API docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' },
+        ],
+      });
+
+      expect(result).toContain('Bottlenecks');
+      expect(result).toContain('Carried 3+ days');
+      expect(result).toContain('<@U12345>');
+      expect(result).toContain('Fix auth timeout issue');
+      expect(result).toContain('5 days');
+      expect(result).toContain('carried 4x');
+    });
+
+    it('shows high drop rate users when provided', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        dropStats: [
+          { slack_user_id: 'U12345', total_items: 20, dropped_count: 8, drop_rate: 40 },
+        ],
+      });
+
+      expect(result).toContain('Bottlenecks');
+      expect(result).toContain('High drop rate');
+      expect(result).toContain('<@U12345>');
+      expect(result).toContain('8/20 items dropped');
+      expect(result).toContain('40%');
+    });
+
+    it('shows rankings for weekly period', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        rankings: [
+          { slack_user_id: 'U111', score: 92.5, participation_rate: 100, completion_rate: 85, items_done: 12, avg_carry_days: 0.5, drop_rate: 5, blocker_days: 0, rank: 1 },
+          { slack_user_id: 'U222', score: 78.3, participation_rate: 80, completion_rate: 90, items_done: 8, avg_carry_days: 1.2, drop_rate: 10, blocker_days: 1, rank: 2 },
+          { slack_user_id: 'U333', score: 45.0, participation_rate: 60, completion_rate: 50, items_done: 3, avg_carry_days: 2.5, drop_rate: 35, blocker_days: 2, rank: 3 },
+        ],
+      });
+
+      expect(result).toContain('Team Rankings');
+      expect(result).toContain('🥇');
+      expect(result).toContain('<@U111>');
+      expect(result).toContain('92.5 pts');
+      expect(result).toContain('100% participation');
+      expect(result).toContain('🥈');
+      expect(result).toContain('<@U222>');
+      expect(result).toContain('🥉');
+      expect(result).toContain('<@U333>');
+      expect(result).toContain('⚠️'); // Warning for high drop rate
+    });
+
+    it('does not show rankings for daily period', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 1,
+        rankings: [
+          { slack_user_id: 'U111', score: 92.5, participation_rate: 100, completion_rate: 85, items_done: 12, avg_carry_days: 0.5, drop_rate: 5, blocker_days: 0, rank: 1 },
+        ],
+      });
+
+      expect(result).not.toContain('Team Rankings');
+    });
+
+    it('shows rankings for 4-week period', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: '4-week',
+        startDate: '2025-11-21',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 20,
+        rankings: [
+          { slack_user_id: 'U111', score: 92.5, participation_rate: 100, completion_rate: 85, items_done: 50, avg_carry_days: 0.3, drop_rate: 5, blocker_days: 1, rank: 1 },
+        ],
+      });
+
+      expect(result).toContain('Team Rankings');
+      expect(result).toContain('🥇');
+    });
+
+    it('shows trend indicators when trends are provided', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [
+          {
+            id: 1,
+            slack_user_id: 'U12345',
+            daily_name: 'daily-il',
+            submitted_at: new Date(),
+            date: '2025-12-18',
+            yesterday_completed: [],
+            yesterday_incomplete: [],
+            unplanned: [],
+            today_plans: [],
+            blockers: null,
+            custom_answers: null,
+            slack_message_ts: null,
+          },
+        ],
+        stats: [
+          { slack_user_id: 'U12345', submission_count: 5, total_completed: 10, total_planned: 12, total_blockers: 1, avg_items_per_day: 2.4 },
+        ],
+        totalWorkdays: 5,
+        trends: {
+          current: {
+            participation_rate: 85,
+            completion_rate: 78,
+            blocker_rate: 12,
+            total_submissions: 5,
+            total_participants: 1,
+            total_items_completed: 10,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.4,
+          },
+          previous: {
+            participation_rate: 72,
+            completion_rate: 78,
+            blocker_rate: 18,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 8,
+            total_items_dropped: 2,
+            avg_items_per_day: 2.0,
+          },
+        },
+      });
+
+      // Participation improved (72 -> 85)
+      expect(result).toContain('Participation: 85% ↑');
+      // Completion stayed same (78 -> 78)
+      expect(result).toContain('Completion: 78% →');
+      // Blockers decreased (18 -> 12), which is good, so should show ↑
+      expect(result).toContain('Blockers: 12% ↑');
+    });
+
+    it('shows declining trends with down arrow', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U12345', submission_count: 3, total_completed: 5, total_planned: 8, total_blockers: 2, avg_items_per_day: 2.7 },
+        ],
+        totalWorkdays: 5,
+        trends: {
+          current: {
+            participation_rate: 60,
+            completion_rate: 50,
+            blocker_rate: 25,
+            total_submissions: 3,
+            total_participants: 1,
+            total_items_completed: 5,
+            total_items_dropped: 5,
+            avg_items_per_day: 2.7,
+          },
+          previous: {
+            participation_rate: 80,
+            completion_rate: 75,
+            blocker_rate: 10,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 9,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.5,
+          },
+        },
+      });
+
+      // Participation declined (80 -> 60)
+      expect(result).toContain('Participation: 60% ↓');
+      // Completion declined (75 -> 50)
+      expect(result).toContain('Completion: 50% ↓');
+      // Blockers increased (10 -> 25), which is bad, so should show ↓
+      expect(result).toContain('Blockers: 25% ↓');
+    });
+
+    it('does not show trends for daily period', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 1,
+        trends: {
+          current: {
+            participation_rate: 85,
+            completion_rate: 78,
+            blocker_rate: 12,
+            total_submissions: 5,
+            total_participants: 1,
+            total_items_completed: 10,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.4,
+          },
+          previous: {
+            participation_rate: 72,
+            completion_rate: 65,
+            blocker_rate: 18,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 8,
+            total_items_dropped: 2,
+            avg_items_per_day: 2.0,
+          },
+        },
+      });
+
+      // Daily period shouldn't show completion trends (too noisy)
+      expect(result).not.toContain('Completion:');
+    });
+
+    it('shows work alignment not configured when no integrations enabled', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        integrations: { github: false, linear: false },
+      });
+
+      expect(result).toContain('🔗 Work Alignment');
+      expect(result).toContain('Not configured');
+    });
+
+    it('shows GitHub enabled when github integration is on', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        integrations: { github: true, linear: false },
+      });
+
+      expect(result).toContain('🔗 Work Alignment');
+      expect(result).toContain('GitHub enabled');
+    });
+
+    it('shows both integrations when both enabled', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        integrations: { github: true, linear: true },
+      });
+
+      expect(result).toContain('🔗 Work Alignment');
+      expect(result).toContain('GitHub + Linear enabled');
+    });
+
+    it('does not show work alignment section when integrations not provided', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+      });
+
+      expect(result).not.toContain('Work Alignment');
+    });
+  });
+
+  describe('buildBottleneckBlocks', () => {
+    it('returns empty array when no bottlenecks', () => {
+      const blocks = buildBottleneckBlocks([], 'daily-il');
+      expect(blocks).toEqual([]);
+    });
+
+    it('creates header section for bottleneck items', () => {
+      const bottlenecks = [
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+      ];
+
+      const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
+
+      // First block is the header section
+      const headerSection = blocks[0];
+      expect(headerSection.type).toBe('section');
+      expect(headerSection.text?.text).toContain('Bottleneck Items');
+    });
+
+    it('creates section for each bottleneck item with snooze button', () => {
+      const bottlenecks = [
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 2, text: 'Update docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' as const },
+      ];
+
+      const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
+
+      // Should have header + 2 item sections
+      const sectionBlocks = blocks.filter(b => b.type === 'section' && b.accessory);
+      expect(sectionBlocks.length).toBe(2);
+    });
+
+    it('includes item text and user mention in section', () => {
+      const bottlenecks = [
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+      ];
+
+      const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
+
+      const sectionBlock = blocks.find(b => b.type === 'section' && b.accessory);
+      expect(sectionBlock?.text?.text).toContain('Fix auth issue');
+      expect(sectionBlock?.text?.text).toContain('<@U12345>');
+      expect(sectionBlock?.text?.text).toContain('5 days');
+    });
+
+    it('includes snooze button with correct action_id', () => {
+      const bottlenecks = [
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+      ];
+
+      const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
+
+      const sectionBlock = blocks.find(b => b.type === 'section' && b.accessory);
+      expect(sectionBlock?.accessory?.type).toBe('button');
+      expect(sectionBlock?.accessory?.action_id).toBe('snooze_bottleneck');
+      expect(sectionBlock?.accessory?.text?.text).toBe('Snooze 7d');
+    });
+
+    it('includes item id and daily name in button value', () => {
+      const bottlenecks = [
+        { id: 42, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+      ];
+
+      const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
+
+      const sectionBlock = blocks.find(b => b.type === 'section' && b.accessory);
+      const value = JSON.parse(sectionBlock?.accessory?.value || '{}');
+      expect(value.itemId).toBe(42);
+      expect(value.dailyName).toBe('daily-il');
     });
   });
 });

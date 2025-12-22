@@ -58,8 +58,12 @@ CREATE TABLE IF NOT EXISTS work_items (
   status TEXT NOT NULL DEFAULT 'pending',  -- pending, done, dropped, carried
   carry_count INTEGER NOT NULL DEFAULT 0,
   completed_date DATE,
+  snoozed_until DATE,  -- null = not snoozed, date = hidden from bottlenecks until this date
   submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL
 );
+
+-- Migration for existing databases:
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS snoozed_until DATE;
 
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_participants_daily ON participants(daily_name);

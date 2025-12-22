@@ -5,7 +5,7 @@
  * - Generates daily digests and weekly summaries
  */
 
-import { Submission, ParticipationStats, TeamMemberStats } from './db';
+import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats } from './db';
 import { postMessage, sendDM as slackSendDM } from './slack';
 
 // Re-export sendDM for backward compatibility
@@ -268,7 +268,17 @@ export function formatWeeklySummary(
 
 export type DigestPeriod = 'daily' | 'weekly' | '4-week';
 
-interface DigestOptions {
+export interface TrendData {
+  current: PeriodStats;
+  previous: PeriodStats;
+}
+
+export interface IntegrationStatus {
+  github: boolean;
+  linear: boolean;
+}
+
+export interface DigestOptions {
   dailyName: string;
   period: DigestPeriod;
   startDate: string;
@@ -277,13 +287,18 @@ interface DigestOptions {
   stats: TeamMemberStats[];
   totalWorkdays: number;
   missingToday?: string[];
+  bottlenecks?: BottleneckItem[];
+  dropStats?: DropStats[];
+  rankings?: TeamMemberRanking[];
+  trends?: TrendData;
+  integrations?: IntegrationStatus;
 }
 
 /**
  * Format a comprehensive manager digest with full team stats
  */
 export function formatManagerDigest(options: DigestOptions): string {
-  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, missingToday } = options;
+  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, missingToday, bottlenecks, dropStats, rankings, trends, integrations } = options;
 
   const periodLabel = period === 'daily' ? 'Daily'
     : period === 'weekly' ? 'Weekly'
@@ -308,16 +323,37 @@ export function formatManagerDigest(options: DigestOptions): string {
   lines.push(`• ${totalSubmissions} submissions from ${uniqueSubmitters}/${totalParticipants} team members`);
 
   if (totalWorkdays > 0) {
-    const avgRate = totalParticipants > 0
-      ? Math.round((totalSubmissions / (totalWorkdays * totalParticipants)) * 100)
-      : 0;
-    lines.push(`• ${avgRate}% overall participation rate`);
+    // Show participation rate with trend indicator if trends available
+    if (trends && trends.previous.total_submissions > 0) {
+      // Use trends data for consistent period comparison
+      const participationTrend = formatTrend(trends.current.participation_rate, trends.previous.participation_rate, '%', true);
+      lines.push(`• Participation: ${participationTrend}`);
+
+      // Show completion rate trend (only for weekly/4-week with enough data)
+      if (period !== 'daily' && trends.current.total_items_completed + trends.current.total_items_dropped > 0) {
+        const completionTrend = formatTrend(trends.current.completion_rate, trends.previous.completion_rate, '%', true);
+        lines.push(`• Completion: ${completionTrend}`);
+      }
+
+      // Show blocker rate trend (lower is better)
+      if (trends.previous.blocker_rate > 0 || trends.current.blocker_rate > 0) {
+        const blockerTrend = formatTrend(trends.current.blocker_rate, trends.previous.blocker_rate, '%', false);
+        lines.push(`• Blockers: ${blockerTrend}`);
+      }
+    } else {
+      const avgRate = totalParticipants > 0
+        ? Math.round((totalSubmissions / (totalWorkdays * totalParticipants)) * 100)
+        : 0;
+      lines.push(`• ${avgRate}% overall participation rate`);
+    }
   }
 
-  // Count blockers
-  const blockersCount = submissions.filter(s => s.blockers && s.blockers.trim()).length;
-  if (blockersCount > 0) {
-    lines.push(`• ⚠️ ${blockersCount} blocker${blockersCount !== 1 ? 's' : ''} reported`);
+  // Count blockers (only if not showing trend version)
+  if (!trends || trends.previous.total_submissions === 0) {
+    const blockersCount = submissions.filter(s => s.blockers && s.blockers.trim()).length;
+    if (blockersCount > 0) {
+      lines.push(`• ⚠️ ${blockersCount} blocker${blockersCount !== 1 ? 's' : ''} reported`);
+    }
   }
   lines.push('');
 
@@ -326,6 +362,20 @@ export function formatManagerDigest(options: DigestOptions): string {
     lines.push(`*Not yet submitted:*`);
     for (const userId of missingToday) {
       lines.push(`• <@${userId}>`);
+    }
+    lines.push('');
+  }
+
+  // Rankings section (for weekly and 4-week only - too noisy for daily)
+  if ((period === 'weekly' || period === '4-week') && rankings && rankings.length > 0) {
+    lines.push(`*🏆 Team Rankings:*`);
+    for (const r of rankings.slice(0, 5)) {
+      const medal = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : `${r.rank}.`;
+      const warning = r.drop_rate > 30 ? ' ⚠️' : '';
+      lines.push(`${medal} <@${r.slack_user_id}> (${r.score} pts) - ${r.participation_rate}% participation, ${r.completion_rate}% completion${warning}`);
+    }
+    if (rankings.length > 5) {
+      lines.push(`_...and ${rankings.length - 5} more_`);
     }
     lines.push('');
   }
@@ -347,6 +397,35 @@ export function formatManagerDigest(options: DigestOptions): string {
     }
   }
   lines.push('');
+
+  // Bottlenecks section
+  const hasBottlenecks = bottlenecks && bottlenecks.length > 0;
+  const hasHighDropUsers = dropStats && dropStats.length > 0;
+
+  if (hasBottlenecks || hasHighDropUsers) {
+    lines.push(`*🔥 Bottlenecks:*`);
+
+    // High-carry items
+    if (hasBottlenecks) {
+      lines.push(`_Carried 3+ days:_`);
+      for (const item of bottlenecks!.slice(0, 5)) {
+        lines.push(`• <@${item.slack_user_id}>: "${truncate(item.text, 40)}" _(${item.days_pending} days, carried ${item.carry_count}x)_`);
+      }
+      if (bottlenecks!.length > 5) {
+        lines.push(`  _...and ${bottlenecks!.length - 5} more_`);
+      }
+    }
+
+    // High drop rate users
+    if (hasHighDropUsers) {
+      lines.push(`_High drop rate (>30%):_`);
+      for (const user of dropStats!.slice(0, 3)) {
+        lines.push(`• <@${user.slack_user_id}>: ${user.dropped_count}/${user.total_items} items dropped (${user.drop_rate}%)`);
+      }
+    }
+
+    lines.push('');
+  }
 
   // Blockers detail (show recent ones)
   const blockers: string[] = [];
@@ -370,7 +449,160 @@ export function formatManagerDigest(options: DigestOptions): string {
     lines.push(`*Blockers:* None reported 🎉`);
   }
 
+  // Work Alignment section (placeholder for GitHub/Linear integration)
+  if (integrations) {
+    lines.push('');
+    if (integrations.github || integrations.linear) {
+      const enabled: string[] = [];
+      if (integrations.github) enabled.push('GitHub');
+      if (integrations.linear) enabled.push('Linear');
+      lines.push(`*🔗 Work Alignment:* _${enabled.join(' + ')} enabled_`);
+      // Future: Show actual alignment data here
+    } else {
+      lines.push(`*🔗 Work Alignment:* _Not configured_`);
+    }
+  }
+
   return lines.join('\n');
+}
+
+/** Truncate text to a maximum length */
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength - 3) + '...';
+}
+
+// ============================================================================
+// Bottleneck Snooze Blocks
+// ============================================================================
+
+interface SlackBlock {
+  type: string;
+  text?: { type: string; text: string; emoji?: boolean };
+  accessory?: {
+    type: string;
+    text?: { type: string; text: string; emoji?: boolean };
+    action_id?: string;
+    value?: string;
+  };
+  elements?: Array<{ type: string; text: string }>;
+}
+
+/**
+ * Build Block Kit blocks for bottleneck items with snooze buttons
+ * Only includes items that can be snoozed (not already snoozed)
+ */
+export function buildBottleneckBlocks(
+  bottlenecks: BottleneckItem[],
+  dailyName: string
+): SlackBlock[] {
+  if (bottlenecks.length === 0) return [];
+
+  const blocks: SlackBlock[] = [];
+
+  // Header
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: '*🔥 Bottleneck Items - Snooze Options*',
+    },
+  });
+
+  blocks.push({
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text: '_Click "Snooze 7d" to hide an item from bottleneck reports for 7 days_',
+      },
+    ],
+  });
+
+  // Add each bottleneck with a snooze button (max 5)
+  for (const item of bottlenecks.slice(0, 5)) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `• <@${item.slack_user_id}>: "${truncate(item.text, 50)}" _(${item.days_pending} days, carried ${item.carry_count}x)_`,
+      },
+      accessory: {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: 'Snooze 7d',
+          emoji: true,
+        },
+        action_id: 'snooze_bottleneck',
+        value: JSON.stringify({ itemId: item.id, dailyName }),
+      },
+    });
+  }
+
+  if (bottlenecks.length > 5) {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `_...and ${bottlenecks.length - 5} more bottleneck items_`,
+        },
+      ],
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Get trend indicator comparing current to previous value
+ * Returns ↑ (improved), ↓ (declined), or → (stable)
+ * @param current Current period value
+ * @param previous Previous period value
+ * @param higherIsBetter If true, higher values show ↑; if false, lower values show ↑
+ * @param threshold Minimum % change to show an arrow (default 5%)
+ */
+function getTrendIndicator(
+  current: number,
+  previous: number,
+  higherIsBetter: boolean = true,
+  threshold: number = 5
+): string {
+  if (previous === 0) return '';
+
+  const diff = current - previous;
+  const percentChange = Math.abs(diff / previous) * 100;
+
+  // If change is below threshold, consider stable
+  if (percentChange < threshold) {
+    return '→';
+  }
+
+  const isUp = diff > 0;
+  const isGood = higherIsBetter ? isUp : !isUp;
+
+  return isGood ? '↑' : '↓';
+}
+
+/**
+ * Format trend string with indicator
+ * @param current Current value
+ * @param previous Previous value
+ * @param unit Unit to display (e.g., '%')
+ * @param higherIsBetter If true, higher values are better
+ */
+function formatTrend(
+  current: number,
+  previous: number,
+  unit: string = '%',
+  higherIsBetter: boolean = true
+): string {
+  const indicator = getTrendIndicator(current, previous, higherIsBetter);
+  if (!indicator || previous === 0) {
+    return `${current}${unit}`;
+  }
+  return `${current}${unit} ${indicator}`;
 }
 
 // ============================================================================

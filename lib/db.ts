@@ -122,6 +122,7 @@ export interface WorkItem {
   status: 'pending' | 'done' | 'dropped' | 'carried';
   carry_count: number;
   completed_date: string | null;
+  snoozed_until: string | null;
   submission_id: number | null;
 }
 
@@ -680,4 +681,316 @@ export async function deleteOldPrompts(
     [beforeDate]
   );
   return parseInt(result[0]?.count || '0', 10);
+}
+
+// ============================================================================
+// Bottleneck Detection
+// ============================================================================
+
+export interface BottleneckItem {
+  id: number;
+  text: string;
+  slack_user_id: string;
+  carry_count: number;
+  days_pending: number;
+  type: 'carry' | 'dropped';
+}
+
+/** Get bottleneck items (carried at/above threshold, not snoozed) */
+export async function getBottleneckItems(
+  db: DbClient,
+  dailyName: string,
+  threshold: number = 3
+): Promise<BottleneckItem[]> {
+  return db.query<BottleneckItem>(
+    `SELECT
+       id,
+       text,
+       slack_user_id,
+       carry_count,
+       (CURRENT_DATE - created_date) as days_pending,
+       'carry' as type
+     FROM work_items
+     WHERE daily_name = $1
+       AND carry_count >= $2
+       AND status IN ('pending', 'carried')
+       AND (snoozed_until IS NULL OR snoozed_until <= CURRENT_DATE)
+     ORDER BY carry_count DESC, created_date ASC
+     LIMIT 10`,
+    [dailyName, threshold]
+  );
+}
+
+export interface DropStats {
+  slack_user_id: string;
+  total_items: number;
+  dropped_count: number;
+  drop_rate: number;
+}
+
+/** Get users with high drop rates in a date range */
+export async function getHighDropUsers(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string,
+  dropThreshold: number = 30 // percentage
+): Promise<DropStats[]> {
+  return db.query<DropStats>(
+    `SELECT
+       slack_user_id,
+       COUNT(*) as total_items,
+       SUM(CASE WHEN status = 'dropped' THEN 1 ELSE 0 END) as dropped_count,
+       ROUND(
+         SUM(CASE WHEN status = 'dropped' THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*), 0) * 100,
+         0
+       ) as drop_rate
+     FROM work_items
+     WHERE daily_name = $1
+       AND created_date >= $2
+       AND created_date <= $3
+     GROUP BY slack_user_id
+     HAVING SUM(CASE WHEN status = 'dropped' THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*), 0) * 100 >= $4
+     ORDER BY drop_rate DESC`,
+    [dailyName, startDate, endDate, dropThreshold]
+  );
+}
+
+/** Snooze a bottleneck item for a number of days */
+export async function snoozeItem(
+  db: DbClient,
+  itemId: number,
+  days: number
+): Promise<void> {
+  await db.query(
+    `UPDATE work_items
+     SET snoozed_until = CURRENT_DATE + $1
+     WHERE id = $2`,
+    [days, itemId]
+  );
+}
+
+/** Clear snooze on an item */
+export async function clearSnooze(
+  db: DbClient,
+  itemId: number
+): Promise<void> {
+  await db.query(
+    `UPDATE work_items SET snoozed_until = NULL WHERE id = $1`,
+    [itemId]
+  );
+}
+
+// ============================================================================
+// Period Statistics (for trend analysis)
+// ============================================================================
+
+export interface PeriodStats {
+  participation_rate: number;   // % of possible submissions received
+  completion_rate: number;      // % of items completed vs dropped/carried
+  blocker_rate: number;         // % of submissions with blockers
+  total_submissions: number;
+  total_participants: number;
+  total_items_completed: number;
+  total_items_dropped: number;
+  avg_items_per_day: number;
+}
+
+/**
+ * Get aggregate statistics for a period (for trend comparison)
+ */
+export async function getPeriodStats(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string,
+  totalWorkdays: number
+): Promise<PeriodStats> {
+  // Get submission stats
+  const submissionResult = await db.query<{
+    submission_count: number;
+    total_completed: number;
+    total_planned: number;
+    blocker_count: number;
+  }>(
+    `SELECT
+       COUNT(s.id) as submission_count,
+       COALESCE(SUM(jsonb_array_length(s.yesterday_completed::jsonb) + jsonb_array_length(s.unplanned::jsonb)), 0) as total_completed,
+       COALESCE(SUM(jsonb_array_length(s.today_plans::jsonb)), 0) as total_planned,
+       SUM(CASE WHEN s.blockers IS NOT NULL AND s.blockers != '' THEN 1 ELSE 0 END) as blocker_count
+     FROM submissions s
+     WHERE s.daily_name = $1 AND s.date >= $2 AND s.date <= $3`,
+    [dailyName, startDate, endDate]
+  );
+
+  // Get participant count
+  const participantResult = await db.query<{ count: number }>(
+    `SELECT COUNT(*) as count FROM participants WHERE daily_name = $1`,
+    [dailyName]
+  );
+
+  // Get work item stats for the period
+  const itemResult = await db.query<{
+    total_done: number;
+    total_dropped: number;
+  }>(
+    `SELECT
+       SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as total_done,
+       SUM(CASE WHEN status = 'dropped' THEN 1 ELSE 0 END) as total_dropped
+     FROM work_items
+     WHERE daily_name = $1 AND created_date >= $2 AND created_date <= $3`,
+    [dailyName, startDate, endDate]
+  );
+
+  const submissionCount = Number(submissionResult[0]?.submission_count) || 0;
+  const totalCompleted = Number(submissionResult[0]?.total_completed) || 0;
+  const totalPlanned = Number(submissionResult[0]?.total_planned) || 0;
+  const blockerCount = Number(submissionResult[0]?.blocker_count) || 0;
+  const participantCount = Number(participantResult[0]?.count) || 0;
+  const itemsDone = Number(itemResult[0]?.total_done) || 0;
+  const itemsDropped = Number(itemResult[0]?.total_dropped) || 0;
+
+  const maxPossibleSubmissions = totalWorkdays * participantCount;
+  const participationRate = maxPossibleSubmissions > 0
+    ? Math.round((submissionCount / maxPossibleSubmissions) * 100)
+    : 0;
+
+  const totalItems = itemsDone + itemsDropped;
+  const completionRate = totalItems > 0
+    ? Math.round((itemsDone / totalItems) * 100)
+    : 100;
+
+  const blockerRate = submissionCount > 0
+    ? Math.round((blockerCount / submissionCount) * 100)
+    : 0;
+
+  const avgItemsPerDay = submissionCount > 0
+    ? Math.round((totalPlanned / submissionCount) * 10) / 10
+    : 0;
+
+  return {
+    participation_rate: participationRate,
+    completion_rate: completionRate,
+    blocker_rate: blockerRate,
+    total_submissions: submissionCount,
+    total_participants: participantCount,
+    total_items_completed: itemsDone,
+    total_items_dropped: itemsDropped,
+    avg_items_per_day: avgItemsPerDay,
+  };
+}
+
+// ============================================================================
+// Team Rankings
+// ============================================================================
+
+export interface TeamMemberRanking {
+  slack_user_id: string;
+  score: number;
+  participation_rate: number;
+  completion_rate: number;
+  items_done: number;
+  avg_carry_days: number;
+  drop_rate: number;
+  blocker_days: number;
+  rank: number;
+}
+
+/**
+ * Get team rankings based on formula:
+ * Score = (Participation × 30) + (Completion × 25) + (Items Done × 0.5)
+ *         - (Avg Carry Days × 5) - (Drop Penalty 10 if >30%) - (Blocker Days × 2)
+ */
+export async function getTeamRankings(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string,
+  totalWorkdays: number
+): Promise<TeamMemberRanking[]> {
+  // Complex query that calculates all ranking factors
+  const result = await db.query<{
+    slack_user_id: string;
+    submission_count: number;
+    total_completed: number;
+    total_planned: number;
+    total_dropped: number;
+    total_carried: number;
+    avg_carry_days: number;
+    blocker_days: number;
+  }>(
+    `SELECT
+       p.slack_user_id,
+       COUNT(DISTINCT s.id) as submission_count,
+       COALESCE(SUM(jsonb_array_length(s.yesterday_completed::jsonb) + jsonb_array_length(s.unplanned::jsonb)), 0) as total_completed,
+       COALESCE(SUM(jsonb_array_length(s.today_plans::jsonb)), 0) as total_planned,
+       (SELECT COUNT(*) FROM work_items w WHERE w.slack_user_id = p.slack_user_id AND w.daily_name = $1 AND w.status = 'dropped' AND w.created_date >= $2 AND w.created_date <= $3) as total_dropped,
+       (SELECT COUNT(*) FROM work_items w WHERE w.slack_user_id = p.slack_user_id AND w.daily_name = $4 AND w.status = 'carried' AND w.created_date >= $5 AND w.created_date <= $6) as total_carried,
+       COALESCE((SELECT AVG(w.carry_count) FROM work_items w WHERE w.slack_user_id = p.slack_user_id AND w.daily_name = $7 AND w.created_date >= $8 AND w.created_date <= $9), 0) as avg_carry_days,
+       SUM(CASE WHEN s.blockers IS NOT NULL AND s.blockers != '' THEN 1 ELSE 0 END) as blocker_days
+     FROM participants p
+     LEFT JOIN submissions s ON p.slack_user_id = s.slack_user_id
+       AND s.daily_name = $10 AND s.date >= $11 AND s.date <= $12
+     WHERE p.daily_name = $13
+     GROUP BY p.slack_user_id`,
+    [
+      dailyName, startDate, endDate,
+      dailyName, startDate, endDate,
+      dailyName, startDate, endDate,
+      dailyName, startDate, endDate,
+      dailyName
+    ]
+  );
+
+  // Calculate scores and ranks
+  const rankings: TeamMemberRanking[] = result.map(row => {
+    const submissionCount = Number(row.submission_count) || 0;
+    const totalCompleted = Number(row.total_completed) || 0;
+    const totalPlanned = Number(row.total_planned) || 0;
+    const totalDropped = Number(row.total_dropped) || 0;
+    const totalCarried = Number(row.total_carried) || 0;
+    const avgCarryDays = Number(row.avg_carry_days) || 0;
+    const blockerDays = Number(row.blocker_days) || 0;
+
+    // Calculate rates
+    const participationRate = totalWorkdays > 0
+      ? Math.round((submissionCount / totalWorkdays) * 100)
+      : 0;
+
+    const totalItems = totalCompleted + totalDropped + totalCarried;
+    const completionRate = totalItems > 0
+      ? Math.round((totalCompleted / totalItems) * 100)
+      : 100; // If no items, consider 100% completion
+
+    const dropRate = totalItems > 0
+      ? Math.round((totalDropped / totalItems) * 100)
+      : 0;
+
+    // Calculate score using the formula
+    let score = 0;
+    score += participationRate * 0.30; // Max 30 pts
+    score += completionRate * 0.25;    // Max 25 pts
+    score += totalCompleted * 0.5;     // 0.5 per item done
+    score -= avgCarryDays * 5;         // -5 per avg carry day
+    score -= dropRate > 30 ? 10 : 0;   // -10 if drop rate > 30%
+    score -= blockerDays * 2;          // -2 per blocker day
+
+    return {
+      slack_user_id: row.slack_user_id,
+      score: Math.round(score * 10) / 10, // Round to 1 decimal
+      participation_rate: participationRate,
+      completion_rate: completionRate,
+      items_done: totalCompleted,
+      avg_carry_days: Math.round(avgCarryDays * 10) / 10,
+      drop_rate: dropRate,
+      blocker_days: blockerDays,
+      rank: 0, // Will be set below
+    };
+  });
+
+  // Sort by score descending and assign ranks
+  rankings.sort((a, b) => b.score - a.score);
+  rankings.forEach((r, i) => r.rank = i + 1);
+
+  return rankings;
 }

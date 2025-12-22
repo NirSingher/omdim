@@ -61,6 +61,7 @@ Serverless architecture with multiple hosting options. Event-driven design with 
 /api/slack/interact    # Modal submissions, button clicks
 /api/cron/prompt       # Trigger daily prompts (runs every 30 min)
 /api/cron/cleanup      # Data retention cleanup (runs weekly)
+/api/cron/digest       # Manager digests (daily at 2pm UTC, weekly on configured day)
 ```
 
 ### 2. Cron Jobs
@@ -68,7 +69,10 @@ Serverless architecture with multiple hosting options. Event-driven design with 
 | Job | Schedule | Action |
 |-----|----------|--------|
 | `prompt` | Every 30 min | Check who needs prompting, send/re-send DMs |
+| `digest` | Daily at 2pm UTC | Send daily digest to managers; weekly digest on configured day |
 | `cleanup` | Weekly (Sun 3am) | Delete submissions and prompts older than 28 days |
+
+> **Free tier note**: Cloudflare Workers free tier allows 2 cron triggers. We use `*/30 * * * *` for prompts and `0 14 * * *` for digests. The unified digest cron handles both daily and weekly digests.
 
 **Prompt Logic**:
 ```
@@ -126,6 +130,20 @@ CREATE TABLE prompts (
   submitted BOOLEAN DEFAULT FALSE,
   UNIQUE(slack_user_id, daily_name, date)
 );
+
+-- Track individual work items for analytics
+CREATE TABLE work_items (
+  id SERIAL PRIMARY KEY,
+  slack_user_id TEXT NOT NULL,
+  daily_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_date DATE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending, done, dropped, carried
+  carry_count INTEGER NOT NULL DEFAULT 0,
+  completed_date DATE,
+  snoozed_until DATE,  -- null = not snoozed, date = hidden from bottlenecks
+  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL
+);
 ```
 
 ### 4. Config File
@@ -139,6 +157,9 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "il-team"
+    managers: ["U123", "U456"]      # Multiple managers for digests
+    weekly_digest_day: "fri"        # sun/mon/tue/wed/thu/fri/sat
+    bottleneck_threshold: 3         # Days before flagging carried items
     # Field order: lower numbers appear first in modal
     field_order:
       unplanned: 10
@@ -261,19 +282,23 @@ omdim/
 └── package.json
 ```
 
-### vercel.json
+### wrangler.toml (Cloudflare Workers)
+
+```toml
+[triggers]
+crons = ["*/30 * * * *", "0 14 * * *"]
+# First cron: prompt job every 30 min
+# Second cron: digest job at 2pm UTC daily (handles both daily + weekly digests)
+```
+
+### vercel.json (Alternative)
 
 ```json
 {
   "crons": [
-    {
-      "path": "/api/cron/prompt",
-      "schedule": "*/30 * * * *"
-    },
-    {
-      "path": "/api/cron/cleanup",
-      "schedule": "0 3 * * 0"
-    }
+    { "path": "/api/cron/prompt", "schedule": "*/30 * * * *" },
+    { "path": "/api/cron/digest", "schedule": "0 14 * * *" },
+    { "path": "/api/cron/cleanup", "schedule": "0 3 * * 0" }
   ]
 }
 ```

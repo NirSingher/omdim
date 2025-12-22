@@ -181,6 +181,49 @@
 
 ---
 
+## Step 14: Digest Enhancements ✅
+
+### Phase 1: Multiple Managers + Config ✅
+- [x] Add `managers` array support (backward compatible with single `manager`)
+- [x] Add `weekly_digest_day` config (default: friday)
+- [x] Add `bottleneck_threshold` config (default: 3 days)
+- [x] Update digest sending to iterate all managers
+
+### Phase 2: Bottleneck Detection ✅
+- [x] Add `snoozed_until` column to `work_items` table
+- [x] Implement `getBottleneckItems()` - items carried 3+ days
+- [x] Implement `getHighDropUsers()` - users with >30% drop rate
+- [x] Implement `snoozeItem()` - hide item from bottlenecks temporarily
+- [x] Format bottleneck section in digest
+
+### Phase 3: Team Rankings ✅
+- [x] Implement `getTeamRankings()` with scoring formula:
+  ```
+  Score = (Participation × 30) + (Completion × 25) + (Items × 0.5)
+          - (Avg Carry Days × 5) - (Drop Penalty 10) - (Blocker Days × 2)
+  ```
+- [x] Add rankings section to weekly/4-week digests (not daily - too noisy)
+- [x] Display medals (🥇🥈🥉) for top 3
+
+### Phase 4: Trend Analysis ✅
+- [x] Implement `getPeriodStats()` for comparison
+- [x] Add trend indicators (↑↓→) to participation/completion rates
+- [x] Compare current period to previous period
+
+### Phase 5: Work Alignment Placeholder ✅
+- [x] Add `integrations` config schema (github, linear)
+- [x] Display "Not configured" placeholder in digest
+- [x] Show enabled integrations when configured
+
+### Phase 6: Snooze Button Interaction ✅
+- [x] Add snooze button to bottleneck items in digest
+- [x] Handle snooze interaction in `/api/slack/interact`
+- [x] Allow 7-day snooze per item
+
+**🧪 Checkpoint 14**: ✅ All phases complete. Automated digests sent to all managers at 2pm UTC with rankings, bottlenecks with interactive snooze buttons, drop rate alerts, trend indicators (↑↓→), and work alignment placeholder.
+
+---
+
 ## Final Validation
 
 - [x] End-to-end test with 2+ users

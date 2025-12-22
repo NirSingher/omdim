@@ -104,12 +104,37 @@ admins:
 
 ### 5. Digests
 
+**On-demand commands**:
 | Digest | Trigger | Content |
 |--------|---------|---------|
 | Daily | `/standup digest <daily-name>` | All members' posts for today (DM to requester) |
 | Weekly | `/standup week <daily-name>` | Per-person summary: completion rate, blockers, patterns |
 
-Digests are private - sent only to requester via DM.
+**Automated digests** (sent to managers at 2pm UTC):
+| Digest | Schedule | Content |
+|--------|----------|---------|
+| Daily | Every day | Participation, missing members, blockers, bottlenecks |
+| Weekly | Configurable day per-daily | Rankings, trends, comprehensive team stats |
+
+**Digest contents**:
+- **Participation stats**: Submission counts, participation rates with trend indicators
+- **Team rankings** (weekly only): Score-based ranking using formula:
+  `Score = (Participation × 30) + (Completion × 25) + (Items × 0.5) - (Carry Days × 5) - (Drop Penalty) - (Blocker Days × 2)`
+- **Bottleneck detection**: Items carried 3+ days (configurable threshold), with snooze option
+- **Drop rate alerts**: Flag users with >30% drop rate
+- **Missing submissions** (daily only): Who hasn't submitted today
+- **Blockers**: All reported blockers for the period
+
+**Manager configuration**:
+```yaml
+dailies:
+  - name: "engineering-daily"
+    managers: ["U123", "U456"]      # Multiple managers supported
+    weekly_digest_day: "fri"        # sun/mon/tue/wed/thu/fri/sat
+    bottleneck_threshold: 3         # Days before flagging carried items
+```
+
+Digests are private - sent only to requester (on-demand) or configured managers (automated).
 
 ---
 
@@ -164,8 +189,9 @@ Digests are private - sent only to requester via DM.
 
 ## Out of Scope (v1)
 - Self-enrollment
-- Jira/Linear/GitHub integration
+- Jira/Linear/GitHub integration (placeholder in config, not implemented)
 - Automatic holiday detection
 - Analytics dashboard
+- Trend analysis with comparison to previous periods
 
 🔧

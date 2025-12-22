@@ -3,13 +3,13 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule } from '../lib/config';
-import { verifySlackSignature, parseCommandPayload, sendDM } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays } from '../lib/db';
+import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus } from '../lib/config';
+import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats } from '../lib/db';
 import { runPromptCron, formatDate, getUserDate } from '../lib/prompt';
 import { handleCommand } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
-import { formatManagerDigest, DigestPeriod } from '../lib/format';
+import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -81,16 +81,13 @@ export default {
     } else if (cronPattern === '0 3 * * *') {
       console.log('Running cleanup cron job');
       await runCleanup(env);
-    } else if (cronPattern === '0 17 * * *') {
-      // Daily digest at 5pm UTC
-      console.log('Running daily digest cron');
-      const result = await runDigestCron(env, 'daily');
-      console.log('Daily digest complete:', result);
-    } else if (cronPattern === '0 17 * * 5') {
-      // Weekly digest on Friday at 5pm UTC
-      console.log('Running weekly digest cron');
-      const result = await runDigestCron(env, 'weekly');
-      console.log('Weekly digest complete:', result);
+    } else if (cronPattern === '0 14 * * *') {
+      // Digest cron at 2pm UTC - handles both daily and weekly
+      // Daily digest runs every day
+      // Weekly digest runs on each daily's configured weekly_digest_day
+      console.log('Running digest cron');
+      const result = await runDigestCronUnified(env);
+      console.log('Digest cron complete:', result);
     }
   },
 };
@@ -299,7 +296,188 @@ async function handleDigestCron(url: URL, env: Env): Promise<Response> {
   });
 }
 
-/** Send digests to all managers */
+/** Get current day abbreviation (sun, mon, tue, etc.) */
+function getCurrentDayAbbrev(): string {
+  const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  return days[new Date().getDay()];
+}
+
+/** Unified digest cron - sends daily digest every day, weekly on configured day */
+async function runDigestCronUnified(env: Env): Promise<{
+  dailySent: number;
+  weeklySent: number;
+  errors: number;
+  dailies: string[];
+}> {
+  const dailiesWithManagers = getDailiesWithManagers();
+  let dailySent = 0;
+  let weeklySent = 0;
+  let errors = 0;
+  const processedDailies: string[] = [];
+
+  const db = getDb(env.DATABASE_URL);
+  const todayAbbrev = getCurrentDayAbbrev();
+
+  for (const daily of dailiesWithManagers) {
+    const managers = getDailyManagers(daily);
+    if (managers.length === 0) continue;
+
+    const schedule = getSchedule(daily.schedule);
+    if (!schedule) {
+      console.error(`Schedule "${daily.schedule}" not found for daily "${daily.name}"`);
+      errors++;
+      continue;
+    }
+
+    try {
+      // Always send daily digest
+      const dailyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'daily');
+      dailySent += dailyResult.sent;
+      errors += dailyResult.errors;
+
+      // Check if today is the weekly digest day for this daily
+      const weeklyDay = getWeeklyDigestDay(daily);
+      if (todayAbbrev === weeklyDay) {
+        const weeklyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'weekly');
+        weeklySent += weeklyResult.sent;
+        errors += weeklyResult.errors;
+      }
+
+      processedDailies.push(daily.name);
+    } catch (err) {
+      console.error(`Failed to process digests for "${daily.name}":`, err);
+      errors++;
+    }
+  }
+
+  return { dailySent, weeklySent, errors, dailies: processedDailies };
+}
+
+/** Send digest to all managers for a specific daily and period */
+async function sendDigestToManagers(
+  env: Env,
+  db: ReturnType<typeof getDb>,
+  daily: ReturnType<typeof getDaily>,
+  managers: string[],
+  schedule: ReturnType<typeof getSchedule>,
+  period: DigestPeriod
+): Promise<{ sent: number; errors: number }> {
+  if (!daily || !schedule) return { sent: 0, errors: 0 };
+
+  let sent = 0;
+  let errors = 0;
+
+  // Calculate date range
+  const today = new Date();
+  const endDate = formatDate(today);
+
+  const startDateObj = new Date(today);
+  if (period === 'weekly') {
+    startDateObj.setDate(startDateObj.getDate() - 6);
+  } else if (period === '4-week') {
+    startDateObj.setDate(startDateObj.getDate() - 27);
+  }
+  // daily: same day (no change)
+  const startDate = formatDate(startDateObj);
+
+  // Get data
+  const submissions = await getSubmissionsInRange(db, daily.name, startDate, endDate);
+  const stats = await getTeamStats(db, daily.name, startDate, endDate);
+  const totalWorkdays = countWorkdays(schedule.days, startDate, endDate);
+
+  // For daily digest, get missing submissions
+  let missingToday: string[] | undefined;
+  if (period === 'daily') {
+    missingToday = await getMissingSubmissions(db, daily.name, endDate);
+  }
+
+  // Get bottleneck data
+  const threshold = getBottleneckThreshold(daily);
+  const bottlenecks = await getBottleneckItems(db, daily.name, threshold);
+  const dropStats = await getHighDropUsers(db, daily.name, startDate, endDate, 30);
+
+  // Get rankings (only for weekly and 4-week)
+  let rankings;
+  if (period === 'weekly' || period === '4-week') {
+    rankings = await getTeamRankings(db, daily.name, startDate, endDate, totalWorkdays);
+  }
+
+  // Get trend data (compare to previous period)
+  let trends: TrendData | undefined;
+  if (period !== 'daily') {
+    // Calculate previous period dates
+    const periodDays = period === 'weekly' ? 7 : 28;
+    const prevEndDateObj = new Date(startDateObj);
+    prevEndDateObj.setDate(prevEndDateObj.getDate() - 1);
+    const prevStartDateObj = new Date(prevEndDateObj);
+    prevStartDateObj.setDate(prevStartDateObj.getDate() - periodDays + 1);
+
+    const prevStartDate = formatDate(prevStartDateObj);
+    const prevEndDate = formatDate(prevEndDateObj);
+    const prevWorkdays = countWorkdays(schedule.days, prevStartDate, prevEndDate);
+
+    // Fetch current and previous period stats
+    const currentStats = await getPeriodStats(db, daily.name, startDate, endDate, totalWorkdays);
+    const previousStats = await getPeriodStats(db, daily.name, prevStartDate, prevEndDate, prevWorkdays);
+
+    trends = {
+      current: currentStats,
+      previous: previousStats,
+    };
+  }
+
+  // Get integration status for work alignment section
+  const integrations = getIntegrationStatus(daily);
+
+  const digestText = formatManagerDigest({
+    dailyName: daily.name,
+    period,
+    startDate,
+    endDate,
+    submissions,
+    stats,
+    totalWorkdays,
+    missingToday,
+    bottlenecks,
+    dropStats,
+    rankings,
+    trends,
+    integrations,
+  });
+
+  // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)
+  const bottleneckBlocks = bottlenecks && bottlenecks.length > 0
+    ? buildBottleneckBlocks(bottlenecks, daily.name)
+    : [];
+
+  // Send to ALL managers
+  for (const managerId of managers) {
+    try {
+      // Send main digest text
+      await sendDM(env.SLACK_BOT_TOKEN, managerId, digestText);
+
+      // Send bottleneck snooze buttons as a separate message (if any)
+      if (bottleneckBlocks.length > 0) {
+        await sendDMWithBlocks(
+          env.SLACK_BOT_TOKEN,
+          managerId,
+          'Bottleneck items with snooze options',
+          bottleneckBlocks
+        );
+      }
+
+      sent++;
+      console.log(`Sent ${period} digest for "${daily.name}" to manager ${managerId}`);
+    } catch (err) {
+      console.error(`Failed to send ${period} digest to ${managerId}:`, err);
+      errors++;
+    }
+  }
+
+  return { sent, errors };
+}
+
+/** Send digests to all managers (used by HTTP endpoint) */
 async function runDigestCron(
   env: Env,
   period: DigestPeriod
@@ -312,7 +490,8 @@ async function runDigestCron(
   const db = getDb(env.DATABASE_URL);
 
   for (const daily of dailiesWithManagers) {
-    if (!daily.manager) continue;
+    const managers = getDailyManagers(daily);
+    if (managers.length === 0) continue;
 
     const schedule = getSchedule(daily.schedule);
     if (!schedule) {
@@ -322,48 +501,10 @@ async function runDigestCron(
     }
 
     try {
-      // Calculate date range
-      const today = new Date();
-      const endDate = formatDate(today);
-
-      const startDateObj = new Date(today);
-      if (period === 'daily') {
-        // Same day
-      } else if (period === 'weekly') {
-        startDateObj.setDate(startDateObj.getDate() - 6);
-      } else {
-        // 4-week
-        startDateObj.setDate(startDateObj.getDate() - 27);
-      }
-      const startDate = formatDate(startDateObj);
-
-      // Get data
-      const submissions = await getSubmissionsInRange(db, daily.name, startDate, endDate);
-      const stats = await getTeamStats(db, daily.name, startDate, endDate);
-      const totalWorkdays = countWorkdays(schedule.days, startDate, endDate);
-
-      // For daily digest, get missing submissions
-      let missingToday: string[] | undefined;
-      if (period === 'daily') {
-        missingToday = await getMissingSubmissions(db, daily.name, endDate);
-      }
-
-      const digestText = formatManagerDigest({
-        dailyName: daily.name,
-        period,
-        startDate,
-        endDate,
-        submissions,
-        stats,
-        totalWorkdays,
-        missingToday,
-      });
-
-      // Send to manager
-      await sendDM(env.SLACK_BOT_TOKEN, daily.manager, digestText);
-      sent++;
+      const result = await sendDigestToManagers(env, db, daily, managers, schedule, period);
+      sent += result.sent;
+      errors += result.errors;
       processedDailies.push(daily.name);
-      console.log(`Sent ${period} digest for "${daily.name}" to manager ${daily.manager}`);
     } catch (err) {
       console.error(`Failed to send digest for "${daily.name}":`, err);
       errors++;
