@@ -146,6 +146,7 @@ vite.config.ts.timestamp-*
 .dev.vars
 !.dev.vars.example
 config.yaml
+urls
 
 # IDE
 .idea/
