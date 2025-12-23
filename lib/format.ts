@@ -15,6 +15,11 @@ export { sendDM as sendDM } from './slack';
 // Types
 // ============================================================================
 
+interface QuestionConfig {
+  text: string;
+  order?: number;
+}
+
 interface StandupData {
   yesterdayCompleted: string[];
   yesterdayIncomplete: string[];
@@ -22,6 +27,7 @@ interface StandupData {
   todayPlans: string[];
   blockers: string;
   customAnswers: Record<string, string>;
+  questions?: QuestionConfig[];
 }
 
 interface Block {
@@ -122,9 +128,18 @@ export function formatStandupBlocks(
     });
   }
 
-  // Custom answers
+  // Custom answers - sort by question order if questions config provided
   const customEntries = Object.entries(data.customAnswers).filter(([_, v]) => v && v.trim());
   if (customEntries.length > 0) {
+    // Sort entries by question order if questions config is available
+    if (data.questions && data.questions.length > 0) {
+      customEntries.sort((a, b) => {
+        const orderA = data.questions!.find(q => q.text === a[0])?.order ?? 999;
+        const orderB = data.questions!.find(q => q.text === b[0])?.order ?? 999;
+        return orderA - orderB;
+      });
+    }
+
     for (const [question, answer] of customEntries) {
       blocks.push({
         type: 'section',
