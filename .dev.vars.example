@@ -14,3 +14,6 @@ SLACK_SIGNING_SECRET=your-DEV-signing-secret
 DATABASE_URL=postgresql://user:password@ep-xxx-xxx-123456.us-east-2.aws.neon.tech/database?sslmode=require
 
 CRON_SECRET=your-random-secret-string
+
+# Enable dev-only commands (force-prompt, etc.)
+DEV_MODE=true

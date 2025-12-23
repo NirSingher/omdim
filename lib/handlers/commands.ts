@@ -18,6 +18,7 @@ export interface CommandContext {
   args: string[];
   db: DbClient;
   slackToken: string;
+  devMode?: boolean;
 }
 
 /** Re-export for convenience */
@@ -259,6 +260,33 @@ export async function handleWeek(ctx: CommandContext): Promise<CommandResponse> 
   return handleDigest(ctx);
 }
 
+/** Force send a prompt - dev mode only, ignores existing submissions */
+export async function handleForcePrompt(ctx: CommandContext): Promise<CommandResponse> {
+  if (!ctx.devMode) {
+    return ephemeralResponse('❌ `force-prompt` is only available in dev mode.');
+  }
+
+  if (!isAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only admins can use force-prompt.');
+  }
+
+  const dailyName = ctx.args[1];
+  if (!dailyName) {
+    return ephemeralResponse('Usage: `/standup force-prompt <daily-name>`');
+  }
+
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    return ephemeralResponse(`❌ Daily "${dailyName}" not found.`);
+  }
+
+  const sent = await sendPromptDM(ctx.slackToken, ctx.userId, dailyName);
+  if (!sent) {
+    return ephemeralResponse('❌ Failed to send prompt. Please try again.');
+  }
+  return ephemeralResponse(`🔧 [DEV] Force prompt sent! Check your DMs for the *${dailyName}* standup.`);
+}
+
 // ============================================================================
 // Main Router
 // ============================================================================
@@ -294,6 +322,8 @@ export async function handleCommand(
       return handleWeek(ctx);
     case 'prompt':
       return handlePrompt(ctx);
+    case 'force-prompt':
+      return handleForcePrompt(ctx);
     default:
       return ephemeralResponse(
         `Unknown command: \`${subcommand}\`\nTry \`/standup help\` for usage.`

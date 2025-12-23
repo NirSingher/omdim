@@ -20,6 +20,7 @@ export interface Env {
   SLACK_SIGNING_SECRET: string;
   DATABASE_URL: string;
   CRON_SECRET?: string;
+  DEV_MODE?: string;
 }
 
 // ============================================================================
@@ -155,6 +156,7 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
     args,
     db,
     slackToken: env.SLACK_BOT_TOKEN,
+    devMode: env.DEV_MODE === 'true',
   });
 
   return new Response(JSON.stringify(response), {
