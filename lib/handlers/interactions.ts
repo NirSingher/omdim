@@ -245,6 +245,7 @@ export async function handleStandupSubmission(
         todayPlans,
         blockers,
         customAnswers,
+        questions: daily.questions,
       }
     );
 

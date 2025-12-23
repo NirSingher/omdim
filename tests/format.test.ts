@@ -142,6 +142,38 @@ describe('format utilities', () => {
       expect(prBlock?.text?.text).toContain('PR #123');
     });
 
+    it('sorts custom answers by question order', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Task 1'],
+        blockers: '',
+        customAnswers: {
+          'Question A': 'Answer A',
+          'Question B': 'Answer B',
+          'Question C': 'Answer C',
+        },
+        questions: [
+          { text: 'Question C', order: 1 },
+          { text: 'Question A', order: 2 },
+          { text: 'Question B', order: 3 },
+        ],
+      });
+
+      // Find all custom answer blocks (sections after blockers, before footer)
+      const customBlocks = blocks.filter(b =>
+        b.type === 'section' &&
+        b.text?.text?.startsWith('*Question')
+      );
+
+      expect(customBlocks.length).toBe(3);
+      // Should be ordered: C, A, B (by order: 1, 2, 3)
+      expect(customBlocks[0].text?.text).toContain('Question C');
+      expect(customBlocks[1].text?.text).toContain('Question A');
+      expect(customBlocks[2].text?.text).toContain('Question B');
+    });
+
     it('includes footer with daily name', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],
