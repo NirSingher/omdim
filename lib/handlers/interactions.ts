@@ -135,6 +135,7 @@ export async function handleStandupSubmission(
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
 
   console.log('Modal submitted for', dailyName, 'by', userId);
+  console.log('Values block keys:', Object.keys(values));
 
   // Get user's timezone and calculate today's date
   const userInfo = await getUserTimezone(ctx.slackToken, userId);
@@ -169,17 +170,25 @@ export async function handleStandupSubmission(
   const daily = getDaily(dailyName);
   const customAnswers: Record<string, string> = {};
   if (daily?.questions) {
+    console.log('Parsing custom questions, count:', daily.questions.length);
     daily.questions.forEach((q, index) => {
       const blockId = `custom_${index}`;
       const actionId = `custom_input_${index}`;
+      console.log(`Looking for blockId=${blockId}, actionId=${actionId}`);
+      console.log(`Block exists: ${!!values[blockId]}, Action exists: ${!!values[blockId]?.[actionId]}`);
       const richText = values[blockId]?.[actionId]?.rich_text_value;
+      console.log(`Rich text value:`, JSON.stringify(richText));
       if (richText) {
         const answer = parseRichText(richText);
+        console.log(`Parsed answer for "${q.text}":`, answer);
         if (answer) {
           customAnswers[q.text] = answer;
         }
       }
     });
+    console.log('Final customAnswers:', JSON.stringify(customAnswers));
+  } else {
+    console.log('No questions in daily config');
   }
 
   // Save submission

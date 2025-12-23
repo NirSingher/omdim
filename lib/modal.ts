@@ -188,6 +188,7 @@ export function buildStandupModal(
 
   // Add custom questions with their indices
   customQuestions.forEach((question, index) => {
+    console.log(`Adding custom question ${index}: "${question.text}" with order ${question.order}`);
     orderedFields.push({
       type: 'custom',
       order: question.order ?? 999,
@@ -271,13 +272,16 @@ export function buildStandupModal(
 
       case 'custom':
         if (field.question && field.questionIndex !== undefined) {
+          const blockId = `custom_${field.questionIndex}`;
+          const actionId = `custom_input_${field.questionIndex}`;
+          console.log(`Building custom question block: blockId=${blockId}, actionId=${actionId}, text="${field.question.text}"`);
           blocks.push({
             type: 'input',
-            block_id: `custom_${field.questionIndex}`,
+            block_id: blockId,
             optional: !field.question.required,
             element: {
               type: 'rich_text_input',
-              action_id: `custom_input_${field.questionIndex}`,
+              action_id: actionId,
               placeholder: {
                 type: 'plain_text',
                 text: 'Your answer...',
