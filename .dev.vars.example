@@ -1,8 +1,13 @@
 # Cloudflare Workers local development secrets
 # Copy to .dev.vars: cp .dev.vars.example .dev.vars
+#
+# IMPORTANT: Use a SEPARATE Slack app for local development!
+# - Create a second Slack app (e.g., "Omdim Dev")
+# - Point its Request URL to your local tunnel (ngrok, cloudflared, etc.)
+# - Production app credentials go in Cloudflare secrets (wrangler secret put)
 
-SLACK_BOT_TOKEN=xoxb-your-bot-token
-SLACK_SIGNING_SECRET=your-signing-secret
+SLACK_BOT_TOKEN=xoxb-your-DEV-bot-token
+SLACK_SIGNING_SECRET=your-DEV-signing-secret
 
 # Must be a Neon DATABASE_URL (Cloudflare Workers doesn't support standard pg driver)
 # Get this from your Neon project dashboard
