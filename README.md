@@ -1,7 +1,27 @@
-
 # Omdim
 
-Slack bot for managing you Daily Standups. Build to be serverless hosted for free. Oriented to keep track from one daily to another and help manager get the digest that they need.
+Async daily standup bot for Slack. Free to host, designed to make standups people don't hate.
+
+## Why Async Standups?
+
+Let's be honest: synchronous standups are mostly useful for managers. They rarely help with collaboration.
+
+**The problem with live standups:**
+- Team members zone out when it's not their turn
+- Updates evaporate — nobody remembers what others said
+- 15 minutes of "I worked on X, will work on Y" isn't valuable face time
+- Remote teams struggle with timezone coordination
+
+**A better approach:**
+
+Submit updates async, then use the meeting time differently:
+- **Persist updates** so everyone can actually read them
+- **Surface blockers** that need real discussion
+- **Use saved time** to socialize, pair program, or skip the meeting entirely
+
+Omdim handles the boring part — collecting and organizing updates — so your team time can be spent on things that actually need a meeting.
+
+---
 
 ## Features
 
