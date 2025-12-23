@@ -151,27 +151,45 @@ ngrok http 8787
 
 Copy the `https://xxx.ngrok-free.dev` URL.
 
-### 6. Configure Slack App
+### 6. Create a Development Slack App
 
-Go to [api.slack.com/apps](https://api.slack.com/apps) → Your app:
+> **Important**: Create a **separate Slack app** for local development. This keeps your dev testing isolated from production and allows you to point it at your ngrok endpoint.
 
-**Slash Commands** → Edit `/standup`:
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
+2. Name it something like `Omdim Dev` or `Standup (Dev)`
+3. Install it to your workspace
+
+**Configure the dev app:**
+
+**Slash Commands** → Create `/omdim` (or your preferred command):
 - Request URL: `https://YOUR-NGROK-URL/api/slack/commands`
 
-**Interactivity & Shortcuts**:
+**Interactivity & Shortcuts** → Enable and set:
 - Request URL: `https://YOUR-NGROK-URL/api/slack/interact`
 
-### 7. Start Dev Server
+**OAuth & Permissions** → Add scopes:
+- `chat:write`, `commands`, `users:read`
+
+Copy the **Bot Token** and **Signing Secret** to your `.dev.vars`.
+
+### 7. Create a Private Test Channel
+
+Create a private Slack channel (e.g., `#standup-dev-test`) for testing:
+- Keeps test messages out of production channels
+- Add your dev Slack app to this channel
+- Configure `config.yaml` to post to this channel
+
+### 8. Start Dev Server
 
 ```bash
 npm run dev
 ```
 
-### 8. Test
+### 9. Test
 
-In Slack:
+In Slack (using your dev app's command):
 ```
-/standup help
+/omdim help
 ```
 
 ## Notes
