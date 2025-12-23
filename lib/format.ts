@@ -20,6 +20,12 @@ interface QuestionConfig {
   order?: number;
 }
 
+interface FieldOrder {
+  unplanned?: number;
+  today_plans?: number;
+  blockers?: number;
+}
+
 interface StandupData {
   yesterdayCompleted: string[];
   yesterdayIncomplete: string[];
@@ -28,7 +34,15 @@ interface StandupData {
   blockers: string;
   customAnswers: Record<string, string>;
   questions?: QuestionConfig[];
+  fieldOrder?: FieldOrder;
 }
+
+// Default field order values
+const DEFAULT_FIELD_ORDER = {
+  yesterday: 10,  // Combined completed + unplanned
+  today: 20,      // Combined carried + new plans
+  blockers: 30,
+};
 
 interface Block {
   type: string;
@@ -49,6 +63,7 @@ interface Block {
 
 /**
  * Format a standup submission as Slack Block Kit blocks
+ * Respects field_order config for positioning custom questions
  */
 export function formatStandupBlocks(
   userId: string,
@@ -66,88 +81,93 @@ export function formatStandupBlocks(
     },
   });
 
+  // Get field order (use field_order.unplanned for yesterday section)
+  const fieldOrder = data.fieldOrder || {};
+  const yesterdayOrder = fieldOrder.unplanned ?? DEFAULT_FIELD_ORDER.yesterday;
+  const todayOrder = fieldOrder.today_plans ?? DEFAULT_FIELD_ORDER.today;
+  const blockersOrder = fieldOrder.blockers ?? DEFAULT_FIELD_ORDER.blockers;
+
+  // Build ordered sections
+  interface OrderedSection {
+    order: number;
+    render: () => Block | null;
+  }
+
+  const sections: OrderedSection[] = [];
+
   // Yesterday section - completed and unplanned with checkboxes
-  const yesterdayItems: string[] = [];
-
-  // Completed items with checked checkbox
-  for (const item of data.yesterdayCompleted) {
-    yesterdayItems.push(`☑️ ${item}`);
-  }
-
-  // Unplanned completions with checked checkbox (they were completed!)
-  for (const item of data.unplanned) {
-    yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
-  }
-
-  if (yesterdayItems.length > 0) {
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: '*Yesterday:*\n' + yesterdayItems.join('\n'),
-      },
-    });
-  }
+  sections.push({
+    order: yesterdayOrder,
+    render: () => {
+      const yesterdayItems: string[] = [];
+      for (const item of data.yesterdayCompleted) {
+        yesterdayItems.push(`☑️ ${item}`);
+      }
+      for (const item of data.unplanned) {
+        yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
+      }
+      if (yesterdayItems.length === 0) return null;
+      return {
+        type: 'section',
+        text: { type: 'mrkdwn', text: '*Yesterday:*\n' + yesterdayItems.join('\n') },
+      };
+    },
+  });
 
   // Today's plans section - includes carried over items
-  const todayItems: string[] = [];
-
-  // Carried over items first (unchecked)
-  for (const item of data.yesterdayIncomplete) {
-    todayItems.push(`⬜ ${item} _(carried over)_`);
-  }
-
-  // Add separator if we have both carried over and new items
-  if (data.yesterdayIncomplete.length > 0 && data.todayPlans.length > 0) {
-    todayItems.push('───');
-  }
-
-  // New plans (unchecked)
-  for (const item of data.todayPlans) {
-    todayItems.push(`⬜ ${item}`);
-  }
-
-  if (todayItems.length > 0) {
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: '*Today:*\n' + todayItems.join('\n'),
-      },
-    });
-  }
-
-  // Blockers
-  if (data.blockers && data.blockers.trim()) {
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*🚧 Blockers:*\n${data.blockers}`,
-      },
-    });
-  }
-
-  // Custom answers - sort by question order if questions config provided
-  const customEntries = Object.entries(data.customAnswers).filter(([_, v]) => v && v.trim());
-  if (customEntries.length > 0) {
-    // Sort entries by question order if questions config is available
-    if (data.questions && data.questions.length > 0) {
-      customEntries.sort((a, b) => {
-        const orderA = data.questions!.find(q => q.text === a[0])?.order ?? 999;
-        const orderB = data.questions!.find(q => q.text === b[0])?.order ?? 999;
-        return orderA - orderB;
-      });
-    }
-
-    for (const [question, answer] of customEntries) {
-      blocks.push({
+  sections.push({
+    order: todayOrder,
+    render: () => {
+      const todayItems: string[] = [];
+      for (const item of data.yesterdayIncomplete) {
+        todayItems.push(`⬜ ${item} _(carried over)_`);
+      }
+      if (data.yesterdayIncomplete.length > 0 && data.todayPlans.length > 0) {
+        todayItems.push('───');
+      }
+      for (const item of data.todayPlans) {
+        todayItems.push(`⬜ ${item}`);
+      }
+      if (todayItems.length === 0) return null;
+      return {
         type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*${question}*\n${answer}`,
-        },
-      });
+        text: { type: 'mrkdwn', text: '*Today:*\n' + todayItems.join('\n') },
+      };
+    },
+  });
+
+  // Blockers section
+  sections.push({
+    order: blockersOrder,
+    render: () => {
+      if (!data.blockers || !data.blockers.trim()) return null;
+      return {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*🚧 Blockers:*\n${data.blockers}` },
+      };
+    },
+  });
+
+  // Custom question sections
+  const customEntries = Object.entries(data.customAnswers).filter(([_, v]) => v && v.trim());
+  for (const [question, answer] of customEntries) {
+    const questionConfig = data.questions?.find(q => q.text === question);
+    const order = questionConfig?.order ?? 999;
+    sections.push({
+      order,
+      render: () => ({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*${question}*\n${answer}` },
+      }),
+    });
+  }
+
+  // Sort by order and render
+  sections.sort((a, b) => a.order - b.order);
+  for (const section of sections) {
+    const block = section.render();
+    if (block) {
+      blocks.push(block);
     }
   }
 

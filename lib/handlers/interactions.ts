@@ -255,6 +255,7 @@ export async function handleStandupSubmission(
         blockers,
         customAnswers,
         questions: daily.questions,
+        fieldOrder: daily.field_order,
       }
     );
 
