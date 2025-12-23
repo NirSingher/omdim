@@ -64,6 +64,44 @@ DATABASE_URL=postgres://...
 ## Testing Checkpoints
 Each implementation step has a checkpoint. Verify the checkpoint works before moving to the next step. See `implementation-plan.md` for details.
 
+## Git Workflow
+
+**Read `CONTRIBUTING.md` for full details.**
+
+### Quick Reference
+
+```bash
+# Start new work (always from dev)
+git checkout dev && git pull
+git checkout -b feature/my-feature
+
+# Commit with conventional commits
+git commit -m "feat: add new feature"
+
+# Before pushing, run tests
+npm test
+
+# Create PR targeting dev
+git push -u origin feature/my-feature
+gh pr create --base dev
+```
+
+### Branch Naming
+- `feature/` — new functionality
+- `bugfix/` — non-urgent fixes
+- `hotfix/` — urgent (base off main, not dev)
+- `chore/` — maintenance
+- `docs/` — documentation
+
+### Commit Types
+`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`
+
+### Rules
+- Always branch from `dev` (except hotfixes)
+- Run `npm test` before committing
+- Use rebase merge for PRs
+- Delete branches after merge
+
 ## Commands Available
 - `/implement <step>` - Implement a specific step from the plan
 - `/checkpoint <step>` - Verify a checkpoint passes
