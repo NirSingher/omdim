@@ -161,7 +161,7 @@ describe('format utilities', () => {
         ],
       });
 
-      // Find all custom answer blocks (sections after blockers, before footer)
+      // Find all custom answer blocks
       const customBlocks = blocks.filter(b =>
         b.type === 'section' &&
         b.text?.text?.startsWith('*Question')
@@ -172,6 +172,146 @@ describe('format utilities', () => {
       expect(customBlocks[0].text?.text).toContain('Question C');
       expect(customBlocks[1].text?.text).toContain('Question A');
       expect(customBlocks[2].text?.text).toContain('Question B');
+    });
+
+    it('interleaves custom answers with standard fields based on order', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['Done task'],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Plan 1'],
+        blockers: 'A blocker',
+        customAnswers: {
+          'Question at start': 'Answer 1',
+          'Question in middle': 'Answer 2',
+        },
+        questions: [
+          { text: 'Question at start', order: 5 },
+          { text: 'Question in middle', order: 25 },
+        ],
+        fieldOrder: {
+          unplanned: 10,
+          today_plans: 20,
+          blockers: 30,
+        },
+      });
+
+      // Get section blocks in order (excluding header and footer)
+      const sectionBlocks = blocks.filter(b => b.type === 'section');
+
+      // Find indices of each section type
+      const findIndex = (text: string) =>
+        sectionBlocks.findIndex(b => b.text?.text?.includes(text));
+
+      const headerIdx = findIndex('submitted their standup');
+      const questionStartIdx = findIndex('Question at start');
+      const yesterdayIdx = findIndex('Yesterday:');
+      const todayIdx = findIndex('Today:');
+      const questionMiddleIdx = findIndex('Question in middle');
+      const blockersIdx = findIndex('Blockers:');
+
+      // Verify order: header, question@5, yesterday@10, today@20, question@25, blockers@30
+      expect(headerIdx).toBe(0);
+      expect(questionStartIdx).toBeLessThan(yesterdayIdx);
+      expect(yesterdayIdx).toBeLessThan(todayIdx);
+      expect(todayIdx).toBeLessThan(questionMiddleIdx);
+      expect(questionMiddleIdx).toBeLessThan(blockersIdx);
+    });
+
+    it('places custom answer before yesterday when order is lower', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['Done task'],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Plan 1'],
+        blockers: '',
+        customAnswers: {
+          "How're you feeling?": 'Great!',
+        },
+        questions: [
+          { text: "How're you feeling?", order: 5 },
+        ],
+        fieldOrder: {
+          unplanned: 10,
+          today_plans: 20,
+          blockers: 30,
+        },
+      });
+
+      const sectionBlocks = blocks.filter(b => b.type === 'section');
+
+      const feelingIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes("How're you feeling?")
+      );
+      const yesterdayIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('Yesterday:')
+      );
+
+      // Question with order 5 should appear before yesterday (order 10)
+      expect(feelingIdx).toBeLessThan(yesterdayIdx);
+      expect(feelingIdx).toBe(1); // Right after header
+    });
+
+    it('places custom answer after blockers when order is higher', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Plan 1'],
+        blockers: 'A blocker',
+        customAnswers: {
+          'PRs to review?': 'PR #123',
+        },
+        questions: [
+          { text: 'PRs to review?', order: 999 },
+        ],
+        fieldOrder: {
+          unplanned: 10,
+          today_plans: 20,
+          blockers: 30,
+        },
+      });
+
+      const sectionBlocks = blocks.filter(b => b.type === 'section');
+
+      const prIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('PRs to review?')
+      );
+      const blockersIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('Blockers:')
+      );
+
+      // Question with order 999 should appear after blockers (order 30)
+      expect(prIdx).toBeGreaterThan(blockersIdx);
+    });
+
+    it('uses default field order when fieldOrder not provided', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['Done'],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Plan'],
+        blockers: 'Blocker',
+        customAnswers: {
+          'Early question': 'Answer',
+        },
+        questions: [
+          { text: 'Early question', order: 5 },
+        ],
+        // No fieldOrder - should use defaults (yesterday:10, today:20, blockers:30)
+      });
+
+      const sectionBlocks = blocks.filter(b => b.type === 'section');
+
+      const questionIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('Early question')
+      );
+      const yesterdayIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('Yesterday:')
+      );
+
+      // Question with order 5 should appear before yesterday (default order 10)
+      expect(questionIdx).toBeLessThan(yesterdayIdx);
     });
 
     it('includes footer with daily name', () => {

@@ -219,5 +219,58 @@ describe('modal builder', () => {
 
       expect(dropdownBlock?.accessory?.initial_option?.text?.text).toContain('Carry over');
     });
+
+    it('interleaves custom questions with standard fields based on order', () => {
+      const questions = [
+        { text: 'Question at start', required: false, order: 5 },
+        { text: 'Question in middle', required: false, order: 25 },
+        { text: 'Question at end', required: false, order: 999 },
+      ];
+      const fieldOrder = {
+        unplanned: 10,
+        today_plans: 20,
+        blockers: 30,
+      };
+
+      const modal = buildStandupModal('daily-il', null, questions, fieldOrder);
+
+      // Get block IDs in order (excluding non-input blocks)
+      const inputBlockIds = modal.blocks
+        .filter(b => b.block_id && b.type === 'input')
+        .map(b => b.block_id);
+
+      // Expected order:
+      // custom_0 (order 5) < unplanned (10) < today_plans (20) < custom_1 (25) < blockers (30) < custom_2 (999)
+      expect(inputBlockIds).toEqual([
+        'custom_0',      // order 5
+        'unplanned',     // order 10
+        'today_plans',   // order 20
+        'custom_1',      // order 25
+        'blockers',      // order 30
+        'custom_2',      // order 999
+      ]);
+    });
+
+    it('preserves question index in block_id regardless of sort order', () => {
+      const questions = [
+        { text: 'Third in config', required: false, order: 100 },
+        { text: 'First in config', required: false, order: 1 },
+        { text: 'Second in config', required: false, order: 50 },
+      ];
+
+      const modal = buildStandupModal('daily-il', null, questions);
+
+      // Find custom blocks by their label text
+      const customBlocks = modal.blocks.filter(b => b.block_id?.startsWith('custom_'));
+
+      // Block IDs should match original array index, not sorted order
+      const firstInConfig = customBlocks.find(b => b.label?.text === 'First in config');
+      const secondInConfig = customBlocks.find(b => b.label?.text === 'Second in config');
+      const thirdInConfig = customBlocks.find(b => b.label?.text === 'Third in config');
+
+      expect(firstInConfig?.block_id).toBe('custom_1'); // Index 1 in original array
+      expect(secondInConfig?.block_id).toBe('custom_2'); // Index 2 in original array
+      expect(thirdInConfig?.block_id).toBe('custom_0'); // Index 0 in original array
+    });
   });
 });
