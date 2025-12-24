@@ -455,6 +455,41 @@ describe('format utilities', () => {
       expect(result).toContain('2025-12-15');
     });
 
+    it('counts each line as separate blocker for multiline blockers', () => {
+      const submissions = [
+        {
+          id: 1,
+          slack_user_id: 'U12345',
+          daily_name: 'daily-il',
+          submitted_at: new Date('2025-12-15T09:30:00Z'),
+          date: '2025-12-15',
+          yesterday_completed: [],
+          yesterday_incomplete: [],
+          unplanned: [],
+          today_plans: [],
+          blockers: 'Issue A\nIssue B\nIssue C',
+          custom_answers: null,
+          slack_message_ts: null,
+        },
+      ];
+
+      const result = formatWeeklySummary(
+        'daily-il',
+        '2025-12-12',
+        '2025-12-18',
+        submissions,
+        []
+      );
+
+      // All three blocker lines should be listed
+      expect(result).toContain('Issue A');
+      expect(result).toContain('Issue B');
+      expect(result).toContain('Issue C');
+      // Each blocker line should have user attribution (bullet point format)
+      const blockerLines = result.split('\n').filter(l => l.startsWith('•') && l.includes('<@U12345>'));
+      expect(blockerLines.length).toBe(3);
+    });
+
     it('shows celebration when no blockers', () => {
       const result = formatWeeklySummary(
         'daily-il',
@@ -618,6 +653,42 @@ describe('format utilities', () => {
 
       expect(result).toContain('1 blocker');
       expect(result).toContain('Waiting on API access');
+    });
+
+    it('counts multiline blockers as separate items', () => {
+      const submissions = [
+        {
+          id: 1,
+          slack_user_id: 'U12345',
+          daily_name: 'daily-il',
+          submitted_at: new Date('2025-12-18T09:30:00Z'),
+          date: '2025-12-18',
+          yesterday_completed: [],
+          yesterday_incomplete: [],
+          unplanned: [],
+          today_plans: [],
+          blockers: 'Waiting on API access\nNeed design review\nBlocked by CI failure',
+          custom_answers: null,
+          slack_message_ts: null,
+        },
+      ];
+
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions,
+        stats: [],
+        totalWorkdays: 1,
+      });
+
+      // Should count 3 blockers, not 1
+      expect(result).toContain('3 blockers');
+      // All three should be listed
+      expect(result).toContain('Waiting on API access');
+      expect(result).toContain('Need design review');
+      expect(result).toContain('Blocked by CI failure');
     });
 
     it('shows celebration when no blockers', () => {

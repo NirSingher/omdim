@@ -273,11 +273,14 @@ export function formatWeeklySummary(
   }
   lines.push('');
 
-  // Aggregate blockers
+  // Aggregate blockers - each line is a separate blocker
   const blockers: string[] = [];
   for (const sub of submissions) {
     if (sub.blockers && sub.blockers.trim()) {
-      blockers.push(`• <@${sub.slack_user_id}> (${sub.date}): ${sub.blockers.split('\n')[0]}`);
+      const blockerLines = sub.blockers.split('\n').filter(line => line.trim());
+      for (const line of blockerLines) {
+        blockers.push(`• <@${sub.slack_user_id}> (${sub.date}): ${line.trim()}`);
+      }
     }
   }
 
@@ -385,7 +388,13 @@ export function formatManagerDigest(options: DigestOptions): string {
 
   // Count blockers (only if not showing trend version)
   if (!trends || trends.previous.total_submissions === 0) {
-    const blockersCount = submissions.filter(s => s.blockers && s.blockers.trim()).length;
+    // Count individual blocker lines, not just submissions with blockers
+    const blockersCount = submissions.reduce((count, s) => {
+      if (s.blockers && s.blockers.trim()) {
+        return count + s.blockers.split('\n').filter(line => line.trim()).length;
+      }
+      return count;
+    }, 0);
     if (blockersCount > 0) {
       lines.push(`• ⚠️ ${blockersCount} blocker${blockersCount !== 1 ? 's' : ''} reported`);
     }
@@ -462,11 +471,14 @@ export function formatManagerDigest(options: DigestOptions): string {
     lines.push('');
   }
 
-  // Blockers detail (show recent ones)
+  // Blockers detail (show recent ones) - each line is a separate blocker
   const blockers: string[] = [];
   for (const sub of submissions) {
     if (sub.blockers && sub.blockers.trim()) {
-      blockers.push(`• <@${sub.slack_user_id}> (${sub.date}): ${sub.blockers.split('\n')[0]}`);
+      const blockerLines = sub.blockers.split('\n').filter(line => line.trim());
+      for (const line of blockerLines) {
+        blockers.push(`• <@${sub.slack_user_id}> (${sub.date}): ${line.trim()}`);
+      }
     }
   }
 
