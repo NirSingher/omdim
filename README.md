@@ -270,8 +270,9 @@ In Slack:
 ### For Managers
 
 ```
-/standup digest <daily-name>        # Today's team updates (DM)
-/standup week <daily-name>          # Weekly summary (DM)
+/standup digest <daily-name>            # Today's team digest (DM)
+/standup digest <daily-name> weekly     # Weekly summary (DM)
+/standup digest <daily-name> 4-week     # 4-week summary (DM)
 ```
 
 ---
@@ -292,6 +293,14 @@ curl http://localhost:8787/api/health
 ```
 
 > **Important**: You must use a Neon DATABASE_URL even for local development. See [CONTRIBUTING.md](CONTRIBUTING.md) for full setup instructions.
+
+### Dev-Only Commands
+
+When `DEV_MODE=true` is set in `.dev.vars`, additional commands are available:
+
+```
+/standup force-prompt <daily-name>  # Force send a prompt (ignores schedule)
+```
 
 ### Testing with Slack
 

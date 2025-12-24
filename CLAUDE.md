@@ -1,38 +1,37 @@
 # Omdim - Claude Code Instructions
 
 ## Project Overview
-Async daily standup Slack bot. Serverless on Vercel with Postgres.
+Async daily standup Slack bot. Serverless on Cloudflare Workers with Neon Postgres.
 
 ## Key Docs
-- `requirements.md` - Product requirements
-- `architecture.md` - Technical design
-- `implementation-plan.md` - Step-by-step build plan with checkpoints
-- `roadmap.md` - Future phases
+- `README.md` - Setup and usage guide
+- `CONTRIBUTING.md` - Git workflow and local development
+- `AGENTS.md` - AI agent instructions
 
 ## Tech Stack
 - Runtime: Node.js + TypeScript
-- Framework: Vercel serverless functions
-- Database: Postgres (Neon/Supabase)
-- Slack SDK: `@slack/web-api`
+- Platform: Cloudflare Workers
+- Database: Neon Postgres (serverless driver)
 - Config: YAML
 
 ## Project Structure
 ```
 api/
-  slack/
-    commands.ts    # Slash command handler
-    interact.ts    # Modal/button interactions
-  cron/
-    prompt.ts      # 30-min prompt job
-    cleanup.ts     # Weekly data cleanup
+  index.ts           # Single entry point (fetch + scheduled handlers)
 lib/
-  slack.ts         # Slack API helpers
-  db.ts            # Database queries
-  config.ts        # YAML config loader
-  modal.ts         # Block Kit modal builder
-  format.ts        # Message formatting
-config.yaml        # Dailies, schedules, admins
-schema.sql         # Database schema
+  slack.ts           # Slack API helpers
+  db.ts              # Database queries
+  config.ts          # YAML config loader
+  modal.ts           # Block Kit modal builder
+  format.ts          # Message formatting (standups, digests)
+  prompt.ts          # Prompt scheduling logic
+  handlers/
+    commands.ts      # Slash command handlers
+    interactions.ts  # Modal/button interaction handlers
+tests/               # Vitest unit tests
+config.yaml          # Dailies, schedules, admins
+schema.sql           # Database schema
+wrangler.toml        # Cloudflare Workers config
 ```
 
 ## Conventions
