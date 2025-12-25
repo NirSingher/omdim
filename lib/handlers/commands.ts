@@ -25,6 +25,15 @@ export interface CommandContext {
 export type CommandResponse = SlackCommandResponse;
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/** Check if daily name is the special 'all' keyword */
+function isAllDailies(dailyName: string): boolean {
+  return dailyName.toLowerCase() === 'all';
+}
+
+// ============================================================================
 // Command Handlers
 // ============================================================================
 
@@ -33,13 +42,14 @@ export function handleHelp(): CommandResponse {
   return ephemeralResponse(
     '*Omdim Commands*\n\n' +
     '`/standup help` - Show this help message\n' +
-    '`/standup prompt [daily-name]` - Send standup prompt to your DMs\n' +
+    '`/standup prompt [daily|all]` - Send standup prompt(s) to your DMs\n' +
     '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
     '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
-    '`/standup list <daily-name>` - List participants in a daily\n' +
-    '`/standup digest <daily-name> [period]` - Get team summary (DM)\n' +
-    '`/standup report <daily-name> [period]` - Get detailed team report (DM)\n' +
-    '    _period: `day` (default), `week`, `month`_'
+    '`/standup list [daily|all]` - List participants in a daily\n' +
+    '`/standup digest <daily|all> [period]` - Get team summary (DM)\n' +
+    '`/standup report <daily|all> [period]` - Get detailed team report (DM)\n' +
+    '    _period: `day` (default), `week`, `month`_\n' +
+    '    _Use `all` to run for all dailies_'
   );
 }
 
@@ -96,12 +106,27 @@ export async function handleRemove(ctx: CommandContext): Promise<CommandResponse
 export async function handleList(ctx: CommandContext): Promise<CommandResponse> {
   const listDailyName = ctx.args[1];
 
-  if (!listDailyName) {
+  // No arg or 'all' → show all dailies with participants
+  if (!listDailyName || isAllDailies(listDailyName)) {
     const dailies = getDailies();
-    return ephemeralResponse(
-      '*Available dailies:*\n' +
-      dailies.map(d => `• ${d.name} (${d.channel})`).join('\n')
-    );
+    if (dailies.length === 0) {
+      return ephemeralResponse('No dailies configured.');
+    }
+
+    try {
+      const results: string[] = [];
+      for (const daily of dailies) {
+        const participants = await getParticipants(ctx.db, daily.name);
+        const userList = participants.length > 0
+          ? participants.map(p => `<@${p.slack_user_id}>`).join(', ')
+          : '_no participants_';
+        results.push(`*${daily.name}* (${daily.channel}): ${userList}`);
+      }
+      return ephemeralResponse(results.join('\n'));
+    } catch (err) {
+      console.error('Failed to list participants:', err);
+      return ephemeralResponse('❌ Failed to list participants. Please try again.');
+    }
   }
 
   const listDaily = getDaily(listDailyName);
@@ -137,6 +162,69 @@ export async function handleDigest(ctx: CommandContext): Promise<CommandResponse
     return ephemeralResponse(`❌ Invalid period "${periodArg}". Use: daily, weekly, or 4-week`);
   }
   const period = periodArg as DigestPeriod;
+
+  // Handle 'all' dailies
+  if (isAllDailies(digestDailyName)) {
+    const allDailies = getDailies();
+    if (allDailies.length === 0) {
+      return ephemeralResponse('No dailies configured.');
+    }
+
+    try {
+      const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
+      const tzOffset = userInfo?.tz_offset || 0;
+      const userDate = getUserDate(tzOffset);
+      const endDate = formatDate(userDate);
+
+      const startDateObj = new Date(userDate);
+      if (period === 'weekly') {
+        startDateObj.setDate(startDateObj.getDate() - 6);
+      } else if (period === '4-week') {
+        startDateObj.setDate(startDateObj.getDate() - 27);
+      }
+      const startDate = formatDate(startDateObj);
+
+      const digestParts: string[] = [];
+      for (const daily of allDailies) {
+        try {
+          const schedule = getSchedule(daily.schedule);
+          if (!schedule) continue;
+
+          const submissions = await getSubmissionsInRange(ctx.db, daily.name, startDate, endDate);
+          const stats = await getTeamStats(ctx.db, daily.name, startDate, endDate);
+          const totalWorkdays = countWorkdays(schedule.days, startDate, endDate);
+
+          let missingToday: string[] | undefined;
+          if (period === 'daily') {
+            missingToday = await getMissingSubmissions(ctx.db, daily.name, endDate);
+          }
+
+          const digestText = formatManagerDigest({
+            dailyName: daily.name,
+            period,
+            startDate,
+            endDate,
+            submissions,
+            stats,
+            totalWorkdays,
+            missingToday,
+          });
+          digestParts.push(digestText);
+        } catch (err) {
+          console.error(`Failed to generate digest for ${daily.name}:`, err);
+          digestParts.push(`_Failed to generate digest for ${daily.name}_`);
+        }
+      }
+
+      const combined = digestParts.join('\n\n---\n\n');
+      await sendDM(ctx.slackToken, ctx.userId, combined);
+      const periodLabel = period.charAt(0).toUpperCase() + period.slice(1);
+      return ephemeralResponse(`📊 ${periodLabel} digest for all dailies sent to your DMs!`);
+    } catch (err) {
+      console.error('Failed to generate digest:', err);
+      return ephemeralResponse('❌ Failed to generate digest. Please try again.');
+    }
+  }
 
   const digestDaily = getDaily(digestDailyName);
   if (!digestDaily) {
@@ -207,6 +295,31 @@ export async function handlePrompt(ctx: CommandContext): Promise<CommandResponse
 
     if (userDailies.length === 0) {
       return ephemeralResponse('❌ You\'re not part of any dailies. Ask an admin to add you.');
+    }
+
+    // Handle 'all' - send prompts for all user's dailies
+    if (promptDailyName && isAllDailies(promptDailyName)) {
+      const sentDailies: string[] = [];
+      const failedDailies: string[] = [];
+
+      for (const d of userDailies) {
+        const sent = await sendPromptDM(ctx.slackToken, ctx.userId, d.daily_name);
+        if (sent) {
+          sentDailies.push(d.daily_name);
+        } else {
+          failedDailies.push(d.daily_name);
+        }
+      }
+
+      if (sentDailies.length === 0) {
+        return ephemeralResponse('❌ Failed to send prompts. Please try again.');
+      }
+
+      let message = `📬 Sent prompts for ${sentDailies.length} dailies: ${sentDailies.join(', ')}`;
+      if (failedDailies.length > 0) {
+        message += `\n⚠️ Failed: ${failedDailies.join(', ')}`;
+      }
+      return ephemeralResponse(message);
     }
 
     // If daily name provided, use that
@@ -283,6 +396,88 @@ export async function handleReport(ctx: CommandContext): Promise<CommandResponse
   const period = periodMap[periodArg];
   if (!period) {
     return ephemeralResponse(`❌ Invalid period "${periodArg}". Use: day, week, or month`);
+  }
+
+  // Handle 'all' dailies
+  if (isAllDailies(reportDailyName)) {
+    const allDailies = getDailies();
+    if (allDailies.length === 0) {
+      return ephemeralResponse('No dailies configured.');
+    }
+
+    try {
+      const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
+      const tzOffset = userInfo?.tz_offset || 0;
+      const userDate = getUserDate(tzOffset);
+      const endDate = formatDate(userDate);
+
+      const startDateObj = new Date(userDate);
+      if (period === 'weekly') {
+        startDateObj.setDate(startDateObj.getDate() - 6);
+      } else if (period === '4-week') {
+        startDateObj.setDate(startDateObj.getDate() - 27);
+      }
+      const startDate = formatDate(startDateObj);
+
+      const reportParts: string[] = [];
+      for (const daily of allDailies) {
+        try {
+          const schedule = getSchedule(daily.schedule);
+          if (!schedule) continue;
+
+          const submissions = await getSubmissionsInRange(ctx.db, daily.name, startDate, endDate);
+          const stats = await getTeamStats(ctx.db, daily.name, startDate, endDate);
+          const totalWorkdays = countWorkdays(schedule.days, startDate, endDate);
+
+          const threshold = getBottleneckThreshold(daily);
+          const bottlenecks = await getBottleneckItems(ctx.db, daily.name, threshold);
+          const dropStats = await getHighDropUsers(ctx.db, daily.name, startDate, endDate, 30);
+
+          let trends: TrendData | undefined;
+          if (period !== 'daily') {
+            const periodDays = period === 'weekly' ? 7 : 28;
+            const prevEndDateObj = new Date(startDateObj);
+            prevEndDateObj.setDate(prevEndDateObj.getDate() - 1);
+            const prevStartDateObj = new Date(prevEndDateObj);
+            prevStartDateObj.setDate(prevStartDateObj.getDate() - periodDays + 1);
+
+            const prevStartDate = formatDate(prevStartDateObj);
+            const prevEndDate = formatDate(prevEndDateObj);
+            const prevWorkdays = countWorkdays(schedule.days, prevStartDate, prevEndDate);
+
+            const currentStats = await getPeriodStats(ctx.db, daily.name, startDate, endDate, totalWorkdays);
+            const previousStats = await getPeriodStats(ctx.db, daily.name, prevStartDate, prevEndDate, prevWorkdays);
+
+            trends = { current: currentStats, previous: previousStats };
+          }
+
+          const reportText = formatFullReport({
+            dailyName: daily.name,
+            period,
+            startDate,
+            endDate,
+            submissions,
+            stats,
+            totalWorkdays,
+            bottlenecks,
+            dropStats,
+            trends,
+          });
+          reportParts.push(reportText);
+        } catch (err) {
+          console.error(`Failed to generate report for ${daily.name}:`, err);
+          reportParts.push(`_Failed to generate report for ${daily.name}_`);
+        }
+      }
+
+      const combined = reportParts.join('\n\n---\n\n');
+      await sendDM(ctx.slackToken, ctx.userId, combined);
+      const periodLabel = period === 'daily' ? 'Daily' : period === 'weekly' ? 'Weekly' : '4-Week';
+      return ephemeralResponse(`📋 ${periodLabel} report for all dailies sent to your DMs!`);
+    } catch (err) {
+      console.error('Failed to generate report:', err);
+      return ephemeralResponse('❌ Failed to generate report. Please try again.');
+    }
   }
 
   const reportDaily = getDaily(reportDailyName);

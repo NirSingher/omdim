@@ -177,17 +177,33 @@ describe('command handlers', () => {
   });
 
   describe('handleList', () => {
-    it('lists available dailies when no name provided', async () => {
+    it('lists all dailies with participants when no name provided', async () => {
       vi.mocked(getDailies).mockReturnValue([
         { name: 'daily-il', channel: '#il-standup' },
         { name: 'daily-us', channel: '#us-standup' },
       ] as any);
+      vi.mocked(getParticipants)
+        .mockResolvedValueOnce([{ slack_user_id: 'U111' }] as any)
+        .mockResolvedValueOnce([{ slack_user_id: 'U222' }, { slack_user_id: 'U333' }] as any);
 
       const response = await handleList(createContext(['list']));
 
-      expect(response.text).toContain('Available dailies');
       expect(response.text).toContain('daily-il');
       expect(response.text).toContain('daily-us');
+      expect(response.text).toContain('<@U111>');
+      expect(response.text).toContain('<@U222>');
+    });
+
+    it('lists all dailies with participants when "all" provided', async () => {
+      vi.mocked(getDailies).mockReturnValue([
+        { name: 'daily-il', channel: '#il-standup' },
+      ] as any);
+      vi.mocked(getParticipants).mockResolvedValue([{ slack_user_id: 'U111' }] as any);
+
+      const response = await handleList(createContext(['list', 'all']));
+
+      expect(response.text).toContain('daily-il');
+      expect(response.text).toContain('<@U111>');
     });
 
     it('validates daily exists', async () => {

@@ -66,11 +66,11 @@ See `requirements.md` and `architecture.md`
 - [ ] Use `:x:` for dropped items
 - [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
 
-### "All Dailies" Support
-- [ ] Support `all` as daily name in commands (e.g., `/standup digest all`)
-- [ ] Runs command for each defined daily sequentially
-- [ ] Combines output into single response where appropriate
-- [ ] Works with: `digest`, `report`, `list`
+### "All Dailies" Support ✅
+- [x] Support `all` as daily name in commands (e.g., `/standup digest all`)
+- [x] Runs command for each defined daily sequentially
+- [x] Combines output into single response where appropriate
+- [x] Works with: `prompt`, `digest`, `report`, `list`
 
 ---
 

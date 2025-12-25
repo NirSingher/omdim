@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(npm run dev:*)",
+      "Bash(pkill:*)",
+      "Bash(ngrok http:*)",
+      "Bash(npm test:*)"
     ]
   }
 }
