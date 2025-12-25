@@ -100,6 +100,8 @@ gh pr create --base dev
 - Run `npm test` before committing
 - Use rebase merge for PRs
 - Delete branches after merge
+- **NEVER push directly to `main`** — always create a PR from `dev`
+- Push to `dev` is allowed after tests pass
 
 ## Commands Available
 - `/implement <step>` - Implement a specific step from the plan
