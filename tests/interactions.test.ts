@@ -45,8 +45,9 @@ vi.mock('../lib/format', () => ({
   postStandupToChannel: vi.fn(),
 }));
 
-import { handleSnoozeBottleneck, handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
-import { snoozeItem } from '../lib/db';
+import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, InteractionPayload } from '../lib/handlers/interactions';
+import { snoozeItem, getPreviousSubmission } from '../lib/db';
+import { openModal } from '../lib/slack';
 
 describe('interaction handlers', () => {
   beforeEach(() => {
@@ -192,6 +193,100 @@ describe('interaction handlers', () => {
       const result = await handleInteraction(payload, ctx);
 
       expect(result).toBe(true);
+    });
+  });
+
+  describe('handleOpenStandup - carry over persistence', () => {
+    it('includes carried items from previous day in modal', async () => {
+      // Simulate: yesterday user had plans ["A", "B"]
+      // They marked A=done, B=continue, and added ["C"] as new plan
+      // Today's modal should show ["B", "C"] as yesterday's plans
+      vi.mocked(getPreviousSubmission).mockResolvedValueOnce({
+        id: 1,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-il',
+        submitted_at: new Date(),
+        date: '2025-12-21',
+        yesterday_completed: ['A'],
+        yesterday_incomplete: ['B'], // This was carried over
+        unplanned: null,
+        today_plans: ['C'], // This was new plan
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: null,
+      });
+
+      vi.mocked(openModal).mockResolvedValueOnce(true);
+
+      const payload: InteractionPayload = {
+        type: 'block_actions',
+        trigger_id: 'trigger123',
+        user: { id: 'U12345' },
+        actions: [{ action_id: 'open_standup', value: 'daily-il' }],
+      };
+
+      const ctx = {
+        db: {} as any,
+        slackToken: 'xoxb-test',
+      };
+
+      await handleOpenStandup(payload, ctx);
+
+      // Verify openModal was called
+      expect(openModal).toHaveBeenCalled();
+
+      // Get the modal that was built
+      const modalCall = vi.mocked(openModal).mock.calls[0];
+      const modal = modalCall[2];
+
+      // Parse private_metadata to see what plans are passed to the modal
+      const metadata = JSON.parse(modal.private_metadata);
+
+      // CRITICAL: Both carried item "B" and new plan "C" should appear
+      expect(metadata.yesterdayPlans).toContain('B');
+      expect(metadata.yesterdayPlans).toContain('C');
+      expect(metadata.yesterdayPlans).toHaveLength(2);
+    });
+
+    it('preserves carry chain across multiple days', async () => {
+      // Day 3 scenario: Item "X" was carried Day1->Day2->Day3
+      // Previous submission (Day 2) has:
+      // - yesterday_incomplete: ["X"] (carried from Day 1)
+      // - today_plans: ["Y"] (new on Day 2)
+      // Day 3 modal should show both ["X", "Y"]
+      vi.mocked(getPreviousSubmission).mockResolvedValueOnce({
+        id: 2,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-il',
+        submitted_at: new Date(),
+        date: '2025-12-21',
+        yesterday_completed: [],
+        yesterday_incomplete: ['Task carried twice'], // Still being carried
+        unplanned: null,
+        today_plans: ['New task from yesterday'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: null,
+      });
+
+      vi.mocked(openModal).mockResolvedValueOnce(true);
+
+      const payload: InteractionPayload = {
+        type: 'block_actions',
+        trigger_id: 'trigger123',
+        user: { id: 'U12345' },
+        actions: [{ action_id: 'open_standup', value: 'daily-il' }],
+      };
+
+      await handleOpenStandup(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      const modalCall = vi.mocked(openModal).mock.calls[0];
+      const modal = modalCall[2];
+      const metadata = JSON.parse(modal.private_metadata);
+
+      // Both should be in yesterday's plans for today's modal
+      expect(metadata.yesterdayPlans).toContain('Task carried twice');
+      expect(metadata.yesterdayPlans).toContain('New task from yesterday');
     });
   });
 });
