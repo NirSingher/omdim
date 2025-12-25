@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS work_items (
 -- Migration for existing databases:
 -- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS snoozed_until DATE;
 
+-- Out of Office periods
+CREATE TABLE IF NOT EXISTS ooo (
+  id SERIAL PRIMARY KEY,
+  slack_user_id TEXT NOT NULL,
+  daily_name TEXT NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(slack_user_id, daily_name, start_date, end_date)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_participants_daily ON participants(daily_name);
 CREATE INDEX IF NOT EXISTS idx_submissions_date ON submissions(date);
@@ -75,3 +86,4 @@ CREATE INDEX IF NOT EXISTS idx_slack_users_updated ON slack_users(updated_at);
 CREATE INDEX IF NOT EXISTS idx_work_items_user_daily ON work_items(slack_user_id, daily_name);
 CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
 CREATE INDEX IF NOT EXISTS idx_work_items_carry ON work_items(carry_count) WHERE carry_count >= 3;
+CREATE INDEX IF NOT EXISTS idx_ooo_lookup ON ooo(slack_user_id, daily_name, start_date, end_date);

@@ -25,6 +25,10 @@ vi.mock('../lib/db', () => ({
   getTeamStats: vi.fn(),
   getMissingSubmissions: vi.fn(),
   countWorkdays: vi.fn(),
+  getActiveOOOForDaily: vi.fn(() => []),
+  setOOO: vi.fn(),
+  clearOOO: vi.fn(),
+  getUserOOO: vi.fn(() => []),
 }));
 
 // Mock slack module
@@ -36,9 +40,9 @@ vi.mock('../lib/slack', () => ({
 
 // Mock prompt module
 vi.mock('../lib/prompt', () => ({
-  getUserTimezone: vi.fn(),
-  getUserDate: vi.fn(),
-  formatDate: vi.fn(),
+  getUserTimezone: vi.fn(() => ({ tz_offset: 0 })),
+  getUserDate: vi.fn(() => new Date('2024-01-15')),
+  formatDate: vi.fn(() => '2024-01-15'),
   sendPromptDM: vi.fn(),
 }));
 
@@ -57,12 +61,13 @@ import {
   handleDigest,
   handlePrompt,
   handleWeek,
+  handleOOO,
   handleCommand,
   CommandContext,
 } from '../lib/handlers/commands';
 
 import { isAdmin, getDaily, getSchedule, getDailies, getConfigError } from '../lib/config';
-import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays } from '../lib/db';
+import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO } from '../lib/db';
 import { parseUserId, sendDM } from '../lib/slack';
 import { getUserTimezone, getUserDate, formatDate, sendPromptDM } from '../lib/prompt';
 import { formatManagerDigest } from '../lib/format';
@@ -402,6 +407,64 @@ describe('command handlers', () => {
       expect(formatManagerDigest).toHaveBeenCalledWith(expect.objectContaining({
         period: 'weekly',
       }));
+    });
+  });
+
+  describe('handleOOO', () => {
+    it('requires user to be in a daily', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([]);
+
+      const response = await handleOOO(createContext(['ooo']));
+
+      expect(response.text).toContain('not part of any dailies');
+    });
+
+    it('shows current OOO status when no subcommand', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([{ daily_name: 'daily-il' }] as any);
+      vi.mocked(getUserOOO).mockResolvedValue([]);
+
+      const response = await handleOOO(createContext(['ooo']));
+
+      expect(response.text).toContain('OOO Status');
+      expect(response.text).toContain('daily-il');
+    });
+
+    it('sets OOO for tomorrow', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([{ daily_name: 'daily-il' }] as any);
+      vi.mocked(setOOO).mockResolvedValue({} as any);
+
+      const response = await handleOOO(createContext(['ooo', 'tomorrow']));
+
+      expect(setOOO).toHaveBeenCalled();
+      expect(response.text).toContain('Out of office tomorrow');
+    });
+
+    it('clears OOO periods', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([{ daily_name: 'daily-il' }] as any);
+      vi.mocked(clearOOO).mockResolvedValue(1);
+
+      const response = await handleOOO(createContext(['ooo', 'clear']));
+
+      expect(clearOOO).toHaveBeenCalled();
+      expect(response.text).toContain('Cleared');
+    });
+
+    it('sets OOO for date range', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([{ daily_name: 'daily-il' }] as any);
+      vi.mocked(setOOO).mockResolvedValue({} as any);
+
+      const response = await handleOOO(createContext(['ooo', '2025-01-01', 'to', '2025-01-05']));
+
+      expect(setOOO).toHaveBeenCalledWith(mockDb, 'U12345', 'daily-il', '2025-01-01', '2025-01-05');
+      expect(response.text).toContain('Out of office from');
+    });
+
+    it('shows usage for invalid subcommand', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([{ daily_name: 'daily-il' }] as any);
+
+      const response = await handleOOO(createContext(['ooo', 'invalid']));
+
+      expect(response.text).toContain('OOO Usage');
     });
   });
 

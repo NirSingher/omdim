@@ -4,7 +4,7 @@
  */
 
 import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats } from '../db';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
 import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse } from '../slack';
@@ -43,6 +43,7 @@ export function handleHelp(): CommandResponse {
     '*Omdim Commands*\n\n' +
     '`/standup help` - Show this help message\n' +
     '`/standup prompt [daily|all]` - Send standup prompt(s) to your DMs\n' +
+    '`/standup ooo [tomorrow|clear|dates]` - Manage out of office\n' +
     '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
     '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
     '`/standup list [daily|all]` - List participants in a daily\n' +
@@ -106,6 +107,12 @@ export async function handleRemove(ctx: CommandContext): Promise<CommandResponse
 export async function handleList(ctx: CommandContext): Promise<CommandResponse> {
   const listDailyName = ctx.args[1];
 
+  // Get today's date for OOO lookup
+  const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const userDate = getUserDate(tzOffset);
+  const todayStr = formatDate(userDate);
+
   // No arg or 'all' → show all dailies with participants
   if (!listDailyName || isAllDailies(listDailyName)) {
     const dailies = getDailies();
@@ -117,8 +124,14 @@ export async function handleList(ctx: CommandContext): Promise<CommandResponse> 
       const results: string[] = [];
       for (const daily of dailies) {
         const participants = await getParticipants(ctx.db, daily.name);
+        const oooRecords = await getActiveOOOForDaily(ctx.db, daily.name, todayStr);
+        const oooUserIds = new Set(oooRecords.map(r => r.slack_user_id));
+
         const userList = participants.length > 0
-          ? participants.map(p => `<@${p.slack_user_id}>`).join(', ')
+          ? participants.map(p => {
+              const oooLabel = oooUserIds.has(p.slack_user_id) ? ' (OOO)' : '';
+              return `<@${p.slack_user_id}>${oooLabel}`;
+            }).join(', ')
           : '_no participants_';
         results.push(`*${daily.name}* (${daily.channel}): ${userList}`);
       }
@@ -139,7 +152,23 @@ export async function handleList(ctx: CommandContext): Promise<CommandResponse> 
     if (participants.length === 0) {
       return ephemeralResponse(`*${listDailyName}* has no participants yet.`);
     }
-    const userList = participants.map(p => `• <@${p.slack_user_id}>`).join('\n');
+
+    // Get OOO records for this daily
+    const oooRecords = await getActiveOOOForDaily(ctx.db, listDailyName, todayStr);
+    const oooMap = new Map<string, OOORecord>();
+    for (const r of oooRecords) {
+      oooMap.set(r.slack_user_id, r);
+    }
+
+    const userList = participants.map(p => {
+      const ooo = oooMap.get(p.slack_user_id);
+      if (ooo) {
+        const endDate = ooo.end_date.split('T')[0];
+        return `• <@${p.slack_user_id}> _(OOO until ${endDate})_`;
+      }
+      return `• <@${p.slack_user_id}>`;
+    }).join('\n');
+
     return ephemeralResponse(`*${listDailyName}* participants:\n${userList}`);
   } catch (err) {
     console.error('Failed to list participants:', err);
@@ -360,6 +389,117 @@ export async function handlePrompt(ctx: CommandContext): Promise<CommandResponse
   } catch (err) {
     console.error('Failed to send prompt:', err);
     return ephemeralResponse('❌ Failed to send prompt. Please try again.');
+  }
+}
+
+/** Manage Out of Office status */
+export async function handleOOO(ctx: CommandContext): Promise<CommandResponse> {
+  const subcommand = ctx.args[1]?.toLowerCase();
+
+  try {
+    // Get user's dailies
+    const userDailies = await getUserDailies(ctx.db, ctx.userId);
+
+    if (userDailies.length === 0) {
+      return ephemeralResponse('❌ You\'re not part of any dailies. Ask an admin to add you.');
+    }
+
+    // Get user's timezone for date calculations
+    const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
+    const tzOffset = userInfo?.tz_offset || 0;
+    const userDate = getUserDate(tzOffset);
+
+    // No subcommand - show current OOO status
+    if (!subcommand) {
+      const statusLines: string[] = [];
+      for (const d of userDailies) {
+        const oooRecords = await getUserOOO(ctx.db, ctx.userId, d.daily_name);
+        if (oooRecords.length > 0) {
+          const periods = oooRecords.map(r => {
+            const start = r.start_date.split('T')[0];
+            const end = r.end_date.split('T')[0];
+            return start === end ? start : `${start} to ${end}`;
+          }).join(', ');
+          statusLines.push(`*${d.daily_name}*: OOO ${periods}`);
+        } else {
+          statusLines.push(`*${d.daily_name}*: _not OOO_`);
+        }
+      }
+      return ephemeralResponse('*OOO Status*\n' + statusLines.join('\n'));
+    }
+
+    // Handle 'clear' subcommand
+    if (subcommand === 'clear') {
+      let cleared = 0;
+      for (const d of userDailies) {
+        cleared += await clearOOO(ctx.db, ctx.userId, d.daily_name);
+      }
+      if (cleared > 0) {
+        return ephemeralResponse(`✅ Cleared ${cleared} OOO period(s).`);
+      }
+      return ephemeralResponse('No OOO periods to clear.');
+    }
+
+    // Handle 'tomorrow' subcommand
+    if (subcommand === 'tomorrow') {
+      const tomorrow = new Date(userDate);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = formatDate(tomorrow);
+
+      for (const d of userDailies) {
+        await setOOO(ctx.db, ctx.userId, d.daily_name, tomorrowStr, tomorrowStr);
+      }
+      return ephemeralResponse(`✅ Out of office tomorrow (${tomorrowStr}) for all your dailies.`);
+    }
+
+    // Handle date range: 'YYYY-MM-DD to YYYY-MM-DD'
+    const dateMatch = ctx.args.slice(1).join(' ').match(/^(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})$/i);
+    if (dateMatch) {
+      const startDate = dateMatch[1];
+      const endDate = dateMatch[2];
+
+      // Validate dates
+      const startObj = new Date(startDate);
+      const endObj = new Date(endDate);
+      if (isNaN(startObj.getTime()) || isNaN(endObj.getTime())) {
+        return ephemeralResponse('❌ Invalid date format. Use: `YYYY-MM-DD to YYYY-MM-DD`');
+      }
+      if (endObj < startObj) {
+        return ephemeralResponse('❌ End date must be after start date.');
+      }
+
+      for (const d of userDailies) {
+        await setOOO(ctx.db, ctx.userId, d.daily_name, startDate, endDate);
+      }
+      return ephemeralResponse(`✅ Out of office from ${startDate} to ${endDate} for all your dailies.`);
+    }
+
+    // Handle single date: 'YYYY-MM-DD'
+    const singleDateMatch = subcommand.match(/^(\d{4}-\d{2}-\d{2})$/);
+    if (singleDateMatch) {
+      const date = singleDateMatch[1];
+      const dateObj = new Date(date);
+      if (isNaN(dateObj.getTime())) {
+        return ephemeralResponse('❌ Invalid date format. Use: `YYYY-MM-DD`');
+      }
+
+      for (const d of userDailies) {
+        await setOOO(ctx.db, ctx.userId, d.daily_name, date, date);
+      }
+      return ephemeralResponse(`✅ Out of office on ${date} for all your dailies.`);
+    }
+
+    return ephemeralResponse(
+      '*OOO Usage:*\n' +
+      '`/standup ooo` - Show current OOO status\n' +
+      '`/standup ooo tomorrow` - Skip tomorrow\n' +
+      '`/standup ooo YYYY-MM-DD` - Skip a specific date\n' +
+      '`/standup ooo YYYY-MM-DD to YYYY-MM-DD` - Set date range\n' +
+      '`/standup ooo clear` - Cancel all OOO periods'
+    );
+  } catch (err) {
+    console.error('Failed to manage OOO:', err);
+    return ephemeralResponse('❌ Failed to manage OOO. Please try again.');
   }
 }
 
@@ -624,6 +764,8 @@ export async function handleCommand(
       return handleWeek(ctx);
     case 'prompt':
       return handlePrompt(ctx);
+    case 'ooo':
+      return handleOOO(ctx);
     case 'force-prompt':
       return handleForcePrompt(ctx);
     default:

@@ -39,12 +39,13 @@ See `requirements.md` and `architecture.md`
 - [ ] Admin command to reload config: `/standup config reload`
 - [ ] Store config overrides in DB (takes precedence over YAML)
 
-### Out of Office (OOO)
-- [ ] `/standup ooo tomorrow` - skip next prompt
-- [ ] `/standup ooo 2024-12-25 to 2025-01-02` - date range
-- [ ] `/standup ooo clear` - cancel OOO
-- [ ] Show OOO status in `/standup list`
-- [ ] Skip prompts and exclude from "missing" stats during OOO
+### Out of Office (OOO) ✅
+- [x] `/standup ooo tomorrow` - skip next prompt
+- [x] `/standup ooo 2024-12-25 to 2025-01-02` - date range
+- [x] `/standup ooo clear` - cancel OOO
+- [x] `/standup ooo` - show current OOO status
+- [x] Show OOO status in `/standup list`
+- [x] Skip prompts and exclude from "missing" stats during OOO
 
 ### Admin Management
 - [ ] `/standup admin add @user` - add admin (super-admin only)

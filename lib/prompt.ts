@@ -5,7 +5,7 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser } from './db';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO } from './db';
 import { getSchedule, getConfigError } from './config';
 import { getUserInfo, postMessage } from './slack';
 
@@ -346,6 +346,15 @@ async function processParticipant(
   if (!force && !isWorkday(schedule.days, userDate)) {
     console.log(`Skipping ${userId}: not a workday`);
     return 'skipped';
+  }
+
+  // Check if user is out of office (skip if force)
+  if (!force) {
+    const oooStatus = await getActiveOOO(db, userId, dailyName, todayStr);
+    if (oooStatus) {
+      console.log(`Skipping ${userId}: out of office until ${oooStatus.end_date}`);
+      return 'skipped';
+    }
   }
 
   // Get prompt time (use override if set, otherwise schedule default)
