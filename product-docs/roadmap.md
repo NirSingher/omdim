@@ -5,11 +5,29 @@
 ### MVP (Done)
 See `requirements.md` and `architecture.md`
 
-### Testing Infrastructure
-- [ ] Unit tests for core logic (modal building, formatting, date/timezone)
-- [ ] Integration tests for Slack payload parsing
-- [ ] Mock Slack API responses for handler testing
+### Testing Infrastructure ✅
+- [x] Unit tests for core logic (modal building, formatting, date/timezone)
+- [x] Integration tests for Slack payload parsing
+- [x] Mock Slack API responses for handler testing
 - [ ] CI pipeline (GitHub Actions)
+
+### Stats & Analytics (Partially Done)
+- [x] Completion rates by user/team
+- [x] Average items per standup (planned vs completed)
+- [x] Blocker frequency
+- [x] Trend comparison to previous period (↑↓→ indicators)
+- [ ] Blocker resolution time tracking
+- [ ] Trend visualization (sparklines in Slack?)
+
+### Automated Digests ✅
+- [x] Scheduled daily digest at 2pm UTC
+- [x] Scheduled weekly digest on configurable day per-daily
+- [x] Multiple managers per daily
+- [x] Bottleneck detection (carried items, high drop rates)
+- [x] Snooze button for bottleneck items (7-day snooze via interactive button)
+- [x] Compact "Option C" digest format (action-first, ~15 lines)
+- [x] `/standup report <daily> [day|week|month]` - full report with individual breakdowns
+- [x] Team rankings (moved to full report command)
 
 ---
 
@@ -34,8 +52,10 @@ See `requirements.md` and `architecture.md`
 - [ ] `/standup admin list` - show all admins
 - [ ] Define super-admins in config (can manage other admins)
 
-### Force Prompt Command
+### Force Prompt Command (Partial)
+- [x] `/standup force-prompt <daily>` - dev mode command to force prompt yourself
 - [ ] `/standup prompt all <daily>` - admin command to prompt all participants
+- [ ] `/standup force-prompt all <daily>` - admin command to prompt all participants
 - [ ] Confirmation step before mass-prompting
 - [ ] Show summary: "Sent prompts to 7 users"
 
@@ -45,6 +65,12 @@ See `requirements.md` and `architecture.md`
 - [ ] Use `:arrow_right:` for continued items
 - [ ] Use `:x:` for dropped items
 - [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
+
+### "All Dailies" Support
+- [ ] Support `all` as daily name in commands (e.g., `/standup digest all`)
+- [ ] Runs command for each defined daily sequentially
+- [ ] Combines output into single response where appropriate
+- [ ] Works with: `digest`, `report`, `list`
 
 ---
 
@@ -59,22 +85,6 @@ See `requirements.md` and `architecture.md`
 - [ ] Limit slash commands per user (e.g., 10/min)
 - [ ] Prevent abuse of digest generation
 - [ ] Return friendly error on limit hit
-
-### Stats & Analytics (Partially Done)
-- [x] Completion rates by user/team
-- [x] Average items per standup (planned vs completed)
-- [x] Blocker frequency
-- [x] Trend comparison to previous period (↑↓→ indicators)
-- [ ] Blocker resolution time tracking
-- [ ] Trend visualization (sparklines in Slack?)
-
-### Automated Digests ✅
-- [x] Scheduled daily digest at 2pm UTC
-- [x] Scheduled weekly digest on configurable day per-daily
-- [x] Multiple managers per daily
-- [x] Team rankings with scoring formula
-- [x] Bottleneck detection (carried items, high drop rates)
-- [x] Snooze button for bottleneck items (7-day snooze via interactive button)
 
 ### Alerts & Thresholds (Partially Done)
 Configurable alerts when patterns emerge:
@@ -98,7 +108,7 @@ dailies:
 
 ## Phase 3: Integrations
 
-> **Note**: Config schema supports `integrations` placeholder for future GitHub/Linear integration. Currently displays "Not configured" in digests.
+> **Note**: Config schema supports `integrations` placeholder for future GitHub/Linear integration. Work alignment section removed from digest for compactness - will be re-added when integrations are implemented.
 
 ### GitHub Integration
 

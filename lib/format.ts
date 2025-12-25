@@ -333,181 +333,303 @@ export interface DigestOptions {
 }
 
 /**
- * Format a comprehensive manager digest with full team stats
+ * Format a compact manager digest (Option C: Priority-First)
+ * Lead with action items, compact team summary, no noise
  */
 export function formatManagerDigest(options: DigestOptions): string {
-  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, missingToday, bottlenecks, dropStats, rankings, trends, integrations } = options;
+  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, missingToday, bottlenecks, dropStats, trends } = options;
 
   const periodLabel = period === 'daily' ? 'Daily'
     : period === 'weekly' ? 'Weekly'
     : '4-Week';
 
+  // Format date range compactly
+  const formatShortDate = (d: string) => {
+    const date = new Date(d);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
   const dateRange = period === 'daily'
-    ? endDate
-    : `${startDate} to ${endDate}`;
+    ? formatShortDate(endDate)
+    : `${formatShortDate(startDate)}-${formatShortDate(endDate)}`;
 
   const lines: string[] = [];
-
-  // Header
-  lines.push(`📊 *${dailyName} ${periodLabel} Digest*`);
-  lines.push(`_${dateRange}_\n`);
-
-  // Summary stats
-  const totalSubmissions = submissions.length;
-  const uniqueSubmitters = new Set(submissions.map(s => s.slack_user_id)).size;
   const totalParticipants = stats.length;
 
-  lines.push(`*Summary:*`);
-  lines.push(`• ${totalSubmissions} submissions from ${uniqueSubmitters}/${totalParticipants} team members`);
+  // Compact header
+  lines.push(`📊 *${dailyName} ${periodLabel}* · ${dateRange}`);
+  lines.push('');
 
-  if (totalWorkdays > 0) {
-    // Show participation rate with trend indicator if trends available
+  // Stats line (inline)
+  const statParts: string[] = [];
+  if (totalWorkdays > 0 && totalParticipants > 0) {
     if (trends && trends.previous.total_submissions > 0) {
-      // Use trends data for consistent period comparison
-      const participationTrend = formatTrend(trends.current.participation_rate, trends.previous.participation_rate, '%', true);
-      lines.push(`• Participation: ${participationTrend}`);
-
-      // Show completion rate trend (only for weekly/4-week with enough data)
+      const participationTrend = formatTrendCompact(trends.current.participation_rate, trends.previous.participation_rate, true);
+      statParts.push(`${participationTrend} participation`);
       if (period !== 'daily' && trends.current.total_items_completed + trends.current.total_items_dropped > 0) {
-        const completionTrend = formatTrend(trends.current.completion_rate, trends.previous.completion_rate, '%', true);
-        lines.push(`• Completion: ${completionTrend}`);
-      }
-
-      // Show blocker rate trend (lower is better)
-      if (trends.previous.blocker_rate > 0 || trends.current.blocker_rate > 0) {
-        const blockerTrend = formatTrend(trends.current.blocker_rate, trends.previous.blocker_rate, '%', false);
-        lines.push(`• Blockers: ${blockerTrend}`);
+        const completionTrend = formatTrendCompact(trends.current.completion_rate, trends.previous.completion_rate, true);
+        statParts.push(`${completionTrend} completion`);
       }
     } else {
-      const avgRate = totalParticipants > 0
-        ? Math.round((totalSubmissions / (totalWorkdays * totalParticipants)) * 100)
-        : 0;
-      lines.push(`• ${avgRate}% overall participation rate`);
+      const avgRate = Math.round((submissions.length / (totalWorkdays * totalParticipants)) * 100);
+      statParts.push(`${avgRate}% participation`);
+    }
+  }
+  if (statParts.length > 0) {
+    lines.push(statParts.join(' · '));
+  }
+
+  // Collect all action items
+  const actionItems: string[] = [];
+
+  // Stuck items (bottlenecks)
+  if (bottlenecks && bottlenecks.length > 0) {
+    for (const item of bottlenecks.slice(0, 3)) {
+      actionItems.push(`🔥 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" stuck ${item.days_pending} days`);
     }
   }
 
-  // Count blockers (only if not showing trend version)
-  if (!trends || trends.previous.total_submissions === 0) {
-    // Count individual blocker lines, not just submissions with blockers
-    const blockersCount = submissions.reduce((count, s) => {
-      if (s.blockers && s.blockers.trim()) {
-        return count + s.blockers.split('\n').filter(line => line.trim()).length;
+  // Blockers
+  for (const sub of submissions) {
+    if (sub.blockers && sub.blockers.trim()) {
+      const blockerLines = sub.blockers.split('\n').filter(line => line.trim());
+      for (const line of blockerLines.slice(0, 2)) {
+        actionItems.push(`🚧 <@${sub.slack_user_id}>: ${truncate(line.trim(), 40)}`);
       }
-      return count;
-    }, 0);
-    if (blockersCount > 0) {
-      lines.push(`• ⚠️ ${blockersCount} blocker${blockersCount !== 1 ? 's' : ''} reported`);
+      if (blockerLines.length > 2) {
+        actionItems.push(`🚧 <@${sub.slack_user_id}>: _(${blockerLines.length - 2} more)_`);
+        break; // Don't flood with blockers from one person
+      }
+    }
+    if (actionItems.length >= 6) break; // Cap total action items
+  }
+
+  // Needs Attention section (only if there are action items)
+  if (actionItems.length > 0) {
+    lines.push('');
+    lines.push(`⚠️ *Needs Attention*`);
+    for (const item of actionItems.slice(0, 6)) {
+      lines.push(item);
     }
   }
-  lines.push('');
 
   // Missing submissions (for daily only)
   if (period === 'daily' && missingToday && missingToday.length > 0) {
-    lines.push(`*Not yet submitted:*`);
-    for (const userId of missingToday) {
-      lines.push(`• <@${userId}>`);
-    }
     lines.push('');
+    lines.push(`*Not submitted:* ${missingToday.map(u => `<@${u}>`).join(' · ')}`);
   }
 
-  // Rankings section (for weekly and 4-week only - too noisy for daily)
-  if ((period === 'weekly' || period === '4-week') && rankings && rankings.length > 0) {
-    lines.push(`*🏆 Team Rankings:*`);
-    for (const r of rankings.slice(0, 5)) {
-      const medal = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : `${r.rank}.`;
-      const warning = r.drop_rate > 30 ? ' ⚠️' : '';
-      lines.push(`${medal} <@${r.slack_user_id}> (${r.score} pts) - ${r.participation_rate}% participation, ${r.completion_rate}% completion${warning}`);
+  // Compact team section
+  lines.push('');
+  lines.push(`👥 *Team*`);
+
+  // Build drop rate lookup for quick access
+  const dropRateMap = new Map<string, number>();
+  if (dropStats) {
+    for (const ds of dropStats) {
+      dropRateMap.set(ds.slack_user_id, ds.drop_rate);
     }
-    if (rankings.length > 5) {
-      lines.push(`_...and ${rankings.length - 5} more_`);
-    }
-    lines.push('');
   }
 
-  // Team member breakdown
-  lines.push(`*Team Performance:*`);
   for (const member of stats) {
     const rate = totalWorkdays > 0
       ? Math.round((Number(member.submission_count) / totalWorkdays) * 100)
       : 0;
     const emoji = rate >= 80 ? '🟢' : rate >= 50 ? '🟡' : '🔴';
+    const completed = Number(member.total_completed);
 
-    lines.push(`${emoji} <@${member.slack_user_id}>: ${member.submission_count}/${totalWorkdays} days (${rate}%)`);
-    if (Number(member.total_completed) > 0 || Number(member.total_planned) > 0) {
-      lines.push(`    ✅ ${member.total_completed} completed • 📋 ${member.total_planned} planned • ${member.avg_items_per_day}/day avg`);
+    let line = `${emoji} <@${member.slack_user_id}> ${member.submission_count}/${totalWorkdays}`;
+    if (completed > 0) {
+      line += ` (${completed} done)`;
     }
-    if (Number(member.total_blockers) > 0) {
-      lines.push(`    ⚠️ ${member.total_blockers} days with blockers`);
+
+    // Add drop rate warning if high
+    const dropRate = dropRateMap.get(member.slack_user_id);
+    if (dropRate && dropRate > 30) {
+      line += ` — ${dropRate}% drops`;
     }
+
+    lines.push(line);
   }
+
+  // Footer with report hint (only for weekly/4-week)
+  if (period !== 'daily') {
+    lines.push('');
+    lines.push(`_Details: \`/standup report ${dailyName} ${period === 'weekly' ? 'week' : 'month'}\`_`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Format trend compactly: "80% ↑" or "80%"
+ */
+function formatTrendCompact(
+  current: number,
+  previous: number,
+  higherIsBetter: boolean = true
+): string {
+  const indicator = getTrendIndicator(current, previous, higherIsBetter);
+  if (!indicator || previous === 0) {
+    return `${current}%`;
+  }
+  return `${current}% ${indicator}`;
+}
+
+// ============================================================================
+// Full Report Formatting (for /standup report command)
+// ============================================================================
+
+export interface FullReportOptions {
+  dailyName: string;
+  period: DigestPeriod;
+  startDate: string;
+  endDate: string;
+  submissions: Submission[];
+  stats: TeamMemberStats[];
+  totalWorkdays: number;
+  bottlenecks?: BottleneckItem[];
+  dropStats?: DropStats[];
+  trends?: TrendData;
+}
+
+/**
+ * Format a detailed report with individual member breakdowns
+ * Used by /standup report command
+ */
+export function formatFullReport(options: FullReportOptions): string {
+  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, bottlenecks, dropStats, trends } = options;
+
+  // Format date range
+  const formatShortDate = (d: string) => {
+    const date = new Date(d);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  const dateRange = period === 'daily'
+    ? formatShortDate(endDate)
+    : `${formatShortDate(startDate)}-${formatShortDate(endDate)}`;
+
+  const lines: string[] = [];
+
+  // Header
+  lines.push(`📋 *${dailyName} Full Report* · ${dateRange}`);
   lines.push('');
 
-  // Bottlenecks section
-  const hasBottlenecks = bottlenecks && bottlenecks.length > 0;
-  const hasHighDropUsers = dropStats && dropStats.length > 0;
-
-  if (hasBottlenecks || hasHighDropUsers) {
-    lines.push(`*🔥 Bottlenecks:*`);
-
-    // High-carry items
-    if (hasBottlenecks) {
-      lines.push(`_Carried 3+ days:_`);
-      for (const item of bottlenecks!.slice(0, 5)) {
-        lines.push(`• <@${item.slack_user_id}>: "${truncate(item.text, 40)}" _(${item.days_pending} days, carried ${item.carry_count}x)_`);
-      }
-      if (bottlenecks!.length > 5) {
-        lines.push(`  _...and ${bottlenecks!.length - 5} more_`);
-      }
+  // Build lookup maps
+  const bottleneckMap = new Map<string, BottleneckItem[]>();
+  if (bottlenecks) {
+    for (const b of bottlenecks) {
+      const existing = bottleneckMap.get(b.slack_user_id) || [];
+      existing.push(b);
+      bottleneckMap.set(b.slack_user_id, existing);
     }
-
-    // High drop rate users
-    if (hasHighDropUsers) {
-      lines.push(`_High drop rate (>30%):_`);
-      for (const user of dropStats!.slice(0, 3)) {
-        lines.push(`• <@${user.slack_user_id}>: ${user.dropped_count}/${user.total_items} items dropped (${user.drop_rate}%)`);
-      }
-    }
-
-    lines.push('');
   }
 
-  // Blockers detail (show recent ones) - each line is a separate blocker
-  const blockers: string[] = [];
+  const dropRateMap = new Map<string, DropStats>();
+  if (dropStats) {
+    for (const ds of dropStats) {
+      dropRateMap.set(ds.slack_user_id, ds);
+    }
+  }
+
+  const blockerMap = new Map<string, Array<{ date: string; text: string }>>();
   for (const sub of submissions) {
     if (sub.blockers && sub.blockers.trim()) {
       const blockerLines = sub.blockers.split('\n').filter(line => line.trim());
+      const existing = blockerMap.get(sub.slack_user_id) || [];
       for (const line of blockerLines) {
-        blockers.push(`• <@${sub.slack_user_id}> (${sub.date}): ${line.trim()}`);
+        existing.push({ date: sub.date, text: line.trim() });
+      }
+      blockerMap.set(sub.slack_user_id, existing);
+    }
+  }
+
+  // Calculate completion rate per user from submissions
+  const completionMap = new Map<string, { completed: number; total: number }>();
+  for (const sub of submissions) {
+    const completed = parseJsonArray(sub.yesterday_completed);
+    const incomplete = parseJsonArray(sub.yesterday_incomplete);
+    const unplanned = parseJsonArray(sub.unplanned);
+
+    const existing = completionMap.get(sub.slack_user_id) || { completed: 0, total: 0 };
+    existing.completed += completed.length + unplanned.length;
+    existing.total += completed.length + unplanned.length + incomplete.length;
+    completionMap.set(sub.slack_user_id, existing);
+  }
+
+  // Individual member sections
+  for (const member of stats) {
+    const userId = member.slack_user_id;
+    const rate = totalWorkdays > 0
+      ? Math.round((Number(member.submission_count) / totalWorkdays) * 100)
+      : 0;
+    const emoji = rate >= 80 ? '🟢' : rate >= 50 ? '🟡' : '🔴';
+    const completed = Number(member.total_completed);
+    const planned = Number(member.total_planned);
+
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    lines.push('');
+    lines.push(`*<@${userId}>* ${emoji}`);
+    lines.push(`Participation: ${member.submission_count}/${totalWorkdays} days (${rate}%)`);
+
+    if (completed > 0 || planned > 0) {
+      lines.push(`Items: ${completed} completed · ${planned} planned · ${member.avg_items_per_day}/day avg`);
+    }
+
+    // Completion rate
+    const completionData = completionMap.get(userId);
+    if (completionData && completionData.total > 0) {
+      const completionRate = Math.round((completionData.completed / completionData.total) * 100);
+      lines.push(`Completion rate: ${completionRate}%`);
+    }
+
+    // Drop rate warning
+    const dropData = dropRateMap.get(userId);
+    if (dropData && dropData.drop_rate > 30) {
+      lines.push(`Drop rate: ${dropData.drop_rate}% ⚠️`);
+    }
+
+    // Blockers
+    const userBlockers = blockerMap.get(userId);
+    if (userBlockers && userBlockers.length > 0) {
+      lines.push(`Blockers: ${userBlockers.length} day${userBlockers.length !== 1 ? 's' : ''}`);
+      for (const b of userBlockers.slice(0, 3)) {
+        const shortDate = formatShortDate(b.date);
+        lines.push(`  • ${shortDate}: ${truncate(b.text, 45)}`);
+      }
+      if (userBlockers.length > 3) {
+        lines.push(`  _...and ${userBlockers.length - 3} more_`);
+      }
+    } else {
+      lines.push(`Blockers: 0 days`);
+    }
+
+    // Stuck items
+    const userBottlenecks = bottleneckMap.get(userId);
+    if (userBottlenecks && userBottlenecks.length > 0) {
+      lines.push('');
+      lines.push(`Stuck items:`);
+      for (const item of userBottlenecks.slice(0, 3)) {
+        lines.push(`  🔥 "${truncate(item.text, 40)}" (${item.days_pending} days, carried ${item.carry_count}x)`);
+      }
+      if (userBottlenecks.length > 3) {
+        lines.push(`  _...and ${userBottlenecks.length - 3} more_`);
       }
     }
-  }
 
-  if (blockers.length > 0) {
-    lines.push(`*Blockers:*`);
-    // Show up to 5 for daily, 10 for weekly, all for 4-week
-    const limit = period === 'daily' ? 5 : period === 'weekly' ? 10 : 20;
-    for (const blocker of blockers.slice(0, limit)) {
-      lines.push(blocker);
-    }
-    if (blockers.length > limit) {
-      lines.push(`_...and ${blockers.length - limit} more_`);
-    }
-  } else {
-    lines.push(`*Blockers:* None reported 🎉`);
-  }
-
-  // Work Alignment section (placeholder for GitHub/Linear integration)
-  if (integrations) {
     lines.push('');
-    if (integrations.github || integrations.linear) {
-      const enabled: string[] = [];
-      if (integrations.github) enabled.push('GitHub');
-      if (integrations.linear) enabled.push('Linear');
-      lines.push(`*🔗 Work Alignment:* _${enabled.join(' + ')} enabled_`);
-      // Future: Show actual alignment data here
-    } else {
-      lines.push(`*🔗 Work Alignment:* _Not configured_`);
-    }
+  }
+
+  // Period trends at bottom
+  if (trends && trends.previous.total_submissions > 0) {
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    lines.push('');
+    lines.push(`*Period Trends*`);
+    const participationTrend = formatTrendCompact(trends.current.participation_rate, trends.previous.participation_rate, true);
+    lines.push(`Participation: ${participationTrend}`);
+    const completionTrend = formatTrendCompact(trends.current.completion_rate, trends.previous.completion_rate, true);
+    lines.push(`Completion: ${completionTrend}`);
+    const blockerTrend = formatTrendCompact(trends.current.blocker_rate, trends.previous.blocker_rate, false);
+    lines.push(`Blockers: ${blockerTrend}`);
   }
 
   return lines.join('\n');

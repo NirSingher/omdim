@@ -3,9 +3,9 @@
  * Handles: help, prompt, add, remove, list, digest, week
  */
 
-import { getDailies, getDaily, getSchedule, isAdmin, getConfigError } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays } from '../db';
-import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, DigestPeriod } from '../format';
+import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold } from '../config';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats } from '../db';
+import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
 import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse } from '../slack';
 
@@ -37,8 +37,9 @@ export function handleHelp(): CommandResponse {
     '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
     '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
     '`/standup list <daily-name>` - List participants in a daily\n' +
-    '`/standup digest <daily-name> [period]` - Get team digest (DM)\n' +
-    '    _period: `daily` (default), `weekly`, `4-week`_'
+    '`/standup digest <daily-name> [period]` - Get team summary (DM)\n' +
+    '`/standup report <daily-name> [period]` - Get detailed team report (DM)\n' +
+    '    _period: `day` (default), `week`, `month`_'
   );
 }
 
@@ -260,6 +261,110 @@ export async function handleWeek(ctx: CommandContext): Promise<CommandResponse> 
   return handleDigest(ctx);
 }
 
+/** Get detailed report with individual breakdowns (sent as DM) */
+export async function handleReport(ctx: CommandContext): Promise<CommandResponse> {
+  const reportDailyName = ctx.args[1];
+  const periodArg = ctx.args[2]?.toLowerCase() || 'day';
+
+  if (!reportDailyName) {
+    return ephemeralResponse('Usage: `/standup report <daily-name> [day|week|month]`');
+  }
+
+  // Map period aliases
+  const periodMap: Record<string, DigestPeriod> = {
+    'day': 'daily',
+    'daily': 'daily',
+    'week': 'weekly',
+    'weekly': 'weekly',
+    'month': '4-week',
+    '4-week': '4-week',
+  };
+
+  const period = periodMap[periodArg];
+  if (!period) {
+    return ephemeralResponse(`❌ Invalid period "${periodArg}". Use: day, week, or month`);
+  }
+
+  const reportDaily = getDaily(reportDailyName);
+  if (!reportDaily) {
+    return ephemeralResponse(`❌ Daily "${reportDailyName}" not found.`);
+  }
+
+  const schedule = getSchedule(reportDaily.schedule);
+  if (!schedule) {
+    return ephemeralResponse(`❌ Schedule "${reportDaily.schedule}" not found.`);
+  }
+
+  try {
+    // Get user's timezone for date calculations
+    const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
+    const tzOffset = userInfo?.tz_offset || 0;
+    const userDate = getUserDate(tzOffset);
+    const endDate = formatDate(userDate);
+
+    // Calculate start date based on period
+    const startDateObj = new Date(userDate);
+    if (period === 'weekly') {
+      startDateObj.setDate(startDateObj.getDate() - 6);
+    } else if (period === '4-week') {
+      startDateObj.setDate(startDateObj.getDate() - 27);
+    }
+    const startDate = formatDate(startDateObj);
+
+    // Get data
+    const submissions = await getSubmissionsInRange(ctx.db, reportDailyName, startDate, endDate);
+    const stats = await getTeamStats(ctx.db, reportDailyName, startDate, endDate);
+    const totalWorkdays = countWorkdays(schedule.days, startDate, endDate);
+
+    // Get bottleneck data
+    const threshold = getBottleneckThreshold(reportDaily);
+    const bottlenecks = await getBottleneckItems(ctx.db, reportDailyName, threshold);
+    const dropStats = await getHighDropUsers(ctx.db, reportDailyName, startDate, endDate, 30);
+
+    // Get trend data (compare to previous period) for non-daily
+    let trends: TrendData | undefined;
+    if (period !== 'daily') {
+      const periodDays = period === 'weekly' ? 7 : 28;
+      const prevEndDateObj = new Date(startDateObj);
+      prevEndDateObj.setDate(prevEndDateObj.getDate() - 1);
+      const prevStartDateObj = new Date(prevEndDateObj);
+      prevStartDateObj.setDate(prevStartDateObj.getDate() - periodDays + 1);
+
+      const prevStartDate = formatDate(prevStartDateObj);
+      const prevEndDate = formatDate(prevEndDateObj);
+      const prevWorkdays = countWorkdays(schedule.days, prevStartDate, prevEndDate);
+
+      const currentStats = await getPeriodStats(ctx.db, reportDailyName, startDate, endDate, totalWorkdays);
+      const previousStats = await getPeriodStats(ctx.db, reportDailyName, prevStartDate, prevEndDate, prevWorkdays);
+
+      trends = {
+        current: currentStats,
+        previous: previousStats,
+      };
+    }
+
+    const reportText = formatFullReport({
+      dailyName: reportDailyName,
+      period,
+      startDate,
+      endDate,
+      submissions,
+      stats,
+      totalWorkdays,
+      bottlenecks,
+      dropStats,
+      trends,
+    });
+
+    await sendDM(ctx.slackToken, ctx.userId, reportText);
+    const periodLabel = period === 'daily' ? 'Daily' : period === 'weekly' ? 'Weekly' : '4-Week';
+    return ephemeralResponse(`📋 ${periodLabel} report sent to your DMs!`);
+  } catch (err) {
+    console.error('Failed to generate report:', err);
+    return ephemeralResponse('❌ Failed to generate report. Please try again.');
+  }
+}
+
 /** Force send a prompt - dev mode only, ignores existing submissions */
 export async function handleForcePrompt(ctx: CommandContext): Promise<CommandResponse> {
   if (!ctx.devMode) {
@@ -318,6 +423,8 @@ export async function handleCommand(
       return handleList(ctx);
     case 'digest':
       return handleDigest(ctx);
+    case 'report':
+      return handleReport(ctx);
     case 'week':
       return handleWeek(ctx);
     case 'prompt':
