@@ -57,6 +57,39 @@ const PROMPT_WINDOW_MINUTES = 120;
 /** Minimum time between prompts (30 minutes) */
 const REPROMPT_INTERVAL_MINUTES = 30;
 
+/** Reminder message variants - randomly selected for variety */
+const REMINDER_MESSAGES = [
+  // Direct
+  (daily: string) => `Your *${daily}* update is due - let's do this! :rocket:`,
+  (daily: string) => `Quick check-in time for *${daily}*! :alarm_clock:`,
+  (daily: string) => `Time to fill out your *${daily}* standup.`,
+  (daily: string) => `*${daily}* standup is waiting for you.`,
+  (daily: string) => `Please submit your *${daily}* update.`,
+  // Friendly
+  (daily: string) => `Psst... *${daily}* standup time! :eyes:`,
+  (daily: string) => `Hey! Don't forget your *${daily}* update :wave:`,
+  (daily: string) => `Your team wants to hear from you! *${daily}* time :speech_balloon:`,
+  (daily: string) => `Got a minute? *${daily}* standup is calling :telephone_receiver:`,
+  (daily: string) => `Friendly nudge: *${daily}* update awaits :point_left:`,
+  // Witty
+  (daily: string) => `Plot twist: *${daily}* standup still needs your input :movie_camera:`,
+  (daily: string) => `Breaking news: *${daily}* update remains unsubmitted :newspaper:`,
+  (daily: string) => `*${daily}* standup: still a thing that exists and needs you :sparkles:`,
+  (daily: string) => `Your *${daily}* update called. It misses you :phone:`,
+  (daily: string) => `Fun fact: *${daily}* standups work better when you fill them out :bulb:`,
+  // Snarky
+  (daily: string) => `Still waiting on your *${daily}* update :hourglass_flowing_sand:`,
+  (daily: string) => `*${daily}* standup isn't going to fill itself out :coffee:`,
+  (daily: string) => `Your *${daily}* update is feeling neglected :wilted_flower:`,
+  (daily: string) => `Roses are red, violets are blue, *${daily}* standup is still waiting for you :rose:`,
+  (daily: string) => `The *${daily}* standup form is lonely. Very lonely. :new_moon_with_face:`,
+  // Ridiculous
+  (daily: string) => `BOOP. *${daily}* standup. BOOP. :robot_face:`,
+  (daily: string) => `Legend says those who skip *${daily}* standups are haunted by incomplete tasks :ghost:`,
+  (daily: string) => `*${daily}* standup or it didn't happen :shrug:`,
+  (daily: string) => `A wild *${daily}* standup appeared! Quick, fill it out! :zap:`,
+];
+
 // ============================================================================
 // User Timezone
 // ============================================================================
@@ -142,6 +175,36 @@ export function formatDate(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
+/**
+ * Calculate how many minutes late a user is from their scheduled time
+ */
+export function getMinutesLate(scheduleTime: string, userDate: Date): number {
+  const [scheduleHour, scheduleMinute] = scheduleTime.split(':').map(Number);
+  const scheduleTotalMinutes = scheduleHour * 60 + scheduleMinute;
+  const userTotalMinutes = userDate.getHours() * 60 + userDate.getMinutes();
+  return Math.max(0, userTotalMinutes - scheduleTotalMinutes);
+}
+
+/**
+ * Format lateness as human-readable prefix
+ */
+export function formatLatenessPrefix(minutesLate: number): string {
+  if (minutesLate < 5) return '';
+  if (minutesLate < 60) return `${minutesLate} min late · `;
+  const hours = Math.floor(minutesLate / 60);
+  const mins = minutesLate % 60;
+  if (mins === 0) return `${hours}h late · `;
+  return `${hours}h ${mins}m late · `;
+}
+
+/**
+ * Pick a random reminder message
+ */
+function getRandomReminderMessage(dailyName: string): string {
+  const idx = Math.floor(Math.random() * REMINDER_MESSAGES.length);
+  return REMINDER_MESSAGES[idx](dailyName);
+}
+
 // ============================================================================
 // Prompt DM
 // ============================================================================
@@ -149,13 +212,15 @@ export function formatDate(date: Date): string {
 /**
  * Build the prompt DM blocks with "Open Standup" button
  */
-function buildPromptBlocks(dailyName: string) {
+function buildPromptBlocks(dailyName: string, minutesLate: number) {
+  const latenessPrefix = formatLatenessPrefix(minutesLate);
+  const message = getRandomReminderMessage(dailyName);
   return [
     {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `Hey! It's time for your *${dailyName}* standup. :memo:`,
+        text: `${latenessPrefix}${message}`,
       },
     },
     {
@@ -183,10 +248,12 @@ function buildPromptBlocks(dailyName: string) {
 export async function sendPromptDM(
   slackToken: string,
   userId: string,
-  dailyName: string
+  dailyName: string,
+  minutesLate = 0
 ): Promise<boolean> {
-  const text = `Time for your *${dailyName}* standup!`;
-  const blocks = buildPromptBlocks(dailyName);
+  const latenessPrefix = formatLatenessPrefix(minutesLate);
+  const text = `${latenessPrefix}Time for your *${dailyName}* standup!`;
+  const blocks = buildPromptBlocks(dailyName, minutesLate);
   const result = await postMessage(slackToken, userId, text, blocks);
   return result !== null;
 }
@@ -305,8 +372,11 @@ async function processParticipant(
     return 'skipped';
   }
 
+  // Calculate how late the user is
+  const minutesLate = getMinutesLate(promptTime, userDate);
+
   // Send the prompt DM
-  const sent = await sendPromptDM(slackToken, userId, dailyName);
+  const sent = await sendPromptDM(slackToken, userId, dailyName, minutesLate);
   if (!sent) {
     return 'error';
   }
