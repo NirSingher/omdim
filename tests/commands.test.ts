@@ -94,10 +94,11 @@ describe('command handlers', () => {
       expect(response.text).toContain('/standup remove');
       expect(response.text).toContain('/standup list');
       expect(response.text).toContain('/standup digest');
-      // Digest now includes period options
-      expect(response.text).toContain('daily');
-      expect(response.text).toContain('weekly');
-      expect(response.text).toContain('4-week');
+      expect(response.text).toContain('/standup report');
+      // Commands include period options
+      expect(response.text).toContain('day');
+      expect(response.text).toContain('week');
+      expect(response.text).toContain('month');
     });
   });
 

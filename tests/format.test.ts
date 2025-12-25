@@ -504,8 +504,8 @@ describe('format utilities', () => {
     });
   });
 
-  describe('formatManagerDigest', () => {
-    it('includes daily label for daily period', () => {
+  describe('formatManagerDigest (Option C: compact format)', () => {
+    it('includes daily name and period in header', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'daily',
@@ -516,8 +516,8 @@ describe('format utilities', () => {
         totalWorkdays: 1,
       });
 
-      expect(result).toContain('Daily Digest');
-      expect(result).toContain('daily-il');
+      expect(result).toContain('daily-il Daily');
+      expect(result).toContain('Dec 18');
     });
 
     it('includes date range for weekly period', () => {
@@ -531,8 +531,8 @@ describe('format utilities', () => {
         totalWorkdays: 5,
       });
 
-      expect(result).toContain('Weekly Digest');
-      expect(result).toContain('2025-12-12 to 2025-12-18');
+      expect(result).toContain('daily-il Weekly');
+      expect(result).toContain('Dec 12-Dec 18');
     });
 
     it('includes 4-week label for 4-week period', () => {
@@ -546,10 +546,10 @@ describe('format utilities', () => {
         totalWorkdays: 20,
       });
 
-      expect(result).toContain('4-Week Digest');
+      expect(result).toContain('daily-il 4-Week');
     });
 
-    it('shows summary stats', () => {
+    it('shows participation rate inline', () => {
       const submissions = [
         {
           id: 1,
@@ -577,12 +577,10 @@ describe('format utilities', () => {
         totalWorkdays: 1,
       });
 
-      expect(result).toContain('Summary');
-      expect(result).toContain('1 submissions');
-      expect(result).toContain('1/1 team members');
+      expect(result).toContain('100% participation');
     });
 
-    it('shows missing submissions for daily', () => {
+    it('shows missing submissions inline for daily', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'daily',
@@ -594,12 +592,12 @@ describe('format utilities', () => {
         missingToday: ['U12345', 'U67890'],
       });
 
-      expect(result).toContain('Not yet submitted');
+      expect(result).toContain('Not submitted:');
       expect(result).toContain('<@U12345>');
       expect(result).toContain('<@U67890>');
     });
 
-    it('shows team performance with color coding', () => {
+    it('shows team section with color coding', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
@@ -614,16 +612,16 @@ describe('format utilities', () => {
         totalWorkdays: 5,
       });
 
-      expect(result).toContain('Team Performance');
+      expect(result).toContain('👥 *Team*');
       expect(result).toContain('🟢'); // U111: 100%
       expect(result).toContain('🟡'); // U222: 60%
       expect(result).toContain('🔴'); // U333: 20%
-      expect(result).toContain('5/5 days');
-      expect(result).toContain('3/5 days');
-      expect(result).toContain('1/5 days');
+      expect(result).toContain('5/5');
+      expect(result).toContain('3/5');
+      expect(result).toContain('1/5');
     });
 
-    it('shows blocker count warning', () => {
+    it('shows blockers in Needs Attention section', () => {
       const submissions = [
         {
           id: 1,
@@ -651,11 +649,12 @@ describe('format utilities', () => {
         totalWorkdays: 1,
       });
 
-      expect(result).toContain('1 blocker');
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('🚧');
       expect(result).toContain('Waiting on API access');
     });
 
-    it('counts multiline blockers as separate items', () => {
+    it('shows multiline blockers with overflow indicator', () => {
       const submissions = [
         {
           id: 1,
@@ -683,15 +682,14 @@ describe('format utilities', () => {
         totalWorkdays: 1,
       });
 
-      // Should count 3 blockers, not 1
-      expect(result).toContain('3 blockers');
-      // All three should be listed
+      // First two blockers shown
       expect(result).toContain('Waiting on API access');
       expect(result).toContain('Need design review');
-      expect(result).toContain('Blocked by CI failure');
+      // Third blocker shown as overflow
+      expect(result).toContain('1 more');
     });
 
-    it('shows celebration when no blockers', () => {
+    it('does not show Needs Attention when no blockers or bottlenecks', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'daily',
@@ -702,11 +700,10 @@ describe('format utilities', () => {
         totalWorkdays: 1,
       });
 
-      expect(result).toContain('None reported');
-      expect(result).toContain('🎉');
+      expect(result).not.toContain('Needs Attention');
     });
 
-    it('shows bottleneck items when provided', () => {
+    it('shows bottleneck items in Needs Attention', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
@@ -721,36 +718,34 @@ describe('format utilities', () => {
         ],
       });
 
-      expect(result).toContain('Bottlenecks');
-      expect(result).toContain('Carried 3+ days');
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('🔥');
       expect(result).toContain('<@U12345>');
       expect(result).toContain('Fix auth timeout issue');
-      expect(result).toContain('5 days');
-      expect(result).toContain('carried 4x');
+      expect(result).toContain('stuck 5 days');
     });
 
-    it('shows high drop rate users when provided', () => {
+    it('shows drop rate warning in team section', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
         startDate: '2025-12-12',
         endDate: '2025-12-18',
         submissions: [],
-        stats: [],
+        stats: [
+          { slack_user_id: 'U12345', submission_count: 3, total_completed: 5, total_planned: 8, total_blockers: 0, avg_items_per_day: 2.7 },
+        ],
         totalWorkdays: 5,
         dropStats: [
           { slack_user_id: 'U12345', total_items: 20, dropped_count: 8, drop_rate: 40 },
         ],
       });
 
-      expect(result).toContain('Bottlenecks');
-      expect(result).toContain('High drop rate');
       expect(result).toContain('<@U12345>');
-      expect(result).toContain('8/20 items dropped');
-      expect(result).toContain('40%');
+      expect(result).toContain('40% drops');
     });
 
-    it('shows rankings for weekly period', () => {
+    it('does not show rankings section (moved to full report)', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
@@ -761,59 +756,15 @@ describe('format utilities', () => {
         totalWorkdays: 5,
         rankings: [
           { slack_user_id: 'U111', score: 92.5, participation_rate: 100, completion_rate: 85, items_done: 12, avg_carry_days: 0.5, drop_rate: 5, blocker_days: 0, rank: 1 },
-          { slack_user_id: 'U222', score: 78.3, participation_rate: 80, completion_rate: 90, items_done: 8, avg_carry_days: 1.2, drop_rate: 10, blocker_days: 1, rank: 2 },
-          { slack_user_id: 'U333', score: 45.0, participation_rate: 60, completion_rate: 50, items_done: 3, avg_carry_days: 2.5, drop_rate: 35, blocker_days: 2, rank: 3 },
         ],
       });
 
-      expect(result).toContain('Team Rankings');
-      expect(result).toContain('🥇');
-      expect(result).toContain('<@U111>');
-      expect(result).toContain('92.5 pts');
-      expect(result).toContain('100% participation');
-      expect(result).toContain('🥈');
-      expect(result).toContain('<@U222>');
-      expect(result).toContain('🥉');
-      expect(result).toContain('<@U333>');
-      expect(result).toContain('⚠️'); // Warning for high drop rate
-    });
-
-    it('does not show rankings for daily period', () => {
-      const result = formatManagerDigest({
-        dailyName: 'daily-il',
-        period: 'daily',
-        startDate: '2025-12-18',
-        endDate: '2025-12-18',
-        submissions: [],
-        stats: [],
-        totalWorkdays: 1,
-        rankings: [
-          { slack_user_id: 'U111', score: 92.5, participation_rate: 100, completion_rate: 85, items_done: 12, avg_carry_days: 0.5, drop_rate: 5, blocker_days: 0, rank: 1 },
-        ],
-      });
-
+      // Rankings moved to full report command
       expect(result).not.toContain('Team Rankings');
+      expect(result).not.toContain('🥇');
     });
 
-    it('shows rankings for 4-week period', () => {
-      const result = formatManagerDigest({
-        dailyName: 'daily-il',
-        period: '4-week',
-        startDate: '2025-11-21',
-        endDate: '2025-12-18',
-        submissions: [],
-        stats: [],
-        totalWorkdays: 20,
-        rankings: [
-          { slack_user_id: 'U111', score: 92.5, participation_rate: 100, completion_rate: 85, items_done: 50, avg_carry_days: 0.3, drop_rate: 5, blocker_days: 1, rank: 1 },
-        ],
-      });
-
-      expect(result).toContain('Team Rankings');
-      expect(result).toContain('🥇');
-    });
-
-    it('shows trend indicators when trends are provided', () => {
+    it('shows trend indicators inline', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
@@ -863,15 +814,12 @@ describe('format utilities', () => {
         },
       });
 
-      // Participation improved (72 -> 85)
-      expect(result).toContain('Participation: 85% ↑');
-      // Completion stayed same (78 -> 78)
-      expect(result).toContain('Completion: 78% →');
-      // Blockers decreased (18 -> 12), which is good, so should show ↑
-      expect(result).toContain('Blockers: 12% ↑');
+      // Compact inline format: "85% ↑ participation"
+      expect(result).toContain('85% ↑ participation');
+      expect(result).toContain('78% → completion');
     });
 
-    it('shows declining trends with down arrow', () => {
+    it('shows declining trends with down arrow inline', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
@@ -906,15 +854,25 @@ describe('format utilities', () => {
         },
       });
 
-      // Participation declined (80 -> 60)
-      expect(result).toContain('Participation: 60% ↓');
-      // Completion declined (75 -> 50)
-      expect(result).toContain('Completion: 50% ↓');
-      // Blockers increased (10 -> 25), which is bad, so should show ↓
-      expect(result).toContain('Blockers: 25% ↓');
+      expect(result).toContain('60% ↓ participation');
+      expect(result).toContain('50% ↓ completion');
     });
 
-    it('does not show trends for daily period', () => {
+    it('shows report command hint for weekly/4-week', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+      });
+
+      expect(result).toContain('/standup report daily-il week');
+    });
+
+    it('does not show report hint for daily', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'daily',
@@ -923,67 +881,12 @@ describe('format utilities', () => {
         submissions: [],
         stats: [],
         totalWorkdays: 1,
-        trends: {
-          current: {
-            participation_rate: 85,
-            completion_rate: 78,
-            blocker_rate: 12,
-            total_submissions: 5,
-            total_participants: 1,
-            total_items_completed: 10,
-            total_items_dropped: 3,
-            avg_items_per_day: 2.4,
-          },
-          previous: {
-            participation_rate: 72,
-            completion_rate: 65,
-            blocker_rate: 18,
-            total_submissions: 4,
-            total_participants: 1,
-            total_items_completed: 8,
-            total_items_dropped: 2,
-            avg_items_per_day: 2.0,
-          },
-        },
       });
 
-      // Daily period shouldn't show completion trends (too noisy)
-      expect(result).not.toContain('Completion:');
+      expect(result).not.toContain('/standup report');
     });
 
-    it('shows work alignment not configured when no integrations enabled', () => {
-      const result = formatManagerDigest({
-        dailyName: 'daily-il',
-        period: 'weekly',
-        startDate: '2025-12-12',
-        endDate: '2025-12-18',
-        submissions: [],
-        stats: [],
-        totalWorkdays: 5,
-        integrations: { github: false, linear: false },
-      });
-
-      expect(result).toContain('🔗 Work Alignment');
-      expect(result).toContain('Not configured');
-    });
-
-    it('shows GitHub enabled when github integration is on', () => {
-      const result = formatManagerDigest({
-        dailyName: 'daily-il',
-        period: 'weekly',
-        startDate: '2025-12-12',
-        endDate: '2025-12-18',
-        submissions: [],
-        stats: [],
-        totalWorkdays: 5,
-        integrations: { github: true, linear: false },
-      });
-
-      expect(result).toContain('🔗 Work Alignment');
-      expect(result).toContain('GitHub enabled');
-    });
-
-    it('shows both integrations when both enabled', () => {
+    it('does not show work alignment section (removed for compact format)', () => {
       const result = formatManagerDigest({
         dailyName: 'daily-il',
         period: 'weekly',
@@ -993,21 +896,6 @@ describe('format utilities', () => {
         stats: [],
         totalWorkdays: 5,
         integrations: { github: true, linear: true },
-      });
-
-      expect(result).toContain('🔗 Work Alignment');
-      expect(result).toContain('GitHub + Linear enabled');
-    });
-
-    it('does not show work alignment section when integrations not provided', () => {
-      const result = formatManagerDigest({
-        dailyName: 'daily-il',
-        period: 'weekly',
-        startDate: '2025-12-12',
-        endDate: '2025-12-18',
-        submissions: [],
-        stats: [],
-        totalWorkdays: 5,
       });
 
       expect(result).not.toContain('Work Alignment');
