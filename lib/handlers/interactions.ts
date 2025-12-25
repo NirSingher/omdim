@@ -88,16 +88,31 @@ export async function handleOpenStandup(
   const previousSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
 
   let yesterdayData: YesterdayData | null = null;
-  if (previousSubmission && previousSubmission.today_plans) {
-    const plans = Array.isArray(previousSubmission.today_plans)
-      ? previousSubmission.today_plans
-      : JSON.parse(previousSubmission.today_plans as unknown as string);
+  if (previousSubmission) {
+    // Parse today_plans (new items entered yesterday)
+    const todayPlans = previousSubmission.today_plans
+      ? (Array.isArray(previousSubmission.today_plans)
+          ? previousSubmission.today_plans
+          : JSON.parse(previousSubmission.today_plans as unknown as string))
+      : [];
 
-    yesterdayData = {
-      plans,
-      completed: [],
-      incomplete: [],
-    };
+    // Parse yesterday_incomplete (items carried over yesterday - need to carry again!)
+    const carriedItems = previousSubmission.yesterday_incomplete
+      ? (Array.isArray(previousSubmission.yesterday_incomplete)
+          ? previousSubmission.yesterday_incomplete
+          : JSON.parse(previousSubmission.yesterday_incomplete as unknown as string))
+      : [];
+
+    // Combine: carried items first (they're older/staler), then new plans
+    const allPlans = [...carriedItems, ...todayPlans];
+
+    if (allPlans.length > 0) {
+      yesterdayData = {
+        plans: allPlans,
+        completed: [],
+        incomplete: [],
+      };
+    }
   }
 
   // Build and open modal
