@@ -23,6 +23,8 @@ import {
   shouldReprompt,
   getUserDate,
   formatDate,
+  getMinutesLate,
+  formatLatenessPrefix,
 } from '../lib/prompt';
 
 describe('prompt utilities', () => {
@@ -197,6 +199,57 @@ describe('prompt utilities', () => {
       // Prompted exactly 30 minutes ago
       const lastPrompted = new Date('2025-12-18T09:30:00Z');
       expect(shouldReprompt(lastPrompted)).toBe(true);
+    });
+  });
+
+  describe('getMinutesLate', () => {
+    function createLocalTime(hours: number, minutes: number): Date {
+      const date = new Date('2025-12-18T00:00:00');
+      date.setHours(hours, minutes, 0, 0);
+      return date;
+    }
+
+    it('returns 0 when at exact schedule time', () => {
+      const userDate = createLocalTime(9, 0);
+      expect(getMinutesLate('09:00', userDate)).toBe(0);
+    });
+
+    it('returns 0 when before schedule time', () => {
+      const userDate = createLocalTime(8, 30);
+      expect(getMinutesLate('09:00', userDate)).toBe(0);
+    });
+
+    it('calculates minutes late correctly', () => {
+      const userDate = createLocalTime(9, 45);
+      expect(getMinutesLate('09:00', userDate)).toBe(45);
+    });
+
+    it('calculates hours worth of lateness', () => {
+      const userDate = createLocalTime(10, 30);
+      expect(getMinutesLate('09:00', userDate)).toBe(90);
+    });
+  });
+
+  describe('formatLatenessPrefix', () => {
+    it('returns empty string for less than 5 minutes', () => {
+      expect(formatLatenessPrefix(0)).toBe('');
+      expect(formatLatenessPrefix(4)).toBe('');
+    });
+
+    it('formats minutes for under an hour', () => {
+      expect(formatLatenessPrefix(5)).toBe('5 min late · ');
+      expect(formatLatenessPrefix(30)).toBe('30 min late · ');
+      expect(formatLatenessPrefix(59)).toBe('59 min late · ');
+    });
+
+    it('formats hours for exact hours', () => {
+      expect(formatLatenessPrefix(60)).toBe('1h late · ');
+      expect(formatLatenessPrefix(120)).toBe('2h late · ');
+    });
+
+    it('formats hours and minutes', () => {
+      expect(formatLatenessPrefix(75)).toBe('1h 15m late · ');
+      expect(formatLatenessPrefix(90)).toBe('1h 30m late · ');
     });
   });
 });
