@@ -158,4 +158,12 @@ integrations:
 2. **GitHub**: OAuth flow or static token per workspace?
 3. **Stats**: Store aggregated stats or compute on-demand?
 
+---
+
+## Backlog
+
+### Developer Experience
+- [ ] Integrate Drizzle ORM for type-safe queries and migrations
+- [ ] CI pipeline (GitHub Actions)
+
 🗺️
