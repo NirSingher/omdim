@@ -611,7 +611,7 @@ export async function getTeamStats(
   );
 }
 
-/** Get list of users who haven't submitted today */
+/** Get list of users who haven't submitted today (excludes OOO users) */
 export async function getMissingSubmissions(
   db: DbClient,
   dailyName: string,
@@ -622,8 +622,11 @@ export async function getMissingSubmissions(
      FROM participants p
      LEFT JOIN submissions s ON p.slack_user_id = s.slack_user_id
        AND s.daily_name = $1 AND s.date = $2
-     WHERE p.daily_name = $3 AND s.id IS NULL`,
-    [dailyName, date, dailyName]
+     LEFT JOIN ooo ON p.slack_user_id = ooo.slack_user_id
+       AND ooo.daily_name = $3
+       AND $4 BETWEEN ooo.start_date AND ooo.end_date
+     WHERE p.daily_name = $5 AND s.id IS NULL AND ooo.id IS NULL`,
+    [dailyName, date, dailyName, date, dailyName]
   );
   return result.map((r) => r.slack_user_id);
 }
@@ -993,4 +996,97 @@ export async function getTeamRankings(
   rankings.forEach((r, i) => r.rank = i + 1);
 
   return rankings;
+}
+
+// ============================================================================
+// Out of Office (OOO)
+// ============================================================================
+
+export interface OOORecord {
+  id: number;
+  slack_user_id: string;
+  daily_name: string;
+  start_date: string;
+  end_date: string;
+  created_at: Date;
+}
+
+/** Set OOO period for a user (upserts based on dates) */
+export async function setOOO(
+  db: DbClient,
+  userId: string,
+  dailyName: string,
+  startDate: string,
+  endDate: string
+): Promise<OOORecord> {
+  const result = await db.query<OOORecord>(
+    `INSERT INTO ooo (slack_user_id, daily_name, start_date, end_date)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (slack_user_id, daily_name, start_date, end_date) DO UPDATE SET
+       end_date = $5
+     RETURNING *`,
+    [userId, dailyName, startDate, endDate, endDate]
+  );
+  return result[0];
+}
+
+/** Clear all OOO periods for a user/daily */
+export async function clearOOO(
+  db: DbClient,
+  userId: string,
+  dailyName: string
+): Promise<number> {
+  const result = await db.query<{ count: string }>(
+    `WITH deleted AS (
+       DELETE FROM ooo WHERE slack_user_id = $1 AND daily_name = $2 RETURNING *
+     ) SELECT COUNT(*) as count FROM deleted`,
+    [userId, dailyName]
+  );
+  return parseInt(result[0]?.count || '0', 10);
+}
+
+/** Check if user is OOO on a specific date */
+export async function getActiveOOO(
+  db: DbClient,
+  userId: string,
+  dailyName: string,
+  date: string
+): Promise<OOORecord | null> {
+  const result = await db.query<OOORecord>(
+    `SELECT * FROM ooo
+     WHERE slack_user_id = $1 AND daily_name = $2
+       AND $3 BETWEEN start_date AND end_date
+     LIMIT 1`,
+    [userId, dailyName, date]
+  );
+  return result[0] || null;
+}
+
+/** Get all current and future OOO periods for a user/daily */
+export async function getUserOOO(
+  db: DbClient,
+  userId: string,
+  dailyName: string
+): Promise<OOORecord[]> {
+  return db.query<OOORecord>(
+    `SELECT * FROM ooo
+     WHERE slack_user_id = $1 AND daily_name = $2
+       AND end_date >= CURRENT_DATE
+     ORDER BY start_date`,
+    [userId, dailyName]
+  );
+}
+
+/** Get all active OOO for a daily on a specific date (for batch lookups) */
+export async function getActiveOOOForDaily(
+  db: DbClient,
+  dailyName: string,
+  date: string
+): Promise<OOORecord[]> {
+  return db.query<OOORecord>(
+    `SELECT * FROM ooo
+     WHERE daily_name = $1
+       AND $2 BETWEEN start_date AND end_date`,
+    [dailyName, date]
+  );
 }

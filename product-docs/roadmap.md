@@ -39,12 +39,13 @@ See `requirements.md` and `architecture.md`
 - [ ] Admin command to reload config: `/standup config reload`
 - [ ] Store config overrides in DB (takes precedence over YAML)
 
-### Out of Office (OOO)
-- [ ] `/standup ooo tomorrow` - skip next prompt
-- [ ] `/standup ooo 2024-12-25 to 2025-01-02` - date range
-- [ ] `/standup ooo clear` - cancel OOO
-- [ ] Show OOO status in `/standup list`
-- [ ] Skip prompts and exclude from "missing" stats during OOO
+### Out of Office (OOO) ✅
+- [x] `/standup ooo tomorrow` - skip next prompt
+- [x] `/standup ooo 2024-12-25 to 2025-01-02` - date range
+- [x] `/standup ooo clear` - cancel OOO
+- [x] `/standup ooo` - show current OOO status
+- [x] Show OOO status in `/standup list`
+- [x] Skip prompts and exclude from "missing" stats during OOO
 
 ### Admin Management
 - [ ] `/standup admin add @user` - add admin (super-admin only)
@@ -66,11 +67,11 @@ See `requirements.md` and `architecture.md`
 - [ ] Use `:x:` for dropped items
 - [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
 
-### "All Dailies" Support
-- [ ] Support `all` as daily name in commands (e.g., `/standup digest all`)
-- [ ] Runs command for each defined daily sequentially
-- [ ] Combines output into single response where appropriate
-- [ ] Works with: `digest`, `report`, `list`
+### "All Dailies" Support ✅
+- [x] Support `all` as daily name in commands (e.g., `/standup digest all`)
+- [x] Runs command for each defined daily sequentially
+- [x] Combines output into single response where appropriate
+- [x] Works with: `prompt`, `digest`, `report`, `list`
 
 ---
 
@@ -156,5 +157,13 @@ integrations:
 1. **Alerts**: DM only or also post to a manager channel?
 2. **GitHub**: OAuth flow or static token per workspace?
 3. **Stats**: Store aggregated stats or compute on-demand?
+
+---
+
+## Backlog
+
+### Developer Experience
+- [ ] Integrate Drizzle ORM for type-safe queries and migrations
+- [ ] CI pipeline (GitHub Actions)
 
 🗺️
