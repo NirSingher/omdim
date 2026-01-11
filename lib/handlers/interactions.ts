@@ -245,7 +245,7 @@ export async function handleStandupSubmission(
     const dateDisplay = `${days[targetDate.getDay()]}, ${months[targetDate.getMonth()]} ${targetDate.getDate()}`;
 
     // Send confirmation DM
-    const confirmationMsg = `✅ *Tomorrow's standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to <#${daily?.channel}> at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
+    const confirmationMsg = `✅ *Tomorrow's standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
     await sendDM(ctx.slackToken, userId, confirmationMsg);
 
     return true;
