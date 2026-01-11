@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   blockers TEXT,
   custom_answers JSONB,       -- {"question": "answer"}
   slack_message_ts TEXT,      -- posted message ID
+  posted BOOLEAN DEFAULT TRUE, -- false for scheduled (tomorrow) submissions
   UNIQUE(slack_user_id, daily_name, date)
 );
 
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 
 -- Migration for existing databases:
 -- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS snoozed_until DATE;
+-- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS posted BOOLEAN DEFAULT TRUE;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (

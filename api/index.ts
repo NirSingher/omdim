@@ -6,9 +6,10 @@
 import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats } from '../lib/db';
-import { runPromptCron, formatDate, getUserDate } from '../lib/prompt';
-import { handleCommand } from '../lib/handlers/commands';
+import { runPromptCron, runScheduledPosts, formatDate, getUserDate } from '../lib/prompt';
+import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
+import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
 import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks } from '../lib/format';
 
 // ============================================================================
@@ -48,6 +49,11 @@ export default {
         return handleSlackInteractions(request, env);
       }
 
+      // Slack events (app_home_opened)
+      if (path === '/api/slack/events') {
+        return handleSlackEvents(request, env);
+      }
+
       // Cron: prompt users
       if (path === '/api/cron/prompt') {
         return handlePromptCron(url, env);
@@ -77,8 +83,14 @@ export default {
     if (cronPattern === '*/30 * * * *') {
       console.log('Running prompt cron job');
       const db = getDb(env.DATABASE_URL);
-      const stats = await runPromptCron(db, env.SLACK_BOT_TOKEN);
-      console.log('Prompt cron complete:', stats);
+
+      // Run prompt cron (send DM prompts to users)
+      const promptStats = await runPromptCron(db, env.SLACK_BOT_TOKEN);
+      console.log('Prompt cron complete:', promptStats);
+
+      // Run scheduled posts cron (post pre-filled "tomorrow" submissions)
+      const scheduledStats = await runScheduledPosts(db, env.SLACK_BOT_TOKEN);
+      console.log('Scheduled posts cron complete:', scheduledStats);
     } else if (cronPattern === '0 3 * * *') {
       console.log('Running cleanup cron job');
       await runCleanup(env);
@@ -145,18 +157,39 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
   }
 
   const payload = parseCommandPayload(body);
+  const db = getDb(env.DATABASE_URL);
+
+  // Handle /daily command separately
+  if (payload.command === '/daily') {
+    const args = payload.text.trim().split(/\s+/).filter(a => a);
+    console.log('Command: /daily', { user_id: payload.user_id, args });
+
+    const response = await handleDaily({
+      userId: payload.user_id,
+      args,
+      db,
+      slackToken: env.SLACK_BOT_TOKEN,
+      triggerId: payload.trigger_id,
+    });
+
+    return new Response(JSON.stringify(response), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Handle /standup command (existing behavior)
   const args = payload.text.trim().split(/\s+/);
   const subcommand = args[0]?.toLowerCase() || 'help';
 
   console.log('Command:', { subcommand, user_id: payload.user_id });
 
-  const db = getDb(env.DATABASE_URL);
   const response = await handleCommand(subcommand, {
     userId: payload.user_id,
     args,
     db,
     slackToken: env.SLACK_BOT_TOKEN,
     devMode: env.DEV_MODE === 'true',
+    triggerId: payload.trigger_id,
   });
 
   return new Response(JSON.stringify(response), {
@@ -201,6 +234,59 @@ async function handleSlackInteractions(request: Request, env: Env): Promise<Resp
     db,
     slackToken: env.SLACK_BOT_TOKEN,
   });
+
+  // Always return 200 to acknowledge
+  return new Response('', { status: 200 });
+}
+
+/** Slack events endpoint (app_home_opened) */
+async function handleSlackEvents(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405 });
+  }
+
+  const body = await request.text();
+  const timestamp = request.headers.get('x-slack-request-timestamp');
+  const signature = request.headers.get('x-slack-signature');
+
+  // Verify signature
+  const isValid = await verifySlackSignature(
+    env.SLACK_SIGNING_SECRET,
+    signature,
+    timestamp,
+    body
+  );
+
+  if (!isValid) {
+    return new Response('Invalid signature', { status: 401 });
+  }
+
+  const payload = JSON.parse(body) as {
+    type: string;
+    challenge?: string;
+    event?: AppHomeOpenedEvent;
+  };
+
+  // Handle URL verification challenge (required when setting up Events API)
+  if (payload.type === 'url_verification' && payload.challenge) {
+    return new Response(payload.challenge, {
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  }
+
+  // Handle events
+  if (payload.type === 'event_callback' && payload.event) {
+    const event = payload.event;
+
+    // Handle app_home_opened event
+    if (event.type === 'app_home_opened') {
+      const db = getDb(env.DATABASE_URL);
+      await handleAppHomeOpened(event, {
+        db,
+        slackToken: env.SLACK_BOT_TOKEN,
+      });
+    }
+  }
 
   // Always return 200 to acknowledge
   return new Response('', { status: 200 });

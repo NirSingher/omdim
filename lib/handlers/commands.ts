@@ -1,13 +1,14 @@
 /**
- * Slash command handlers for /standup command
- * Handles: help, prompt, add, remove, list, digest, week
+ * Slash command handlers for /standup and /daily commands
+ * Handles: help, prompt, add, remove, list, digest, week, daily
  */
 
 import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord } from '../db';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
-import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse } from '../slack';
+import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse, openModal } from '../slack';
+import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 
 // ============================================================================
 // Types
@@ -19,6 +20,7 @@ export interface CommandContext {
   db: DbClient;
   slackToken: string;
   devMode?: boolean;
+  triggerId?: string; // For opening modals directly from slash commands
 }
 
 /** Re-export for convenience */
@@ -725,6 +727,152 @@ export async function handleForcePrompt(ctx: CommandContext): Promise<CommandRes
     return ephemeralResponse('❌ Failed to send prompt. Please try again.');
   }
   return ephemeralResponse(`🔧 [DEV] Force prompt sent! Check your DMs for the *${dailyName}* standup.`);
+}
+
+// ============================================================================
+// /daily Command - User-Initiated Standup
+// ============================================================================
+
+/**
+ * Handle /daily command - opens standup modal directly
+ * If today's daily is done, opens modal for tomorrow
+ */
+export async function handleDaily(ctx: CommandContext): Promise<CommandResponse> {
+  if (!ctx.triggerId) {
+    return ephemeralResponse('❌ Unable to open modal. Please try again.');
+  }
+
+  const dailyName = ctx.args[0]; // /daily [daily-name]
+
+  try {
+    // Get user's dailies
+    const userDailies = await getUserDailies(ctx.db, ctx.userId);
+
+    if (userDailies.length === 0) {
+      return ephemeralResponse('❌ You\'re not part of any dailies. Ask an admin to add you.');
+    }
+
+    // Determine which daily to use
+    let targetDailyName: string;
+
+    if (dailyName) {
+      // User specified a daily
+      const daily = getDaily(dailyName);
+      if (!daily) {
+        return ephemeralResponse(`❌ Daily "${dailyName}" not found.`);
+      }
+      const isParticipant = userDailies.some(d => d.daily_name === dailyName);
+      if (!isParticipant) {
+        return ephemeralResponse(`❌ You're not part of *${dailyName}*.`);
+      }
+      targetDailyName = dailyName;
+    } else if (userDailies.length === 1) {
+      // Auto-select if only one daily
+      targetDailyName = userDailies[0].daily_name;
+    } else {
+      // Multiple dailies - show picker
+      const dailyList = userDailies.map(d => `• \`${d.daily_name}\``).join('\n');
+      return ephemeralResponse(
+        `You're part of multiple dailies. Specify which one:\n${dailyList}\n\nUsage: \`/daily <daily-name>\``
+      );
+    }
+
+    // Get daily config
+    const daily = getDaily(targetDailyName);
+    if (!daily) {
+      return ephemeralResponse(`❌ Daily "${targetDailyName}" not found.`);
+    }
+
+    // Get user's timezone and calculate dates
+    const userInfo = await getUserTimezone(ctx.slackToken, ctx.userId);
+    const tzOffset = userInfo?.tz_offset || 0;
+    const userDate = getUserDate(tzOffset);
+    const todayStr = formatDate(userDate);
+
+    // Calculate tomorrow
+    const tomorrowDate = new Date(userDate);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = formatDate(tomorrowDate);
+
+    // Check if today's submission exists
+    const todaySubmission = await getSubmissionForDate(ctx.db, ctx.userId, targetDailyName, todayStr);
+
+    // Determine mode and target date
+    const mode: 'today' | 'tomorrow' = todaySubmission ? 'tomorrow' : 'today';
+    const targetDate = mode === 'today' ? userDate : tomorrowDate;
+    const targetDateStr = mode === 'today' ? todayStr : tomorrowStr;
+
+    // Get yesterday data for pre-fill
+    // For today mode: yesterday is the previous submission
+    // For tomorrow mode: yesterday is today's submission (which we know exists)
+    let yesterdayData: YesterdayData | null = null;
+
+    if (mode === 'today') {
+      const previousSubmission = await getPreviousSubmission(ctx.db, ctx.userId, targetDailyName, todayStr);
+      if (previousSubmission) {
+        const todayPlans = previousSubmission.today_plans || [];
+        const carriedItems = previousSubmission.yesterday_incomplete || [];
+        const allPlans = [...carriedItems, ...todayPlans];
+        if (allPlans.length > 0) {
+          yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+        }
+      }
+    } else {
+      // Tomorrow mode: use today's submission as "yesterday"
+      if (todaySubmission) {
+        const todayPlans = todaySubmission.today_plans || [];
+        const carriedItems = todaySubmission.yesterday_incomplete || [];
+        const allPlans = [...carriedItems, ...todayPlans];
+        if (allPlans.length > 0) {
+          yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+        }
+      }
+    }
+
+    // Check for existing scheduled submission (for editing tomorrow)
+    let prefill: SubmissionPrefill | undefined;
+    if (mode === 'tomorrow') {
+      const existingSubmission = await getSubmissionForDate(ctx.db, ctx.userId, targetDailyName, tomorrowStr);
+      if (existingSubmission) {
+        prefill = {
+          todayPlans: existingSubmission.today_plans || undefined,
+          unplanned: existingSubmission.unplanned || undefined,
+          blockers: existingSubmission.blockers || undefined,
+          customAnswers: existingSubmission.custom_answers || undefined,
+        };
+      }
+    }
+
+    // Build and open modal
+    const modal = buildStandupModal(
+      targetDailyName,
+      yesterdayData,
+      daily.questions || [],
+      daily.field_order,
+      targetDate,
+      mode,
+      prefill
+    );
+
+    const opened = await openModal(ctx.slackToken, ctx.triggerId, modal);
+    if (!opened) {
+      return ephemeralResponse('❌ Failed to open standup form. Please try again.');
+    }
+
+    // Return empty response (modal is shown)
+    let message: string;
+    if (mode === 'tomorrow') {
+      message = prefill
+        ? `📝 Editing *tomorrow's* scheduled standup for *${targetDailyName}*...`
+        : `📅 Opening *tomorrow's* standup for *${targetDailyName}*...`;
+    } else {
+      message = `📋 Opening standup for *${targetDailyName}*...`;
+    }
+    return ephemeralResponse(message);
+  } catch (err) {
+    console.error('Failed to handle /daily:', err);
+    return ephemeralResponse('❌ Something went wrong. Please try again.');
+  }
 }
 
 // ============================================================================

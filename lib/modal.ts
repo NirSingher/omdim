@@ -46,6 +46,14 @@ export interface YesterdayData {
   incomplete: string[];
 }
 
+/** Pre-fill data for editing an existing submission */
+export interface SubmissionPrefill {
+  todayPlans?: string[];
+  unplanned?: string[];
+  blockers?: string;
+  customAnswers?: Record<string, string>;
+}
+
 // Default field order values
 const DEFAULT_FIELD_ORDER: Required<FieldOrder> = {
   unplanned: 10,
@@ -79,15 +87,21 @@ function formatDisplayDate(date: Date): string {
   return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}`;
 }
 
+/** Mode for the standup modal */
+export type StandupMode = 'today' | 'tomorrow';
+
 /**
  * Build the standup modal with configurable field ordering
+ * @param prefill - Optional pre-fill data for editing existing submissions
  */
 export function buildStandupModal(
   dailyName: string,
   yesterday: YesterdayData | null,
   customQuestions: Question[] = [],
   fieldOrder?: FieldOrder,
-  userDate?: Date
+  userDate?: Date,
+  mode: StandupMode = 'today',
+  prefill?: SubmissionPrefill
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -102,11 +116,14 @@ export function buildStandupModal(
 
   // Header section with date context
   const dateStr = userDate ? formatDisplayDate(userDate) : 'today';
+  const modeLabel = mode === 'tomorrow' ? "Tomorrow's" : '';
   blocks.push({
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*${dailyName}* standup for *${dateStr}*`,
+      text: mode === 'tomorrow'
+        ? `📅 *${dailyName}* standup for *${dateStr}* (tomorrow)`
+        : `*${dailyName}* standup for *${dateStr}*`,
     },
   });
 
@@ -153,19 +170,24 @@ export function buildStandupModal(
     });
 
     // Unplanned completions - grouped with yesterday (both are "what happened")
+    const unplannedYesterdayElement: Record<string, unknown> = {
+      type: 'plain_text_input',
+      action_id: 'unplanned_input',
+      multiline: true,
+      placeholder: {
+        type: 'plain_text',
+        text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
+      },
+    };
+    // Pre-fill if editing existing submission
+    if (prefill?.unplanned && prefill.unplanned.length > 0) {
+      unplannedYesterdayElement.initial_value = prefill.unplanned.join('\n');
+    }
     blocks.push({
       type: 'input',
       block_id: 'unplanned',
       optional: true,
-      element: {
-        type: 'plain_text_input',
-        action_id: 'unplanned_input',
-        multiline: true,
-        placeholder: {
-          type: 'plain_text',
-          text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
-        },
-      },
+      element: unplannedYesterdayElement,
       label: {
         type: 'plain_text',
         text: '✨ Unplanned wins',
@@ -210,19 +232,24 @@ export function buildStandupModal(
     switch (field.type) {
       case 'unplanned':
         // Only shown for first-time users (otherwise it's in the yesterday section)
+        const unplannedElement: Record<string, unknown> = {
+          type: 'plain_text_input',
+          action_id: 'unplanned_input',
+          multiline: true,
+          placeholder: {
+            type: 'plain_text',
+            text: 'Fixed prod bug, Helped teammate with code review...',
+          },
+        };
+        // Pre-fill if editing existing submission
+        if (prefill?.unplanned && prefill.unplanned.length > 0) {
+          unplannedElement.initial_value = prefill.unplanned.join('\n');
+        }
         blocks.push({
           type: 'input',
           block_id: 'unplanned',
           optional: true,
-          element: {
-            type: 'plain_text_input',
-            action_id: 'unplanned_input',
-            multiline: true,
-            placeholder: {
-              type: 'plain_text',
-              text: 'Fixed prod bug, Helped teammate with code review...',
-            },
-          },
+          element: unplannedElement,
           label: {
             type: 'plain_text',
             text: '✨ Unplanned wins',
@@ -231,21 +258,26 @@ export function buildStandupModal(
         break;
 
       case 'today_plans':
+        const plansElement: Record<string, unknown> = {
+          type: 'plain_text_input',
+          action_id: 'plans_input',
+          multiline: true,
+          placeholder: {
+            type: 'plain_text',
+            text: 'Ship feature X\nReview open PRs\n1:1 with Bob',
+          },
+        };
+        // Pre-fill if editing existing submission
+        if (prefill?.todayPlans && prefill.todayPlans.length > 0) {
+          plansElement.initial_value = prefill.todayPlans.join('\n');
+        }
         blocks.push({
           type: 'input',
           block_id: 'today_plans',
-          element: {
-            type: 'plain_text_input',
-            action_id: 'plans_input',
-            multiline: true,
-            placeholder: {
-              type: 'plain_text',
-              text: 'Ship feature X\nReview open PRs\n1:1 with Bob',
-            },
-          },
+          element: plansElement,
           label: {
             type: 'plain_text',
-            text: '🎯 Today\'s plans',
+            text: mode === 'tomorrow' ? "🎯 Tomorrow's plans" : "🎯 Today's plans",
           },
         });
         break;
@@ -297,13 +329,16 @@ export function buildStandupModal(
     }
   });
 
+  // Calculate target date string for submission handler
+  const targetDateStr = userDate ? userDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+
   return {
     type: 'modal',
     callback_id: 'standup_submission',
-    private_metadata: JSON.stringify({ dailyName, yesterdayPlans }),
+    private_metadata: JSON.stringify({ dailyName, yesterdayPlans, mode, targetDate: targetDateStr }),
     title: {
       type: 'plain_text',
-      text: 'Daily Standup',
+      text: mode === 'tomorrow' ? "Tomorrow's Standup" : 'Daily Standup',
       emoji: true,
     },
     submit: {
