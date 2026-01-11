@@ -116,14 +116,14 @@ ALTER TABLE submissions ADD COLUMN posted BOOLEAN DEFAULT TRUE;
 
 ---
 
-## Step 7: Slack App Config
+## Step 7: Slack App Config ✅
 
-- [ ] Add `/daily` slash command → `/api/slack/commands`
-- [ ] Enable Home Tab in app settings
-- [ ] Subscribe to Events API: `app_home_opened`
-- [ ] Update Request URL for events endpoint
+- [x] Add `/daily` slash command → `/api/slack/commands`
+- [x] Enable Home Tab in app settings
+- [x] Subscribe to Events API: `app_home_opened`
+- [x] Update Request URL for events endpoint
 
-**🧪 Checkpoint 7**: All Slack integrations working end-to-end
+**🧪 Checkpoint 7**: All Slack integrations working end-to-end ✅
 
 ---
 
