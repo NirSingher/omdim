@@ -5,9 +5,10 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO } from './db';
-import { getSchedule, getConfigError } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, createWorkItems } from './db';
+import { getSchedule, getConfigError, getDaily } from './config';
 import { getUserInfo, postMessage } from './slack';
+import { postStandupToChannel } from './format';
 
 // ============================================================================
 // User Timezone with Caching
@@ -395,4 +396,182 @@ async function processParticipant(
 
   console.log(`Prompted ${userId} for ${dailyName}`);
   return 'prompted';
+}
+
+// ============================================================================
+// Scheduled Posts (User-Initiated Tomorrow Mode)
+// ============================================================================
+
+/**
+ * Check if the user's scheduled time has passed
+ */
+export function hasScheduledTimePassed(scheduleTime: string, userDate: Date): boolean {
+  const [scheduleHour, scheduleMinute] = scheduleTime.split(':').map(Number);
+  const scheduleTotalMinutes = scheduleHour * 60 + scheduleMinute;
+  const userTotalMinutes = userDate.getHours() * 60 + userDate.getMinutes();
+  return userTotalMinutes >= scheduleTotalMinutes;
+}
+
+/**
+ * Process scheduled posts - posts pre-filled "tomorrow" submissions when their time comes
+ * Called by cron job every 30 minutes (along with prompt cron)
+ */
+export async function runScheduledPosts(
+  db: DbClient,
+  slackToken: string
+): Promise<{ posted: number; skipped: number; errors: number }> {
+  const stats = { posted: 0, skipped: 0, errors: 0 };
+
+  // Check for config errors first
+  const configErr = getConfigError();
+  if (configErr) {
+    console.error('Scheduled posts cron aborted due to config error:', configErr);
+    return stats;
+  }
+
+  try {
+    // Get all unposted submissions
+    const submissions = await getUnpostedSubmissions(db);
+    console.log(`Found ${submissions.length} unposted submissions to check`);
+
+    for (const submission of submissions) {
+      try {
+        const result = await processScheduledSubmission(db, slackToken, submission);
+        if (result === 'posted') {
+          stats.posted++;
+        } else if (result === 'skipped') {
+          stats.skipped++;
+        } else {
+          stats.errors++;
+        }
+      } catch (error) {
+        console.error(`Error processing scheduled submission ${submission.id}:`, error);
+        stats.errors++;
+      }
+    }
+  } catch (error) {
+    console.error('Error in scheduled posts cron:', error);
+  }
+
+  console.log(`Scheduled posts cron complete: ${stats.posted} posted, ${stats.skipped} skipped, ${stats.errors} errors`);
+  return stats;
+}
+
+/**
+ * Process a single scheduled submission
+ */
+async function processScheduledSubmission(
+  db: DbClient,
+  slackToken: string,
+  submission: Submission
+): Promise<'posted' | 'skipped' | 'error'> {
+  const { slack_user_id: userId, daily_name: dailyName, date: submissionDate } = submission;
+
+  // Get daily config
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    console.warn(`Daily "${dailyName}" not found for scheduled submission ${submission.id}`);
+    return 'error';
+  }
+
+  // Get schedule config
+  const schedule = daily.schedule ? getSchedule(daily.schedule) : null;
+  const scheduledTime = schedule?.default_time || '10:00';
+
+  // Get user timezone (from cache or Slack API)
+  const userInfo = await getCachedUserTimezone(db, slackToken, userId);
+  if (!userInfo) {
+    console.warn(`Could not get timezone for user ${userId}`);
+    return 'error';
+  }
+
+  // Calculate user's current date/time
+  const userDate = getUserDate(userInfo.tz_offset);
+  const userTodayStr = formatDate(userDate);
+
+  // Check if submission date matches user's "today"
+  if (submissionDate !== userTodayStr) {
+    // Not time yet (submission is for a future date in user's timezone)
+    // Or past date (shouldn't happen, but skip if so)
+    return 'skipped';
+  }
+
+  // Check if scheduled time has passed
+  if (!hasScheduledTimePassed(scheduledTime, userDate)) {
+    console.log(`Skipping ${userId} submission ${submission.id}: scheduled time ${scheduledTime} hasn't passed yet`);
+    return 'skipped';
+  }
+
+  // Check if user is OOO
+  const oooStatus = await getActiveOOO(db, userId, dailyName, userTodayStr);
+  if (oooStatus) {
+    console.log(`Skipping ${userId} submission ${submission.id}: user is OOO until ${oooStatus.end_date}`);
+    // Mark as posted so we don't keep checking (OOO = cancelled)
+    await markSubmissionPosted(db, submission.id, '');
+    return 'skipped';
+  }
+
+  // Post to channel
+  if (!daily.channel) {
+    console.warn(`No channel configured for daily "${dailyName}"`);
+    return 'error';
+  }
+
+  const messageTs = await postStandupToChannel(
+    slackToken,
+    daily.channel,
+    userId,
+    dailyName,
+    {
+      yesterdayCompleted: submission.yesterday_completed || [],
+      yesterdayIncomplete: submission.yesterday_incomplete || [],
+      unplanned: submission.unplanned || [],
+      todayPlans: submission.today_plans || [],
+      blockers: submission.blockers || '',
+      customAnswers: submission.custom_answers || {},
+      questions: daily.questions,
+      fieldOrder: daily.field_order,
+    }
+  );
+
+  if (!messageTs) {
+    console.error(`Failed to post scheduled submission ${submission.id} to channel`);
+    return 'error';
+  }
+
+  // Mark as posted with the message timestamp
+  await markSubmissionPosted(db, submission.id, messageTs);
+
+  // Track work items for analytics (same as regular submissions)
+  try {
+    const yesterdayCompleted = submission.yesterday_completed || [];
+    const yesterdayIncomplete = submission.yesterday_incomplete || [];
+    const todayPlans = submission.today_plans || [];
+
+    // We don't have yesterday_dropped in the submission, so skip that
+    if (yesterdayCompleted.length > 0) {
+      await markItemsDone(db, userId, dailyName, yesterdayCompleted, submissionDate);
+    }
+    if (yesterdayIncomplete.length > 0) {
+      await incrementCarryCount(db, userId, dailyName, yesterdayIncomplete);
+    }
+    if (todayPlans.length > 0) {
+      await createWorkItems(
+        db,
+        todayPlans.map(text => ({
+          slackUserId: userId,
+          dailyName,
+          text,
+          date: submissionDate,
+          submissionId: submission.id,
+        }))
+      );
+    }
+  } catch (error) {
+    // Don't fail if work item tracking fails
+    console.error('Failed to track work items for scheduled submission:', error);
+  }
+
+  console.log(`Posted scheduled submission ${submission.id} for ${userId} to ${daily.channel}`);
+  return 'posted';
 }

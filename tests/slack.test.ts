@@ -206,5 +206,60 @@ describe('slack utilities', () => {
         'Blocked by <@UABC123> - see https://jira.example.com/ABC-123'
       );
     });
+
+    it('converts emoji elements to shortcodes', () => {
+      const richText = {
+        type: 'rich_text',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'text', text: 'Feeling great ' },
+              { type: 'emoji', name: 'smile' },
+            ],
+          },
+        ],
+      };
+
+      expect(parseRichText(richText)).toBe('Feeling great :smile:');
+    });
+
+    it('handles multiple emojis', () => {
+      const richText = {
+        type: 'rich_text',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'emoji', name: 'rocket' },
+              { type: 'emoji', name: 'fire' },
+              { type: 'emoji', name: 'tada' },
+            ],
+          },
+        ],
+      };
+
+      expect(parseRichText(richText)).toBe(':rocket::fire::tada:');
+    });
+
+    it('handles emojis mixed with text and mentions', () => {
+      const richText = {
+        type: 'rich_text',
+        elements: [
+          {
+            type: 'rich_text_section',
+            elements: [
+              { type: 'emoji', name: 'wave' },
+              { type: 'text', text: ' Thanks ' },
+              { type: 'user', user_id: 'U12345' },
+              { type: 'text', text: ' for the help! ' },
+              { type: 'emoji', name: 'heart' },
+            ],
+          },
+        ],
+      };
+
+      expect(parseRichText(richText)).toBe(':wave: Thanks <@U12345> for the help! :heart:');
+    });
   });
 });

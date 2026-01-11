@@ -15,11 +15,13 @@ import {
   incrementCarryCount,
   createWorkItems,
   snoozeItem,
+  getSubmissionForDate,
 } from '../db';
 import { postStandupToChannel } from '../format';
-import { buildStandupModal, YesterdayData } from '../modal';
+import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
-import { openModal, parseRichText, RichTextBlock } from '../slack';
+import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
+import { StandupMode } from '../modal';
 
 // ============================================================================
 // Types
@@ -145,11 +147,15 @@ export async function handleStandupSubmission(
   const metadata = JSON.parse(payload.view!.private_metadata) as {
     dailyName: string;
     yesterdayPlans?: string[];
+    mode?: StandupMode;
+    targetDate?: string;
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
+  const mode = metadata.mode || 'today';
+  const isTomorrowMode = mode === 'tomorrow';
 
-  console.log('Modal submitted for', dailyName, 'by', userId);
+  console.log('Modal submitted for', dailyName, 'by', userId, 'mode:', mode);
   console.log('Values block keys:', Object.keys(values));
 
   // Get user's timezone and calculate today's date
@@ -157,6 +163,9 @@ export async function handleStandupSubmission(
   const tzOffset = userInfo?.tz_offset || 0;
   const userDate = getUserDate(tzOffset);
   const todayStr = formatDate(userDate);
+
+  // Use targetDate from metadata if in tomorrow mode, otherwise use today
+  const submissionDate = isTomorrowMode && metadata.targetDate ? metadata.targetDate : todayStr;
 
   // Parse dropdown selections for yesterday's items
   const yesterdayCompleted: string[] = [];
@@ -207,19 +216,42 @@ export async function handleStandupSubmission(
   }
 
   // Save submission
+  // For tomorrow mode: posted=false (will be posted at scheduled time)
   const submission = await saveSubmission(ctx.db, {
     slackUserId: userId,
     dailyName,
-    date: todayStr,
+    date: submissionDate,
     yesterdayCompleted,
     yesterdayIncomplete,
     unplanned,
     todayPlans,
     blockers,
     customAnswers,
+    posted: !isTomorrowMode, // false for tomorrow, true for today
   });
 
-  // Mark prompt as submitted
+  console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, todayPlans: todayPlans.length });
+
+  // Tomorrow mode: send confirmation DM, skip channel post and work item tracking
+  if (isTomorrowMode) {
+    // Get user's scheduled time for the confirmation message (daily already defined above)
+    const schedule = daily?.schedule;
+    const scheduledTime = schedule?.time || '10:00';
+
+    // Format the target date for display
+    const targetDate = new Date(submissionDate + 'T00:00:00');
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const dateDisplay = `${days[targetDate.getDay()]}, ${months[targetDate.getMonth()]} ${targetDate.getDate()}`;
+
+    // Send confirmation DM
+    const confirmationMsg = `✅ *Tomorrow's standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to <#${daily?.channel}> at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
+    await sendDM(ctx.slackToken, userId, confirmationMsg);
+
+    return true;
+  }
+
+  // Today mode: normal flow - mark prompt submitted, track work items, post to channel
   await markPromptSubmitted(ctx.db, userId, dailyName, todayStr);
 
   // Track work items for analytics
@@ -252,8 +284,6 @@ export async function handleStandupSubmission(
     // Don't fail the submission if work item tracking fails
     console.error('Failed to track work items:', error);
   }
-
-  console.log('Submission saved:', { userId, dailyName, todayPlans: todayPlans.length });
 
   // Post to channel
   if (daily?.channel) {
@@ -319,6 +349,105 @@ export async function handleSnoozeBottleneck(
 }
 
 // ============================================================================
+// Button Handler: Home Start Daily
+// ============================================================================
+
+/**
+ * Handle "Start Daily" or "Fill Tomorrow" button click from App Home
+ * Opens the standup modal with today/tomorrow logic (same as /daily command)
+ */
+export async function handleHomeStartDaily(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const dailyName = payload.actions?.[0]?.value;
+  if (!dailyName) {
+    console.error('No daily name in home_start_daily action');
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const triggerId = payload.trigger_id;
+
+  // Get daily config
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    console.error(`Daily "${dailyName}" not found`);
+    return false;
+  }
+
+  // Get user's timezone and calculate dates
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const userDate = getUserDate(tzOffset);
+  const todayStr = formatDate(userDate);
+
+  // Calculate tomorrow
+  const tomorrowDate = new Date(userDate);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrowStr = formatDate(tomorrowDate);
+
+  // Check if today's submission exists
+  const todaySubmission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+
+  // Determine mode and target date
+  const mode: StandupMode = todaySubmission ? 'tomorrow' : 'today';
+  const targetDate = mode === 'today' ? userDate : tomorrowDate;
+
+  // Get yesterday data for pre-fill
+  let yesterdayData: YesterdayData | null = null;
+
+  if (mode === 'today') {
+    const previousSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
+    if (previousSubmission) {
+      const todayPlans = previousSubmission.today_plans || [];
+      const carriedItems = previousSubmission.yesterday_incomplete || [];
+      const allPlans = [...carriedItems, ...todayPlans];
+      if (allPlans.length > 0) {
+        yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+      }
+    }
+  } else {
+    // Tomorrow mode: use today's submission as "yesterday"
+    if (todaySubmission) {
+      const todayPlans = todaySubmission.today_plans || [];
+      const carriedItems = todaySubmission.yesterday_incomplete || [];
+      const allPlans = [...carriedItems, ...todayPlans];
+      if (allPlans.length > 0) {
+        yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+      }
+    }
+  }
+
+  // Check for existing scheduled submission (for editing tomorrow)
+  let prefill: SubmissionPrefill | undefined;
+  if (mode === 'tomorrow') {
+    const existingSubmission = await getSubmissionForDate(ctx.db, userId, dailyName, tomorrowStr);
+    if (existingSubmission) {
+      prefill = {
+        todayPlans: existingSubmission.today_plans || undefined,
+        unplanned: existingSubmission.unplanned || undefined,
+        blockers: existingSubmission.blockers || undefined,
+        customAnswers: existingSubmission.custom_answers || undefined,
+      };
+    }
+  }
+
+  // Build and open modal
+  const modal = buildStandupModal(
+    dailyName,
+    yesterdayData,
+    daily.questions || [],
+    daily.field_order,
+    targetDate,
+    mode,
+    prefill
+  );
+
+  return openModal(ctx.slackToken, triggerId, modal);
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -345,6 +474,11 @@ export async function handleInteraction(
   // Handle button click (snooze_bottleneck)
   if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'snooze_bottleneck') {
     return handleSnoozeBottleneck(payload, ctx);
+  }
+
+  // Handle button click (home_start_daily) - from App Home
+  if (payload.type === 'block_actions' && payload.actions?.[0]?.action_id === 'home_start_daily') {
+    return handleHomeStartDaily(payload, ctx);
   }
 
   // Handle modal submission

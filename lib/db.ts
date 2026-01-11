@@ -429,6 +429,7 @@ export interface Submission {
   blockers: string | null;
   custom_answers: Record<string, string> | null;
   slack_message_ts: string | null;
+  posted: boolean;
 }
 
 // Get the most recent previous submission for a user (regardless of how many days ago)
@@ -462,22 +463,25 @@ export async function saveSubmission(
     todayPlans: string[];
     blockers: string;
     customAnswers: Record<string, string>;
+    posted?: boolean; // false for scheduled (tomorrow) submissions
   }
 ): Promise<Submission> {
+  const posted = submission.posted ?? true; // Default to true for backward compatibility
   // Use unique parameter numbers (no reuse) for tagged template conversion
   const result = await db.query<Submission>(
     `INSERT INTO submissions (
        slack_user_id, daily_name, date,
        yesterday_completed, yesterday_incomplete, unplanned,
-       today_plans, blockers, custom_answers
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       today_plans, blockers, custom_answers, posted
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (slack_user_id, daily_name, date) DO UPDATE SET
-       yesterday_completed = $10,
-       yesterday_incomplete = $11,
-       unplanned = $12,
-       today_plans = $13,
-       blockers = $14,
-       custom_answers = $15,
+       yesterday_completed = $11,
+       yesterday_incomplete = $12,
+       unplanned = $13,
+       today_plans = $14,
+       blockers = $15,
+       custom_answers = $16,
+       posted = $17,
        submitted_at = NOW()
      RETURNING *`,
     [
@@ -490,6 +494,7 @@ export async function saveSubmission(
       JSON.stringify(submission.todayPlans),
       submission.blockers,
       JSON.stringify(submission.customAnswers),
+      posted,
       // Duplicate values for ON CONFLICT
       JSON.stringify(submission.yesterdayCompleted),
       JSON.stringify(submission.yesterdayIncomplete),
@@ -497,6 +502,7 @@ export async function saveSubmission(
       JSON.stringify(submission.todayPlans),
       submission.blockers,
       JSON.stringify(submission.customAnswers),
+      posted,
     ]
   );
   return result[0];
@@ -540,6 +546,48 @@ export async function getSubmissionsInRange(
      WHERE daily_name = $1 AND date >= $2 AND date <= $3
      ORDER BY date DESC, submitted_at ASC`,
     [dailyName, startDate, endDate]
+  );
+}
+
+// Get a user's submission for a specific date
+export async function getSubmissionForDate(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<Submission | null> {
+  const result = await db.query<Submission>(
+    `SELECT * FROM submissions
+     WHERE slack_user_id = $1 AND daily_name = $2 AND date = $3`,
+    [slackUserId, dailyName, date]
+  );
+  return result[0] || null;
+}
+
+// Get all unposted submissions (for scheduled posts cron)
+// Returns submissions where posted = FALSE, filtered by code for timezone handling
+export async function getUnpostedSubmissions(
+  db: DbClient
+): Promise<Submission[]> {
+  return db.query<Submission>(
+    `SELECT * FROM submissions
+     WHERE posted = FALSE
+     ORDER BY date ASC, submitted_at ASC`,
+    []
+  );
+}
+
+// Mark a submission as posted
+export async function markSubmissionPosted(
+  db: DbClient,
+  submissionId: number,
+  messageTs: string
+): Promise<void> {
+  await db.query(
+    `UPDATE submissions
+     SET posted = TRUE, slack_message_ts = $1
+     WHERE id = $2`,
+    [messageTs, submissionId]
   );
 }
 

@@ -26,6 +26,8 @@ Omdim handles the boring part — collecting and organizing updates — so your 
 ## Features
 
 - **Timezone-aware prompts** - Each user gets prompted at their local time
+- **User-initiated standups** - Fill out your daily via `/daily` command or App Home
+- **Schedule tomorrow** - Pre-fill tomorrow's standup; posts automatically at your scheduled time
 - **Continuity tracking** - Yesterday's plans with Done/Continue/Drop options per item
 - **Flexible schedules** - Support for different work weeks (Sun-Thu, Mon-Fri, etc.)
 - **Custom questions** - Add team-specific questions with @mention support
@@ -162,12 +164,23 @@ Now that you have your app URL, go back to your Slack app settings:
 
 #### Slash Commands
 
+Create two slash commands:
+
+**1. `/standup` - Admin commands**
 1. Go to **Slash Commands** → **Create New Command**
 2. Set:
    - **Command**: `/standup`
    - **Request URL**: `https://YOUR-APP-URL/api/slack/commands`
    - **Description**: Manage daily standups
    - **Escape channels, users, and links sent to your app**: ✅ Check this box
+3. Save
+
+**2. `/daily` - User standup entry**
+1. Click **Create New Command** again
+2. Set:
+   - **Command**: `/daily`
+   - **Request URL**: `https://YOUR-APP-URL/api/slack/commands`
+   - **Description**: Fill out your daily standup
 3. Save
 
 > **Important**: The "Escape channels, users, and links" option is required for @mentions to work in commands like `/standup add @user daily-name`.
@@ -178,6 +191,21 @@ Now that you have your app URL, go back to your Slack app settings:
 2. Toggle **Interactivity** to ON
 3. Set **Request URL**: `https://YOUR-APP-URL/api/slack/interact`
 4. Save
+
+#### App Home
+
+1. Go to **App Home** in the sidebar
+2. Under **Show Tabs**, enable **Home Tab**
+3. Save
+
+#### Event Subscriptions
+
+1. Go to **Event Subscriptions** in the sidebar
+2. Toggle **Enable Events** to ON
+3. Set **Request URL**: `https://YOUR-APP-URL/api/slack/events`
+4. Under **Subscribe to bot events**, click **Add Bot User Event**
+5. Add `app_home_opened`
+6. Save Changes
 
 ### 5. Configure Bot
 
@@ -249,15 +277,27 @@ In Slack:
 
 ### For Team Members
 
-1. Receive a DM at your scheduled time with "Open Standup" button
-2. Click to open the standup form
-3. For each of yesterday's plans, choose:
+**Option 1: Wait for prompt**
+- Receive a DM at your scheduled time with "Open Standup" button
+- Click to open the standup form
+
+**Option 2: Initiate yourself**
+- Use `/daily` command anytime to open the standup form
+- Or click **Start Daily** in the App Home tab
+
+**Filling out the form:**
+1. For each of yesterday's plans, choose:
    - ✅ **Done** - Mark as completed
    - ➡️ **Continue** - Carry over to today (default)
    - ❌ **Drop** - Remove from plans
-4. Add any unplanned work you completed
-5. Enter today's new plans and any blockers
-6. Submit → Your update posts to the team channel
+2. Add any unplanned work you completed
+3. Enter today's new plans and any blockers
+4. Submit → Your update posts to the team channel
+
+**Schedule tomorrow's standup:**
+- If you've already submitted today, `/daily` opens a form for tomorrow
+- Your update will post automatically at your scheduled time the next day
+- Use `/daily` again to edit your scheduled submission
 
 ### For Admins
 
@@ -311,6 +351,25 @@ ngrok http 8787
 
 # Update Slack app URLs to ngrok URL temporarily
 ```
+
+---
+
+## Upgrading
+
+When upgrading to a new version, you may need to run database migrations:
+
+```bash
+# Add posted column for scheduled standups (v1.1+)
+npx tsx scripts/migrate-posted.ts
+
+# Add OOO table (v1.0+)
+npx tsx scripts/migrate-ooo.ts
+
+# Add snooze column for work items (v1.0+)
+npx tsx scripts/migrate-snooze.ts
+```
+
+> **Note**: Migrations are idempotent - safe to run multiple times.
 
 ---
 

@@ -16,6 +16,8 @@ export interface RichTextElement {
   user_id?: string;
   channel_id?: string;
   url?: string;
+  name?: string;  // For emoji elements (e.g., 'smile')
+  unicode?: string;  // Unicode representation of emoji
   elements?: RichTextElement[];
 }
 
@@ -169,6 +171,8 @@ export function parseRichText(richText: RichTextBlock | undefined): string {
           parts.push(`<#${el.channel_id}>`);
         } else if (el.type === 'link' && el.url) {
           parts.push(el.url);
+        } else if (el.type === 'emoji' && el.name) {
+          parts.push(`:${el.name}:`);
         }
       }
     }
@@ -276,6 +280,41 @@ export async function openModal(
     return true;
   } catch (error) {
     console.error('Error opening modal:', error);
+    return false;
+  }
+}
+
+/**
+ * Publish a view to App Home
+ */
+export async function publishHomeView(
+  slackToken: string,
+  userId: string,
+  view: unknown
+): Promise<boolean> {
+  try {
+    const response = await fetch('https://slack.com/api/views.publish', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${slackToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        view,
+      }),
+    });
+
+    const data = await response.json() as { ok: boolean; error?: string };
+
+    if (!data.ok) {
+      console.error('Failed to publish home view:', data.error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error publishing home view:', error);
     return false;
   }
 }
