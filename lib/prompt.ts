@@ -333,6 +333,12 @@ async function processParticipant(
     return 'error';
   }
 
+  // Validate daily still exists in config (handles removed dailies)
+  if (!getDaily(dailyName)) {
+    console.warn(`Daily "${dailyName}" not found in config, skipping participant ${userId}`);
+    return 'skipped';
+  }
+
   // Get user timezone (from cache or Slack API)
   const userInfo = await getCachedUserTimezone(db, slackToken, userId);
   if (!userInfo) {
