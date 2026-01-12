@@ -244,6 +244,9 @@ export async function handleStandupSubmission(
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const dateDisplay = `${days[targetDate.getDay()]}, ${months[targetDate.getMonth()]} ${targetDate.getDate()}`;
 
+    // Mark prompt as submitted for the target date (prevents re-prompting)
+    await markPromptSubmitted(ctx.db, userId, dailyName, submissionDate);
+
     // Send confirmation DM
     const confirmationMsg = `✅ *Tomorrow's standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
     await sendDM(ctx.slackToken, userId, confirmationMsg);
