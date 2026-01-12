@@ -191,6 +191,7 @@ export function buildStandupModal(
       label: {
         type: 'plain_text',
         text: '✨ Unplanned wins',
+        emoji: true,
       },
     });
 
@@ -253,6 +254,7 @@ export function buildStandupModal(
           label: {
             type: 'plain_text',
             text: '✨ Unplanned wins',
+            emoji: true,
           },
         });
         break;
@@ -278,6 +280,7 @@ export function buildStandupModal(
           label: {
             type: 'plain_text',
             text: mode === 'tomorrow' ? "🎯 Tomorrow's plans" : "🎯 Today's plans",
+            emoji: true,
           },
         });
         break;
@@ -298,6 +301,7 @@ export function buildStandupModal(
           label: {
             type: 'plain_text',
             text: '🤝 Need help or time from anyone? Need to get unblocked?',
+            emoji: true,
           },
         });
         break;
@@ -322,6 +326,7 @@ export function buildStandupModal(
             label: {
               type: 'plain_text',
               text: field.question.text,
+              emoji: true,
             },
           });
         }
