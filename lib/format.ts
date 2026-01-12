@@ -29,6 +29,7 @@ interface FieldOrder {
 interface StandupData {
   yesterdayCompleted: string[];
   yesterdayIncomplete: string[];
+  yesterdayDropped: string[];
   unplanned: string[];
   todayPlans: string[];
   blockers: string;
@@ -95,7 +96,7 @@ export function formatStandupBlocks(
 
   const sections: OrderedSection[] = [];
 
-  // Yesterday section - completed and unplanned with checkboxes
+  // Yesterday section - completed, unplanned, and dropped items
   sections.push({
     order: yesterdayOrder,
     render: () => {
@@ -105,6 +106,9 @@ export function formatStandupBlocks(
       }
       for (const item of data.unplanned) {
         yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
+      }
+      for (const item of data.yesterdayDropped || []) {
+        yesterdayItems.push(`❌ ${item} _(dropped)_`);
       }
       if (yesterdayItems.length === 0) return null;
       return {

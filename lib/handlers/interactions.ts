@@ -298,6 +298,7 @@ export async function handleStandupSubmission(
       {
         yesterdayCompleted,
         yesterdayIncomplete,
+        yesterdayDropped,
         unplanned,
         todayPlans,
         blockers,

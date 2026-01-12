@@ -65,6 +65,23 @@ describe('format utilities', () => {
       expect(yesterdayBlock?.text?.text).toContain('☑️ Fixed urgent bug _(unplanned)_');
     });
 
+    it('marks dropped items with red X in yesterday section', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['Finished task'],
+        yesterdayIncomplete: [],
+        yesterdayDropped: ['Cancelled task', 'No longer needed'],
+        unplanned: [],
+        todayPlans: ['Task 1'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
+      expect(yesterdayBlock?.text?.text).toContain('☑️ Finished task');
+      expect(yesterdayBlock?.text?.text).toContain('❌ Cancelled task _(dropped)_');
+      expect(yesterdayBlock?.text?.text).toContain('❌ No longer needed _(dropped)_');
+    });
+
     it('shows carried over items in today section', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],
