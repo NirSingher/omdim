@@ -3,7 +3,7 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus } from '../lib/config';
+import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats } from '../lib/db';
 import { runPromptCron, runScheduledPosts, formatDate, getUserDate } from '../lib/prompt';
@@ -91,16 +91,16 @@ export default {
       // Run scheduled posts cron (post pre-filled "tomorrow" submissions)
       const scheduledStats = await runScheduledPosts(db, env.SLACK_BOT_TOKEN);
       console.log('Scheduled posts cron complete:', scheduledStats);
+
+      // Check if it's time to send digests (based on configured digest_time)
+      if (isDigestTime()) {
+        console.log('Running digest cron');
+        const result = await runDigestCronUnified(env);
+        console.log('Digest cron complete:', result);
+      }
     } else if (cronPattern === '0 3 * * *') {
       console.log('Running cleanup cron job');
       await runCleanup(env);
-    } else if (cronPattern === '0 14 * * *') {
-      // Digest cron at 2pm UTC - handles both daily and weekly
-      // Daily digest runs every day
-      // Weekly digest runs on each daily's configured weekly_digest_day
-      console.log('Running digest cron');
-      const result = await runDigestCronUnified(env);
-      console.log('Digest cron complete:', result);
     }
   },
 };
@@ -388,6 +388,30 @@ async function handleDigestCron(url: URL, env: Env): Promise<Response> {
 function getCurrentDayAbbrev(): string {
   const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
   return days[new Date().getDay()];
+}
+
+/**
+ * Check if current time falls within the digest time window.
+ * Since the cron runs every 30 minutes (at :00 and :30), we check if
+ * the configured digest_time falls within the current 30-minute window.
+ * For example:
+ * - Cron at 14:00 covers digest times from 14:00 to 14:29
+ * - Cron at 14:30 covers digest times from 14:30 to 14:59
+ */
+function isDigestTime(): boolean {
+  const digestTime = getDigestTime();
+  const [digestHour, digestMinute] = digestTime.split(':').map(Number);
+
+  const now = new Date();
+  const currentHour = now.getUTCHours();
+  const currentMinute = now.getUTCMinutes();
+
+  // Calculate which 30-minute window we're in
+  const windowStart = currentMinute < 30 ? 0 : 30;
+  const windowEnd = windowStart + 29;
+
+  // Check if digest time falls in this window
+  return currentHour === digestHour && digestMinute >= windowStart && digestMinute <= windowEnd;
 }
 
 /** Unified digest cron - sends daily digest every day, weekly on configured day */

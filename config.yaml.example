@@ -1,6 +1,10 @@
 # Omdim Configuration
 # Copy this file to config.yaml and customize for your team
 
+# Time to send manager digests (UTC, HH:MM format)
+# Daily digest sent every day, weekly digest on each daily's weekly_digest_day
+digest_time: "14:00"
+
 dailies:
   - name: "engineering"
     channel: "#eng-standup"

@@ -79,6 +79,8 @@ const ConfigSchema = z.object({
   dailies: z.array(DailySchema).min(1, 'Must have at least one daily'),
   schedules: z.array(ScheduleSchema).min(1, 'Must have at least one schedule'),
   admins: z.array(z.string()).min(1, 'Must have at least one admin'),
+  // Global digest time (UTC) - defaults to 14:00
+  digest_time: z.string().regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format').optional(),
 });
 
 // ============================================================================
@@ -234,6 +236,11 @@ export function getIntegrationStatus(daily: Daily): { github: boolean; linear: b
     github: daily.integrations?.github?.enabled === true,
     linear: daily.integrations?.linear?.enabled === true,
   };
+}
+
+/** Get the digest time (UTC, HH:MM format, defaults to 14:00) */
+export function getDigestTime(): string {
+  return loadConfig().digest_time || '14:00';
 }
 
 // Clear cache (useful for testing or hot reload)
