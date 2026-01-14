@@ -31,6 +31,8 @@ vi.mock('../lib/config', () => ({
 vi.mock('../lib/slack', () => ({
   openModal: vi.fn(),
   postMessage: vi.fn(),
+  parseRichText: vi.fn(() => ''),
+  sendDM: vi.fn(),
 }));
 
 // Mock the prompt module
@@ -45,8 +47,8 @@ vi.mock('../lib/format', () => ({
   postStandupToChannel: vi.fn(),
 }));
 
-import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, InteractionPayload } from '../lib/handlers/interactions';
-import { snoozeItem, getPreviousSubmission } from '../lib/db';
+import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
+import { snoozeItem, getPreviousSubmission, saveSubmission } from '../lib/db';
 import { openModal } from '../lib/slack';
 
 describe('interaction handlers', () => {
@@ -287,6 +289,153 @@ describe('interaction handlers', () => {
       // Both should be in yesterday's plans for today's modal
       expect(metadata.yesterdayPlans).toContain('Task carried twice');
       expect(metadata.yesterdayPlans).toContain('New task from yesterday');
+    });
+  });
+
+  describe('handleStandupSubmission - today plans validation', () => {
+    const createSubmissionPayload = (options: {
+      yesterdayPlans?: string[];
+      yesterdaySelections?: Record<number, string>; // index -> 'done' | 'continue' | 'drop'
+      todayPlans?: string;
+    }): InteractionPayload => {
+      const { yesterdayPlans = [], yesterdaySelections = {}, todayPlans = '' } = options;
+
+      // Build values object with yesterday item selections
+      const values: Record<string, Record<string, { value?: string; selected_option?: { value: string } }>> = {};
+
+      yesterdayPlans.forEach((_, index) => {
+        const status = yesterdaySelections[index] || 'continue';
+        values[`yesterday_item_${index}`] = {
+          [`item_status_${index}`]: {
+            selected_option: { value: status },
+          },
+        };
+      });
+
+      // Add today_plans if provided
+      if (todayPlans) {
+        values.today_plans = {
+          plans_input: { value: todayPlans },
+        };
+      }
+
+      return {
+        type: 'view_submission',
+        trigger_id: 'trigger123',
+        user: { id: 'U12345' },
+        view: {
+          callback_id: 'standup_submission',
+          private_metadata: JSON.stringify({
+            dailyName: 'daily-il',
+            yesterdayPlans,
+            mode: 'today',
+          }),
+          state: { values },
+        },
+      };
+    };
+
+    it('returns validation error when no carry-overs and no today plans', async () => {
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'done', 1: 'drop' }, // None carried over
+        todayPlans: '',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toEqual({
+        response_action: 'errors',
+        errors: {
+          today_plans: "Add today's plans or carry over items from yesterday",
+        },
+      });
+      expect(saveSubmission).not.toHaveBeenCalled();
+    });
+
+    it('returns validation error when first-time user submits empty plans', async () => {
+      const payload = createSubmissionPayload({
+        yesterdayPlans: [], // No yesterday plans (first day)
+        todayPlans: '',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toEqual({
+        response_action: 'errors',
+        errors: {
+          today_plans: "Add today's plans or carry over items from yesterday",
+        },
+      });
+      expect(saveSubmission).not.toHaveBeenCalled();
+    });
+
+    it('succeeds when items are carried over but no new today plans', async () => {
+      vi.mocked(saveSubmission).mockResolvedValueOnce({ id: 1 } as any);
+
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'done', 1: 'continue' }, // Task B carried over
+        todayPlans: '',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toBe(true);
+      expect(saveSubmission).toHaveBeenCalled();
+    });
+
+    it('succeeds when today plans provided but nothing carried over', async () => {
+      vi.mocked(saveSubmission).mockResolvedValueOnce({ id: 1 } as any);
+
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A'],
+        yesterdaySelections: { 0: 'done' }, // Nothing carried
+        todayPlans: 'New task for today',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toBe(true);
+      expect(saveSubmission).toHaveBeenCalled();
+    });
+
+    it('succeeds when both carry-overs and today plans exist', async () => {
+      vi.mocked(saveSubmission).mockResolvedValueOnce({ id: 1 } as any);
+
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A'],
+        yesterdaySelections: { 0: 'continue' },
+        todayPlans: 'Additional task',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toBe(true);
+      expect(saveSubmission).toHaveBeenCalled();
+    });
+
+    it('treats whitespace-only today plans as empty', async () => {
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A'],
+        yesterdaySelections: { 0: 'done' },
+        todayPlans: '   \n  \n   ', // Only whitespace
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toEqual({
+        response_action: 'errors',
+        errors: {
+          today_plans: "Add today's plans or carry over items from yesterday",
+        },
+      });
     });
   });
 });

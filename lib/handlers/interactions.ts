@@ -32,6 +32,15 @@ export interface InteractionContext {
   slackToken: string;
 }
 
+/** Validation error response for modal submissions */
+export interface ValidationErrorResponse {
+  response_action: 'errors';
+  errors: Record<string, string>;
+}
+
+/** Handler result: true = success, ValidationErrorResponse = show errors to user */
+export type InteractionResult = boolean | ValidationErrorResponse;
+
 /** Slack interaction payload type */
 export interface InteractionPayload {
   type: string;
@@ -141,7 +150,7 @@ function parseLines(text: string | undefined): string[] {
 export async function handleStandupSubmission(
   payload: InteractionPayload,
   ctx: InteractionContext
-): Promise<boolean> {
+): Promise<InteractionResult> {
   const userId = payload.user.id;
   const values = payload.view!.state.values;
   const metadata = JSON.parse(payload.view!.private_metadata) as {
@@ -189,6 +198,16 @@ export async function handleStandupSubmission(
   const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
   const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
+
+  // Validate: require today's plans if nothing is carried over
+  if (yesterdayIncomplete.length === 0 && todayPlans.length === 0) {
+    return {
+      response_action: 'errors',
+      errors: {
+        today_plans: "Add today's plans or carry over items from yesterday",
+      },
+    };
+  }
 
   // Parse custom question answers
   const daily = getDaily(dailyName);
@@ -457,12 +476,12 @@ export async function handleHomeStartDaily(
 
 /**
  * Route an interaction to the appropriate handler
- * @returns true if handled, false otherwise
+ * @returns true if handled, false otherwise, or ValidationErrorResponse for modal errors
  */
 export async function handleInteraction(
   payload: InteractionPayload,
   ctx: InteractionContext
-): Promise<boolean> {
+): Promise<InteractionResult> {
   // Check for config errors
   const configErr = getConfigError();
   if (configErr) {

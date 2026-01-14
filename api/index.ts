@@ -230,12 +230,19 @@ async function handleSlackInteractions(request: Request, env: Env): Promise<Resp
   console.log('Interaction:', { type: payload.type, user: payload.user.id });
 
   const db = getDb(env.DATABASE_URL);
-  await handleInteraction(payload, {
+  const result = await handleInteraction(payload, {
     db,
     slackToken: env.SLACK_BOT_TOKEN,
   });
 
-  // Always return 200 to acknowledge
+  // Return validation errors for modal submissions
+  if (typeof result === 'object' && result.response_action === 'errors') {
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Otherwise return 200 to acknowledge
   return new Response('', { status: 200 });
 }
 

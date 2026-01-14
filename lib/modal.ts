@@ -276,6 +276,7 @@ export function buildStandupModal(
         blocks.push({
           type: 'input',
           block_id: 'today_plans',
+          optional: true,
           element: plansElement,
           label: {
             type: 'plain_text',
