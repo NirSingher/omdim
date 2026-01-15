@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError } from '../config';
+import { getDaily, getConfigError, getSchedule } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -254,8 +254,8 @@ export async function handleStandupSubmission(
   // Tomorrow mode: send confirmation DM, skip channel post and work item tracking
   if (isTomorrowMode) {
     // Get user's scheduled time for the confirmation message (daily already defined above)
-    const schedule = daily?.schedule;
-    const scheduledTime = schedule?.time || '10:00';
+    const scheduleConfig = daily?.schedule ? getSchedule(daily.schedule) : null;
+    const scheduledTime = scheduleConfig?.default_time || '10:00';
 
     // Format the target date for display
     const targetDate = new Date(submissionDate + 'T00:00:00');
