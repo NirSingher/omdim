@@ -523,16 +523,23 @@ async function processScheduledSubmission(
     return 'error';
   }
 
+  // Parse JSONB fields (Neon driver may return strings or arrays inconsistently)
+  const parseJsonbArray = (val: string[] | null): string[] => {
+    if (!val) return [];
+    return Array.isArray(val) ? val : JSON.parse(val as unknown as string);
+  };
+
   const messageTs = await postStandupToChannel(
     slackToken,
     daily.channel,
     userId,
     dailyName,
     {
-      yesterdayCompleted: submission.yesterday_completed || [],
-      yesterdayIncomplete: submission.yesterday_incomplete || [],
-      unplanned: submission.unplanned || [],
-      todayPlans: submission.today_plans || [],
+      yesterdayCompleted: parseJsonbArray(submission.yesterday_completed),
+      yesterdayIncomplete: parseJsonbArray(submission.yesterday_incomplete),
+      yesterdayDropped: [], // Not stored in DB, so empty for scheduled posts
+      unplanned: parseJsonbArray(submission.unplanned),
+      todayPlans: parseJsonbArray(submission.today_plans),
       blockers: submission.blockers || '',
       customAnswers: submission.custom_answers || {},
       questions: daily.questions,
@@ -550,9 +557,9 @@ async function processScheduledSubmission(
 
   // Track work items for analytics (same as regular submissions)
   try {
-    const yesterdayCompleted = submission.yesterday_completed || [];
-    const yesterdayIncomplete = submission.yesterday_incomplete || [];
-    const todayPlans = submission.today_plans || [];
+    const yesterdayCompleted = parseJsonbArray(submission.yesterday_completed);
+    const yesterdayIncomplete = parseJsonbArray(submission.yesterday_incomplete);
+    const todayPlans = parseJsonbArray(submission.today_plans);
 
     // We don't have yesterday_dropped in the submission, so skip that
     if (yesterdayCompleted.length > 0) {

@@ -22,12 +22,10 @@ Serverless architecture with multiple hosting options. Event-driven design with 
 
 | Platform | Functions | Cron | Free Tier | Notes |
 |----------|-----------|------|-----------|-------|
-| **Vercel** | ✅ Native | ⚠️ 1/day | 100K invocations/mo | Needs external cron service |
-| **Netlify** | ✅ Native | ✅ Unlimited | 125K invocations/mo | Recommended - full cron support |
-| **Cloudflare** | ✅ Workers | ✅ Unlimited | 100K requests/day | Fastest cold starts |
+| **Vercel** | ✅ Native | ✅ 1 cron (we use 1) | 100K invocations/mo | Full support |
+| **Netlify** | ✅ Native | ✅ Unlimited | 125K invocations/mo | Full support |
+| **Cloudflare** | ✅ Workers | ✅ 2 crons (we use 1) | 100K requests/day | Fastest cold starts |
 | **Supabase** | ✅ Edge Functions | ✅ pg_cron | 500K invocations/mo | DB + functions in one |
-
-> **Vercel limitation**: Free tier allows only 1 cron job per day. Use [cron-job.org](https://cron-job.org) (free) to trigger endpoints externally, or choose Netlify/Cloudflare/Supabase.
 
 ### Database Options
 
@@ -68,11 +66,10 @@ Serverless architecture with multiple hosting options. Event-driven design with 
 
 | Job | Schedule | Action |
 |-----|----------|--------|
-| `prompt` | Every 30 min | Check who needs prompting, send/re-send DMs |
-| `digest` | Daily at 2pm UTC | Send daily digest to managers; weekly digest on configured day |
-| `cleanup` | Weekly (Sun 3am) | Delete submissions and prompts older than 28 days |
+| `prompt + digest` | Every 30 min | Check who needs prompting; send digests at configured time |
+| `cleanup` | Daily at 3am UTC | Delete submissions and prompts older than 28 days |
 
-> **Free tier note**: Cloudflare Workers free tier allows 2 cron triggers. We use `*/30 * * * *` for prompts and `0 14 * * *` for digests. The unified digest cron handles both daily and weekly digests.
+> **Free tier note**: Cloudflare Workers free tier allows 2 cron triggers. We use just 1 cron (`*/30 * * * *`) for both prompts and digests, leaving a slot available. Digest time is configurable via `digest_time` in config.yaml (default: 14:00 UTC).
 
 **Prompt Logic**:
 ```

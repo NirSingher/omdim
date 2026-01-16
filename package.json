@@ -23,6 +23,6 @@
     "@vitest/coverage-v8": "^4.0.16",
     "typescript": "^5.0.0",
     "vitest": "^4.0.16",
-    "wrangler": "^3.0.0"
+    "wrangler": "^4.58.0"
   }
 }

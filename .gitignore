@@ -157,3 +157,4 @@ urls
 # OS
 .DS_Store
 Thumbs.db
+**/Drafts/

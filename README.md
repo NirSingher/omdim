@@ -44,8 +44,8 @@ Omdim handles the boring part — collecting and organizing updates — so your 
 
 | Platform | Best For | Cron Support | Free Tier Limit |
 |----------|----------|--------------|-----------------|
-| **Cloudflare** ⭐ | Recommended | ✅ Cron Triggers | Unlimited |
-| **Vercel** | Alternative | ⚠️ Limited | 1 cron/day (need external cron) |
+| **Cloudflare** ⭐ | Recommended | ✅ Cron Triggers (2 max, we use 1) | Unlimited requests |
+| **Vercel** | Alternative | ✅ 1 cron (we use 1) | Unlimited requests |
 | **Netlify** | Alternative | ✅ Scheduled functions | Unlimited |
 | **Supabase** | All-in-one (DB + functions) | ✅ pg_cron | Unlimited |
 
@@ -217,6 +217,9 @@ cp config.yaml.example config.yaml
 Edit `config.yaml`:
 
 ```yaml
+# Time to send manager digests (UTC, HH:MM format)
+digest_time: "14:00"
+
 dailies:
   - name: "engineering"
     channel: "#eng-standup"

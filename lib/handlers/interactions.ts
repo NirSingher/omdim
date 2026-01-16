@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError } from '../config';
+import { getDaily, getConfigError, getSchedule } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -31,6 +31,15 @@ export interface InteractionContext {
   db: DbClient;
   slackToken: string;
 }
+
+/** Validation error response for modal submissions */
+export interface ValidationErrorResponse {
+  response_action: 'errors';
+  errors: Record<string, string>;
+}
+
+/** Handler result: true = success, ValidationErrorResponse = show errors to user */
+export type InteractionResult = boolean | ValidationErrorResponse;
 
 /** Slack interaction payload type */
 export interface InteractionPayload {
@@ -141,7 +150,7 @@ function parseLines(text: string | undefined): string[] {
 export async function handleStandupSubmission(
   payload: InteractionPayload,
   ctx: InteractionContext
-): Promise<boolean> {
+): Promise<InteractionResult> {
   const userId = payload.user.id;
   const values = payload.view!.state.values;
   const metadata = JSON.parse(payload.view!.private_metadata) as {
@@ -190,6 +199,16 @@ export async function handleStandupSubmission(
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
   const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
 
+  // Validate: require today's plans if nothing is carried over
+  if (yesterdayIncomplete.length === 0 && todayPlans.length === 0) {
+    return {
+      response_action: 'errors',
+      errors: {
+        today_plans: "Add today's plans or carry over items from yesterday",
+      },
+    };
+  }
+
   // Parse custom question answers
   const daily = getDaily(dailyName);
   const customAnswers: Record<string, string> = {};
@@ -235,8 +254,8 @@ export async function handleStandupSubmission(
   // Tomorrow mode: send confirmation DM, skip channel post and work item tracking
   if (isTomorrowMode) {
     // Get user's scheduled time for the confirmation message (daily already defined above)
-    const schedule = daily?.schedule;
-    const scheduledTime = schedule?.time || '10:00';
+    const scheduleConfig = daily?.schedule ? getSchedule(daily.schedule) : null;
+    const scheduledTime = scheduleConfig?.default_time || '10:00';
 
     // Format the target date for display
     const targetDate = new Date(submissionDate + 'T00:00:00');
@@ -457,12 +476,12 @@ export async function handleHomeStartDaily(
 
 /**
  * Route an interaction to the appropriate handler
- * @returns true if handled, false otherwise
+ * @returns true if handled, false otherwise, or ValidationErrorResponse for modal errors
  */
 export async function handleInteraction(
   payload: InteractionPayload,
   ctx: InteractionContext
-): Promise<boolean> {
+): Promise<InteractionResult> {
   // Check for config errors
   const configErr = getConfigError();
   if (configErr) {
