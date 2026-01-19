@@ -390,7 +390,7 @@ export async function updatePromptSent(
   );
 }
 
-// Mark prompt as submitted
+// Mark prompt as submitted (creates record if needed for tomorrow mode)
 export async function markPromptSubmitted(
   db: DbClient,
   slackUserId: string,
@@ -398,9 +398,10 @@ export async function markPromptSubmitted(
   date: string
 ): Promise<void> {
   await db.query(
-    `UPDATE prompts
-     SET submitted = true
-     WHERE slack_user_id = $1 AND daily_name = $2 AND date = $3`,
+    `INSERT INTO prompts (slack_user_id, daily_name, date, submitted)
+     VALUES ($1, $2, $3, true)
+     ON CONFLICT (slack_user_id, daily_name, date) DO UPDATE
+     SET submitted = true`,
     [slackUserId, dailyName, date]
   );
 }
