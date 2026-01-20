@@ -38,8 +38,9 @@ vi.mock('../lib/slack', () => ({
 // Mock the prompt module
 vi.mock('../lib/prompt', () => ({
   formatDate: vi.fn(() => '2025-12-22'),
-  getUserDate: vi.fn(() => new Date('2025-12-22')),
+  getUserDate: vi.fn(() => new Date('2025-12-22T12:00:00')), // Noon - after default 10:00 schedule
   getUserTimezone: vi.fn(() => Promise.resolve({ tz: 'UTC', tz_offset: 0 })),
+  hasScheduledTimePassed: vi.fn(() => true), // Default to after scheduled time (posts immediately)
 }));
 
 // Mock the format module

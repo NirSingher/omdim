@@ -19,7 +19,7 @@ import {
 } from '../db';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
-import { formatDate, getUserDate, getUserTimezone } from '../prompt';
+import { formatDate, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
 import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
 import { StandupMode } from '../modal';
 
@@ -234,8 +234,14 @@ export async function handleStandupSubmission(
     console.log('No questions in daily config');
   }
 
+  // Determine if we should queue the post for later
+  // Queue if: tomorrow mode OR today mode but before scheduled posting time
+  const scheduleConfig = daily?.schedule ? getSchedule(daily.schedule) : null;
+  const scheduledTime = scheduleConfig?.default_time || '10:00';
+  const isBeforeScheduledTime = !hasScheduledTimePassed(scheduledTime, userDate);
+  const shouldQueue = isTomorrowMode || isBeforeScheduledTime;
+
   // Save submission
-  // For tomorrow mode: posted=false (will be posted at scheduled time)
   const submission = await saveSubmission(ctx.db, {
     slackUserId: userId,
     dailyName,
@@ -246,17 +252,13 @@ export async function handleStandupSubmission(
     todayPlans,
     blockers,
     customAnswers,
-    posted: !isTomorrowMode, // false for tomorrow, true for today
+    posted: !shouldQueue,
   });
 
-  console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, todayPlans: todayPlans.length });
+  console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, shouldQueue, todayPlans: todayPlans.length });
 
-  // Tomorrow mode: send confirmation DM, skip channel post and work item tracking
-  if (isTomorrowMode) {
-    // Get user's scheduled time for the confirmation message (daily already defined above)
-    const scheduleConfig = daily?.schedule ? getSchedule(daily.schedule) : null;
-    const scheduledTime = scheduleConfig?.default_time || '10:00';
-
+  // Queued mode: send confirmation DM, skip channel post and work item tracking
+  if (shouldQueue) {
     // Format the target date for display
     const targetDate = new Date(submissionDate + 'T00:00:00');
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -267,7 +269,7 @@ export async function handleStandupSubmission(
     await markPromptSubmitted(ctx.db, userId, dailyName, submissionDate);
 
     // Send confirmation DM
-    const confirmationMsg = `✅ *Tomorrow's standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
+    const confirmationMsg = `✅ *Standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
     await sendDM(ctx.slackToken, userId, confirmationMsg);
 
     return true;
