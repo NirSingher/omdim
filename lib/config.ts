@@ -44,6 +44,7 @@ const IntegrationUserMappingSchema = z.object({
 const GitHubIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
   org: z.string().optional(),
+  token: z.string().optional(), // Optional: env var name for token (defaults to GITHUB_TOKEN)
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
 });
 
@@ -247,4 +248,55 @@ export function getDigestTime(): string {
 export function clearConfigCache(): void {
   cachedConfig = null;
   configError = null;
+}
+
+// ============================================================================
+// GitHub Integration Helpers
+// ============================================================================
+
+export interface GitHubConfig {
+  enabled: boolean;
+  org: string;
+  tokenEnvVar: string;
+}
+
+/** Get GitHub integration config for a daily, returns null if not enabled */
+export function getGitHubConfig(daily: Daily): GitHubConfig | null {
+  if (!daily.integrations?.github?.enabled) {
+    return null;
+  }
+
+  const github = daily.integrations.github;
+
+  // Org is required when enabled
+  if (!github.org) {
+    console.warn(`GitHub integration enabled for ${daily.name} but no org specified`);
+    return null;
+  }
+
+  return {
+    enabled: true,
+    org: github.org,
+    tokenEnvVar: github.token || 'GITHUB_TOKEN',
+  };
+}
+
+/** Look up GitHub username from config mapping for a daily */
+export function getGitHubUsernameFromConfig(daily: Daily, slackUserId: string): string | null {
+  const mapping = daily.integrations?.github?.user_mapping;
+  if (!mapping) return null;
+
+  const match = mapping.find((m) => m.slack_user_id === slackUserId);
+  return match?.external_username || null;
+}
+
+/** Get all GitHub user mappings for a daily */
+export function getGitHubUserMappings(daily: Daily): Array<{ slackUserId: string; githubUsername: string }> {
+  const mapping = daily.integrations?.github?.user_mapping;
+  if (!mapping) return [];
+
+  return mapping.map((m) => ({
+    slackUserId: m.slack_user_id,
+    githubUsername: m.external_username,
+  }));
 }

@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -16,7 +16,9 @@ import {
   createWorkItems,
   snoozeItem,
   getSubmissionForDate,
+  getGitHubUsername,
 } from '../db';
+import { fetchUserPRData, UserPRData } from '../github';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
@@ -30,6 +32,7 @@ import { StandupMode } from '../modal';
 export interface InteractionContext {
   db: DbClient;
   slackToken: string;
+  env?: Record<string, string | undefined>; // For accessing GitHub tokens etc.
 }
 
 /** Validation error response for modal submissions */
@@ -311,6 +314,28 @@ export async function handleStandupSubmission(
 
   // Post to channel
   if (daily?.channel) {
+    // Fetch GitHub PR data if integration is enabled
+    let prData: UserPRData | undefined;
+    const githubConfig = getGitHubConfig(daily);
+    if (githubConfig && ctx.env) {
+      const githubToken = ctx.env[githubConfig.tokenEnvVar];
+      if (githubToken) {
+        // Get GitHub username: config mapping takes precedence over DB
+        let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+        if (!githubUsername) {
+          githubUsername = await getGitHubUsername(ctx.db, userId);
+        }
+
+        if (githubUsername) {
+          try {
+            prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+          } catch (error) {
+            console.error('Failed to fetch PR data:', error);
+          }
+        }
+      }
+    }
+
     const messageTs = await postStandupToChannel(
       ctx.slackToken,
       daily.channel,
@@ -326,6 +351,7 @@ export async function handleStandupSubmission(
         customAnswers,
         questions: daily.questions,
         fieldOrder: daily.field_order,
+        prData,
       }
     );
 

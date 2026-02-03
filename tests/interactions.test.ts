@@ -15,6 +15,7 @@ vi.mock('../lib/db', () => ({
   markItemsDropped: vi.fn(),
   incrementCarryCount: vi.fn(),
   createWorkItems: vi.fn(),
+  getGitHubUsername: vi.fn(() => Promise.resolve(null)),
 }));
 
 // Mock the config module
@@ -25,6 +26,9 @@ vi.mock('../lib/config', () => ({
     questions: [],
   })),
   getConfigError: vi.fn(() => null),
+  getSchedule: vi.fn(() => ({ default_time: '10:00' })),
+  getGitHubConfig: vi.fn(() => null), // No GitHub integration by default
+  getGitHubUsernameFromConfig: vi.fn(() => null),
 }));
 
 // Mock the slack module

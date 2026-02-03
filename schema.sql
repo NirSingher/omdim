@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS slack_users (
   display_name TEXT,
   tz TEXT,
   tz_offset INTEGER NOT NULL DEFAULT 0,
+  github_username TEXT,  -- Optional: linked GitHub username for PR integration
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 -- Migration for existing databases:
 -- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS snoozed_until DATE;
 -- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS posted BOOLEAN DEFAULT TRUE;
+-- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (

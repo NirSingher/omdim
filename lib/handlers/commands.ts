@@ -3,8 +3,8 @@
  * Handles: help, prompt, add, remove, list, digest, week, daily
  */
 
-import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission } from '../db';
+import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig } from '../config';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
 import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse, openModal } from '../slack';
@@ -46,6 +46,7 @@ export function handleHelp(): CommandResponse {
     '`/standup help` - Show this help message\n' +
     '`/standup prompt [daily|all]` - Send standup prompt(s) to your DMs\n' +
     '`/standup ooo [tomorrow|clear|dates]` - Manage out of office\n' +
+    '`/standup github [link|unlink|status]` - Manage GitHub account link\n' +
     '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
     '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
     '`/standup list [daily|all]` - List participants in a daily\n' +
@@ -876,6 +877,123 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
 }
 
 // ============================================================================
+// GitHub Integration Commands
+// ============================================================================
+
+/** Manage GitHub username linking */
+export async function handleGitHub(ctx: CommandContext): Promise<CommandResponse> {
+  const subcommand = ctx.args[1]?.toLowerCase();
+
+  try {
+    // Get user's dailies to check for config mappings
+    const userDailies = await getUserDailies(ctx.db, ctx.userId);
+
+    // Check for config-based mappings (takes precedence)
+    const configUsernames: string[] = [];
+    for (const d of userDailies) {
+      const daily = getDaily(d.daily_name);
+      if (daily) {
+        const configUsername = getGitHubUsernameFromConfig(daily, ctx.userId);
+        if (configUsername && !configUsernames.includes(configUsername)) {
+          configUsernames.push(configUsername);
+        }
+      }
+    }
+
+    // No subcommand - show current status
+    if (!subcommand) {
+      const dbUsername = await getGitHubUsername(ctx.db, ctx.userId);
+
+      const lines: string[] = ['*GitHub Link Status*'];
+
+      if (configUsernames.length > 0) {
+        lines.push(`Config mapping: \`${configUsernames.join(', ')}\` _(set by admin)_`);
+      }
+
+      if (dbUsername) {
+        lines.push(`Self-linked: \`${dbUsername}\``);
+        if (configUsernames.length > 0) {
+          lines.push('_Note: Config mapping takes precedence over self-linked username_');
+        }
+      }
+
+      if (configUsernames.length === 0 && !dbUsername) {
+        lines.push('_No GitHub account linked_');
+        lines.push('\nUse `/standup github link <username>` to link your account.');
+      }
+
+      return ephemeralResponse(lines.join('\n'));
+    }
+
+    // Handle 'link' subcommand
+    if (subcommand === 'link') {
+      const username = ctx.args[2];
+      if (!username) {
+        return ephemeralResponse('Usage: `/standup github link <github-username>`');
+      }
+
+      // Validate username format (basic check)
+      if (!/^[a-zA-Z0-9][-a-zA-Z0-9]*$/.test(username)) {
+        return ephemeralResponse('❌ Invalid GitHub username format.');
+      }
+
+      await setGitHubUsername(ctx.db, ctx.userId, username);
+
+      let message = `✅ Linked GitHub account: \`${username}\``;
+      if (configUsernames.length > 0) {
+        message += '\n_Note: Your admin has also set a config mapping, which takes precedence._';
+      }
+
+      return ephemeralResponse(message);
+    }
+
+    // Handle 'unlink' subcommand
+    if (subcommand === 'unlink') {
+      await setGitHubUsername(ctx.db, ctx.userId, null);
+
+      let message = '✅ Unlinked GitHub account.';
+      if (configUsernames.length > 0) {
+        message += `\n_Note: Config mapping (\`${configUsernames.join(', ')}\`) is still active._`;
+      }
+
+      return ephemeralResponse(message);
+    }
+
+    // Handle 'status' subcommand (same as no subcommand)
+    if (subcommand === 'status') {
+      const dbUsername = await getGitHubUsername(ctx.db, ctx.userId);
+
+      const lines: string[] = ['*GitHub Link Status*'];
+
+      if (configUsernames.length > 0) {
+        lines.push(`Config mapping: \`${configUsernames.join(', ')}\` _(set by admin)_`);
+      }
+
+      if (dbUsername) {
+        lines.push(`Self-linked: \`${dbUsername}\``);
+      }
+
+      if (configUsernames.length === 0 && !dbUsername) {
+        lines.push('_No GitHub account linked_');
+      }
+
+      return ephemeralResponse(lines.join('\n'));
+    }
+
+    return ephemeralResponse(
+      '*GitHub Commands:*\n' +
+      '`/standup github` - Show current link status\n' +
+      '`/standup github link <username>` - Link your GitHub account\n' +
+      '`/standup github unlink` - Unlink your GitHub account\n' +
+      '`/standup github status` - Show current link status'
+    );
+  } catch (err) {
+    console.error('Failed to manage GitHub link:', err);
+    return ephemeralResponse('❌ Failed to manage GitHub link. Please try again.');
+  }
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -914,6 +1032,8 @@ export async function handleCommand(
       return handlePrompt(ctx);
     case 'ooo':
       return handleOOO(ctx);
+    case 'github':
+      return handleGitHub(ctx);
     case 'force-prompt':
       return handleForcePrompt(ctx);
     default:
