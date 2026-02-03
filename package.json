@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
+    "dev:tunnel": "npx concurrently -k -n wrangler,ngrok -c blue,green \"wrangler dev\" \"sleep 2 && ngrok http 8787 --log=stdout\"",
     "deploy": "wrangler deploy",
     "build": "tsc",
     "lint": "tsc --noEmit",
