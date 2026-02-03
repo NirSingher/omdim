@@ -158,3 +158,6 @@ urls
 .DS_Store
 Thumbs.db
 **/Drafts/
+
+# Local dev scripts (not committed)
+local/
