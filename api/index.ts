@@ -3,9 +3,10 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime } from '../lib/config';
+import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats } from '../lib/db';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks } from '../lib/db';
+import { fetchTeamPRData, TeamPRData } from '../lib/github';
 import { runPromptCron, runScheduledPosts, formatDate, getUserDate } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
@@ -22,6 +23,9 @@ export interface Env {
   DATABASE_URL: string;
   CRON_SECRET?: string;
   DEV_MODE?: string;
+  GITHUB_TOKEN?: string;
+  // Allow additional env vars for custom GitHub token names per daily
+  [key: string]: string | undefined;
 }
 
 // ============================================================================
@@ -89,7 +93,7 @@ export default {
       console.log('Prompt cron complete:', promptStats);
 
       // Run scheduled posts cron (post pre-filled "tomorrow" submissions)
-      const scheduledStats = await runScheduledPosts(db, env.SLACK_BOT_TOKEN);
+      const scheduledStats = await runScheduledPosts(db, env.SLACK_BOT_TOKEN, env);
       console.log('Scheduled posts cron complete:', scheduledStats);
 
       // Check if it's time to send digests (based on configured digest_time)
@@ -233,6 +237,7 @@ async function handleSlackInteractions(request: Request, env: Env): Promise<Resp
   const result = await handleInteraction(payload, {
     db,
     slackToken: env.SLACK_BOT_TOKEN,
+    env,
   });
 
   // Return validation errors for modal submissions
@@ -291,6 +296,7 @@ async function handleSlackEvents(request: Request, env: Env): Promise<Response> 
       await handleAppHomeOpened(event, {
         db,
         slackToken: env.SLACK_BOT_TOKEN,
+        env,
       });
     }
   }
@@ -548,6 +554,45 @@ async function sendDigestToManagers(
   // Get integration status for work alignment section
   const integrations = getIntegrationStatus(daily);
 
+  // Fetch team PR data if GitHub integration is enabled
+  let teamPRData: TeamPRData[] | undefined;
+  const githubConfig = getGitHubConfig(daily);
+  if (githubConfig) {
+    const githubToken = env[githubConfig.tokenEnvVar];
+    if (githubToken) {
+      try {
+        // Get GitHub user mappings from config
+        const configMappings = getGitHubUserMappings(daily);
+
+        // Get participants for this daily
+        const participants = await getParticipants(db, daily.name);
+
+        // Get DB-linked GitHub usernames for participants not in config
+        const dbLinks = await getUsersWithGitHubLinks(db);
+        const dbLinksMap = new Map(dbLinks.map(l => [l.slackUserId, l.githubUsername]));
+
+        // Build combined user list (config takes precedence)
+        const configUserIds = new Set(configMappings.map(m => m.slackUserId));
+        const users: Array<{ slackUserId: string; githubUsername: string }> = [...configMappings];
+
+        for (const p of participants) {
+          if (!configUserIds.has(p.slack_user_id)) {
+            const githubUsername = dbLinksMap.get(p.slack_user_id);
+            if (githubUsername) {
+              users.push({ slackUserId: p.slack_user_id, githubUsername });
+            }
+          }
+        }
+
+        if (users.length > 0) {
+          teamPRData = await fetchTeamPRData(githubToken, githubConfig.org, users);
+        }
+      } catch (error) {
+        console.error('Failed to fetch team PR data for digest:', error);
+      }
+    }
+  }
+
   const digestText = formatManagerDigest({
     dailyName: daily.name,
     period,
@@ -562,6 +607,7 @@ async function sendDigestToManagers(
     rankings,
     trends,
     integrations,
+    teamPRData,
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)

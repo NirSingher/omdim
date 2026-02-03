@@ -7,6 +7,7 @@
 
 import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats } from './db';
 import { postMessage, sendDM as slackSendDM } from './slack';
+import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 
 // Re-export sendDM for backward compatibility
 export { sendDM as sendDM } from './slack';
@@ -36,6 +37,7 @@ interface StandupData {
   customAnswers: Record<string, string>;
   questions?: QuestionConfig[];
   fieldOrder?: FieldOrder;
+  prData?: UserPRData; // GitHub PR data for integration
 }
 
 // Default field order values
@@ -172,6 +174,14 @@ export function formatStandupBlocks(
     const block = section.render();
     if (block) {
       blocks.push(block);
+    }
+  }
+
+  // PR section (if data available)
+  if (data.prData) {
+    const prBlock = formatPRSectionBlock(data.prData);
+    if (prBlock) {
+      blocks.push(prBlock);
     }
   }
 
@@ -334,6 +344,7 @@ export interface DigestOptions {
   rankings?: TeamMemberRanking[];
   trends?: TrendData;
   integrations?: IntegrationStatus;
+  teamPRData?: TeamPRData[]; // GitHub PR data for team
 }
 
 /**
@@ -453,6 +464,14 @@ export function formatManagerDigest(options: DigestOptions): string {
     }
 
     lines.push(line);
+  }
+
+  // PR section (if GitHub integration data available)
+  if (options.teamPRData && options.teamPRData.length > 0) {
+    const prSection = formatPRDigestSection(options.teamPRData);
+    if (prSection) {
+      lines.push(prSection);
+    }
   }
 
   // Footer with report hint (only for weekly/4-week)
@@ -776,6 +795,124 @@ function formatTrend(
     return `${current}${unit}`;
   }
   return `${current}${unit} ${indicator}`;
+}
+
+// ============================================================================
+// GitHub PR Formatting
+// ============================================================================
+
+/**
+ * Format PR section block for standup messages
+ * Shows authored PRs awaiting review and review requests
+ */
+function formatPRSectionBlock(prData: UserPRData): Block | null {
+  const lines: string[] = [];
+
+  // Authored PRs awaiting review
+  if (prData.authoredPRs.length > 0) {
+    for (const pr of prData.authoredPRs.slice(0, 3)) {
+      const ref = formatPRRef(pr);
+      const waiting = pr.reviewsNeeded > 0 ? ` (${pr.reviewsNeeded} pending)` : '';
+      lines.push(`• \`${ref}\` needs review${waiting}`);
+    }
+    if (prData.authoredPRs.length > 3) {
+      lines.push(`  _...and ${prData.authoredPRs.length - 3} more_`);
+    }
+  }
+
+  // Review requests
+  if (prData.reviewRequests.length > 0) {
+    for (const pr of prData.reviewRequests.slice(0, 3)) {
+      const ref = formatPRRef(pr);
+      lines.push(`• Review requested: \`${ref}\` by @${pr.author}`);
+    }
+    if (prData.reviewRequests.length > 3) {
+      lines.push(`  _...and ${prData.reviewRequests.length - 3} more_`);
+    }
+  }
+
+  if (lines.length === 0) return null;
+
+  return {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: '*📦 PRs needing attention:*\n' + lines.join('\n'),
+    },
+  };
+}
+
+/**
+ * Format PR summary for manager digest
+ * Shows team-wide PR stats
+ */
+export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
+  const lines: string[] = [];
+
+  // Calculate totals
+  let totalAuthored = 0;
+  let totalReviewRequests = 0;
+  const usersWithPRs: string[] = [];
+  const usersWithReviews: string[] = [];
+
+  for (const member of teamPRData) {
+    totalAuthored += member.data.authoredPRs.length;
+    totalReviewRequests += member.data.reviewRequests.length;
+
+    if (member.data.authoredPRs.length > 0) {
+      usersWithPRs.push(member.slackUserId);
+    }
+    if (member.data.reviewRequests.length > 0) {
+      usersWithReviews.push(member.slackUserId);
+    }
+  }
+
+  if (totalAuthored === 0 && totalReviewRequests === 0) {
+    return '';
+  }
+
+  lines.push('');
+  lines.push('*📦 PR Activity*');
+
+  if (totalAuthored > 0) {
+    lines.push(`${totalAuthored} PR${totalAuthored !== 1 ? 's' : ''} awaiting review`);
+  }
+
+  if (totalReviewRequests > 0) {
+    lines.push(`${totalReviewRequests} review request${totalReviewRequests !== 1 ? 's' : ''} pending`);
+  }
+
+  // Show specific users with many open PRs or reviews
+  for (const member of teamPRData) {
+    const authored = member.data.authoredPRs.length;
+    const reviews = member.data.reviewRequests.length;
+
+    if (authored >= 3 || reviews >= 3) {
+      const parts: string[] = [];
+      if (authored >= 3) parts.push(`${authored} PRs awaiting review`);
+      if (reviews >= 3) parts.push(`${reviews} reviews pending`);
+      lines.push(`  ⚠️ <@${member.slackUserId}>: ${parts.join(', ')}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Format PR summary for individual member in full report
+ */
+export function formatMemberPRSummary(prData: UserPRData): string {
+  const lines: string[] = [];
+
+  if (prData.authoredPRs.length > 0) {
+    lines.push(`PRs awaiting review: ${prData.authoredPRs.length}`);
+  }
+
+  if (prData.reviewRequests.length > 0) {
+    lines.push(`Review requests: ${prData.reviewRequests.length}`);
+  }
+
+  return lines.join(' · ');
 }
 
 // ============================================================================

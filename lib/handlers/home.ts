@@ -3,10 +3,11 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate } from '../db';
-import { getDaily } from '../config';
+import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername } from '../db';
+import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
+import { fetchUserPRData, UserPRData } from '../github';
 
 // ============================================================================
 // Types
@@ -15,6 +16,7 @@ import { formatDate, getUserDate, getUserTimezone } from '../prompt';
 export interface HomeContext {
   db: DbClient;
   slackToken: string;
+  env?: Record<string, string | undefined>; // For accessing GitHub tokens etc.
 }
 
 /** Slack event payload for app_home_opened */
@@ -32,6 +34,7 @@ interface DailyStatus {
   dailyName: string;
   todaySubmitted: boolean;
   tomorrowScheduled: boolean;
+  prData?: UserPRData; // GitHub PR data if integration enabled
 }
 
 /**
@@ -79,11 +82,26 @@ function buildHomeView(dailyStatuses: DailyStatus[]): unknown {
         ? (status.tomorrowScheduled ? 'Tomorrow scheduled' : 'Today done')
         : 'Not submitted';
 
+      // Build status line with optional PR info
+      let statusLine = `${statusEmoji} ${statusText}`;
+      if (status.prData) {
+        const prParts: string[] = [];
+        if (status.prData.authoredPRs.length > 0) {
+          prParts.push(`${status.prData.authoredPRs.length} PR${status.prData.authoredPRs.length !== 1 ? 's' : ''} awaiting review`);
+        }
+        if (status.prData.reviewRequests.length > 0) {
+          prParts.push(`${status.prData.reviewRequests.length} review${status.prData.reviewRequests.length !== 1 ? 's' : ''} pending`);
+        }
+        if (prParts.length > 0) {
+          statusLine += `\n📦 ${prParts.join(' · ')}`;
+        }
+      }
+
       blocks.push({
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${status.dailyName}*\n${statusEmoji} ${statusText}`,
+          text: `*${status.dailyName}*\n${statusLine}`,
         },
         accessory: {
           type: 'button',
@@ -158,6 +176,7 @@ export async function handleAppHomeOpened(
 
     for (const participant of userDailies) {
       const dailyName = participant.daily_name;
+      const daily = getDaily(dailyName);
 
       // Check today's submission
       const todaySubmission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
@@ -170,10 +189,35 @@ export async function handleAppHomeOpened(
         tomorrowScheduled = tomorrowSubmission !== null && !tomorrowSubmission.posted;
       }
 
+      // Fetch GitHub PR data if integration is enabled
+      let prData: UserPRData | undefined;
+      if (daily && ctx.env) {
+        const githubConfig = getGitHubConfig(daily);
+        if (githubConfig) {
+          const githubToken = ctx.env[githubConfig.tokenEnvVar];
+          if (githubToken) {
+            // Get GitHub username: config mapping takes precedence over DB
+            let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+            if (!githubUsername) {
+              githubUsername = await getGitHubUsername(ctx.db, userId);
+            }
+
+            if (githubUsername) {
+              try {
+                prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+              } catch (error) {
+                console.error(`Failed to fetch PR data for ${userId}:`, error);
+              }
+            }
+          }
+        }
+      }
+
       dailyStatuses.push({
         dailyName,
         todaySubmitted,
         tomorrowScheduled,
+        prData,
       });
     }
 
