@@ -5,10 +5,11 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, createWorkItems } from './db';
-import { getSchedule, getConfigError, getDaily } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, createWorkItems, getGitHubUsername } from './db';
+import { getSchedule, getConfigError, getDaily, getGitHubConfig, getGitHubUsernameFromConfig } from './config';
 import { getUserInfo, postMessage } from './slack';
 import { postStandupToChannel } from './format';
+import { fetchUserPRData, UserPRData } from './github';
 
 // ============================================================================
 // User Timezone with Caching
@@ -424,7 +425,8 @@ export function hasScheduledTimePassed(scheduleTime: string, userDate: Date): bo
  */
 export async function runScheduledPosts(
   db: DbClient,
-  slackToken: string
+  slackToken: string,
+  env?: Record<string, string | undefined>
 ): Promise<{ posted: number; skipped: number; errors: number }> {
   const stats = { posted: 0, skipped: 0, errors: 0 };
 
@@ -442,7 +444,7 @@ export async function runScheduledPosts(
 
     for (const submission of submissions) {
       try {
-        const result = await processScheduledSubmission(db, slackToken, submission);
+        const result = await processScheduledSubmission(db, slackToken, submission, env);
         if (result === 'posted') {
           stats.posted++;
         } else if (result === 'skipped') {
@@ -469,7 +471,8 @@ export async function runScheduledPosts(
 async function processScheduledSubmission(
   db: DbClient,
   slackToken: string,
-  submission: Submission
+  submission: Submission,
+  env?: Record<string, string | undefined>
 ): Promise<'posted' | 'skipped' | 'error'> {
   const { slack_user_id: userId, daily_name: dailyName, date: submissionDate } = submission;
 
@@ -529,6 +532,28 @@ async function processScheduledSubmission(
     return Array.isArray(val) ? val : JSON.parse(val as unknown as string);
   };
 
+  // Fetch GitHub PR data if integration is enabled
+  let prData: UserPRData | undefined;
+  const githubConfig = getGitHubConfig(daily);
+  if (githubConfig && env) {
+    const githubToken = env[githubConfig.tokenEnvVar];
+    if (githubToken) {
+      // Get GitHub username: config mapping takes precedence over DB
+      let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+      if (!githubUsername) {
+        githubUsername = await getGitHubUsername(db, userId);
+      }
+
+      if (githubUsername) {
+        try {
+          prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+        } catch (error) {
+          console.error('Failed to fetch PR data for scheduled post:', error);
+        }
+      }
+    }
+  }
+
   const messageTs = await postStandupToChannel(
     slackToken,
     daily.channel,
@@ -544,6 +569,7 @@ async function processScheduledSubmission(
       customAnswers: submission.custom_answers || {},
       questions: daily.questions,
       fieldOrder: daily.field_order,
+      prData,
     }
   );
 

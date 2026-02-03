@@ -50,6 +50,7 @@ export interface SlackUser {
   display_name: string | null;
   tz: string | null;
   tz_offset: number;
+  github_username: string | null;
   updated_at: Date;
 }
 
@@ -107,6 +108,52 @@ export async function getStaleUsers(db: DbClient): Promise<string[]> {
         OR su.updated_at < NOW() - INTERVAL '${USER_CACHE_HOURS} hours'`
   );
   return result.map((r) => r.slack_user_id);
+}
+
+// ============================================================================
+// GitHub Username Linking
+// ============================================================================
+
+/** Get GitHub username for a Slack user (from DB) */
+export async function getGitHubUsername(
+  db: DbClient,
+  slackUserId: string
+): Promise<string | null> {
+  const result = await db.query<{ github_username: string | null }>(
+    `SELECT github_username FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  return result[0]?.github_username || null;
+}
+
+/** Set GitHub username for a Slack user */
+export async function setGitHubUsername(
+  db: DbClient,
+  slackUserId: string,
+  githubUsername: string | null
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, github_username, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       github_username = $3`,
+    [slackUserId, githubUsername, githubUsername]
+  );
+}
+
+/** Get all Slack users with linked GitHub usernames */
+export async function getUsersWithGitHubLinks(
+  db: DbClient
+): Promise<Array<{ slackUserId: string; githubUsername: string }>> {
+  const result = await db.query<{ slack_user_id: string; github_username: string }>(
+    `SELECT slack_user_id, github_username
+     FROM slack_users
+     WHERE github_username IS NOT NULL`
+  );
+  return result.map((r) => ({
+    slackUserId: r.slack_user_id,
+    githubUsername: r.github_username,
+  }));
 }
 
 // ============================================================================
