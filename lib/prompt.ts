@@ -474,7 +474,8 @@ async function processScheduledSubmission(
   submission: Submission,
   env?: Record<string, string | undefined>
 ): Promise<'posted' | 'skipped' | 'error'> {
-  const { slack_user_id: userId, daily_name: dailyName, date: submissionDate } = submission;
+  const { slack_user_id: userId, daily_name: dailyName } = submission;
+  const submissionDate = String(submission.date).split('T')[0];
 
   // Get daily config
   const daily = getDaily(dailyName);
