@@ -8,7 +8,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../lib/config', () => ({
   getSchedule: vi.fn(),
   getDaily: vi.fn(),
+  getDailies: vi.fn(() => []),
   loadConfig: vi.fn(),
+  getConfigError: vi.fn(() => null),
+  getReminderMinutesBefore: vi.fn(() => 90),
 }));
 
 // Mock slack module (makes API calls)

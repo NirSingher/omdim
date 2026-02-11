@@ -205,6 +205,24 @@ describe('modal builder', () => {
       expect(unplannedIdx).toBeLessThan(dividerAfterUnplanned);
     });
 
+    it('includes 4 dropdown options with In Progress', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Task A'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      const dropdownBlock = modal.blocks.find(b =>
+        b.block_id === 'yesterday_item_0'
+      );
+      const options = dropdownBlock?.accessory?.options as any[];
+      expect(options).toHaveLength(4);
+      expect(options.map((o: any) => o.value)).toEqual(['continue', 'in_progress', 'done', 'drop']);
+      expect(options[1].text.text).toContain('In progress');
+    });
+
     it('sets default dropdown option to "Carry over"', () => {
       const yesterday: YesterdayData = {
         plans: ['Task A'],

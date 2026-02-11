@@ -212,7 +212,7 @@ export interface WorkItem {
   daily_name: string;
   text: string;
   created_date: string;
-  status: 'pending' | 'done' | 'dropped' | 'carried';
+  status: 'pending' | 'done' | 'dropped' | 'carried' | 'in_progress';
   carry_count: number;
   completed_date: string | null;
   snoozed_until: string | null;
@@ -260,7 +260,7 @@ export async function markItemsDone(
     const result = await db.query<{ id: number }>(
       `UPDATE work_items
        SET status = 'done', completed_date = $1
-       WHERE slack_user_id = $2 AND daily_name = $3 AND text = $4 AND status IN ('pending', 'carried')
+       WHERE slack_user_id = $2 AND daily_name = $3 AND text = $4 AND status IN ('pending', 'carried', 'in_progress')
        RETURNING id`,
       [completedDate, slackUserId, dailyName, text]
     );
@@ -283,7 +283,7 @@ export async function markItemsDropped(
     const result = await db.query<{ id: number }>(
       `UPDATE work_items
        SET status = 'dropped'
-       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3 AND status IN ('pending', 'carried')
+       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3 AND status IN ('pending', 'carried', 'in_progress')
        RETURNING id`,
       [slackUserId, dailyName, text]
     );
@@ -306,13 +306,60 @@ export async function incrementCarryCount(
     const result = await db.query<{ id: number }>(
       `UPDATE work_items
        SET carry_count = carry_count + 1, status = 'carried'
-       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3 AND status IN ('pending', 'carried')
+       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3 AND status IN ('pending', 'carried', 'in_progress')
        RETURNING id`,
       [slackUserId, dailyName, text]
     );
     updated += result.length;
   }
   return updated;
+}
+
+/** Mark items as in-progress (sets status, increments carry count like carry over) */
+export async function markItemsInProgress(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  itemTexts: string[]
+): Promise<number> {
+  if (itemTexts.length === 0) return 0;
+
+  let updated = 0;
+  for (const text of itemTexts) {
+    const result = await db.query<{ id: number }>(
+      `UPDATE work_items
+       SET carry_count = carry_count + 1, status = 'in_progress'
+       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3 AND status IN ('pending', 'carried', 'in_progress')
+       RETURNING id`,
+      [slackUserId, dailyName, text]
+    );
+    updated += result.length;
+  }
+  return updated;
+}
+
+/** Get carry counts for in-progress items (for attention warnings) */
+export async function getInProgressCarryCounts(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  itemTexts: string[]
+): Promise<Record<string, number>> {
+  if (itemTexts.length === 0) return {};
+
+  const result: Record<string, number> = {};
+  for (const text of itemTexts) {
+    const rows = await db.query<{ carry_count: number }>(
+      `SELECT carry_count FROM work_items
+       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3 AND status = 'in_progress'
+       ORDER BY created_date DESC LIMIT 1`,
+      [slackUserId, dailyName, text]
+    );
+    if (rows[0]) {
+      result[text] = rows[0].carry_count;
+    }
+  }
+  return result;
 }
 
 /** Get items with high carry count (for alerts) */
@@ -322,7 +369,7 @@ export async function getHighCarryItems(
 ): Promise<WorkItem[]> {
   return db.query<WorkItem>(
     `SELECT * FROM work_items
-     WHERE carry_count >= $1 AND status IN ('pending', 'carried')
+     WHERE carry_count >= $1 AND status IN ('pending', 'carried', 'in_progress')
      ORDER BY carry_count DESC, created_date ASC`,
     [threshold]
   );
@@ -336,7 +383,7 @@ export async function getPendingItems(
 ): Promise<WorkItem[]> {
   return db.query<WorkItem>(
     `SELECT * FROM work_items
-     WHERE slack_user_id = $1 AND daily_name = $2 AND status IN ('pending', 'carried')
+     WHERE slack_user_id = $1 AND daily_name = $2 AND status IN ('pending', 'carried', 'in_progress')
      ORDER BY created_date ASC`,
     [slackUserId, dailyName]
   );
@@ -518,6 +565,7 @@ export interface Submission {
   date: string;
   yesterday_completed: string[] | null;
   yesterday_incomplete: string[] | null;
+  yesterday_in_progress: string[] | null;
   unplanned: string[] | null;
   today_plans: string[] | null;
   blockers: string | null;
@@ -553,6 +601,7 @@ export async function saveSubmission(
     date: string;
     yesterdayCompleted: string[];
     yesterdayIncomplete: string[];
+    yesterdayInProgress?: string[];
     unplanned: string[];
     todayPlans: string[];
     blockers: string;
@@ -561,21 +610,23 @@ export async function saveSubmission(
   }
 ): Promise<Submission> {
   const posted = submission.posted ?? true; // Default to true for backward compatibility
+  const yesterdayInProgress = submission.yesterdayInProgress || [];
   // Use unique parameter numbers (no reuse) for tagged template conversion
   const result = await db.query<Submission>(
     `INSERT INTO submissions (
        slack_user_id, daily_name, date,
-       yesterday_completed, yesterday_incomplete, unplanned,
+       yesterday_completed, yesterday_incomplete, yesterday_in_progress, unplanned,
        today_plans, blockers, custom_answers, posted
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (slack_user_id, daily_name, date) DO UPDATE SET
-       yesterday_completed = $11,
-       yesterday_incomplete = $12,
-       unplanned = $13,
-       today_plans = $14,
-       blockers = $15,
-       custom_answers = $16,
-       posted = $17,
+       yesterday_completed = $12,
+       yesterday_incomplete = $13,
+       yesterday_in_progress = $14,
+       unplanned = $15,
+       today_plans = $16,
+       blockers = $17,
+       custom_answers = $18,
+       posted = $19,
        submitted_at = NOW()
      RETURNING *`,
     [
@@ -584,6 +635,7 @@ export async function saveSubmission(
       submission.date,
       JSON.stringify(submission.yesterdayCompleted),
       JSON.stringify(submission.yesterdayIncomplete),
+      JSON.stringify(yesterdayInProgress),
       JSON.stringify(submission.unplanned),
       JSON.stringify(submission.todayPlans),
       submission.blockers,
@@ -592,6 +644,7 @@ export async function saveSubmission(
       // Duplicate values for ON CONFLICT
       JSON.stringify(submission.yesterdayCompleted),
       JSON.stringify(submission.yesterdayIncomplete),
+      JSON.stringify(yesterdayInProgress),
       JSON.stringify(submission.unplanned),
       JSON.stringify(submission.todayPlans),
       submission.blockers,
@@ -858,7 +911,7 @@ export async function getBottleneckItems(
      FROM work_items
      WHERE daily_name = $1
        AND carry_count >= $2
-       AND status IN ('pending', 'carried')
+       AND status IN ('pending', 'carried', 'in_progress')
        AND (snoozed_until IS NULL OR snoozed_until <= CURRENT_DATE)
      ORDER BY carry_count DESC, created_date ASC
      LIMIT 10`,
@@ -1229,6 +1282,37 @@ export async function getActiveOOOForDaily(
     `SELECT * FROM ooo
      WHERE daily_name = $1
        AND $2 BETWEEN start_date AND end_date`,
+    [dailyName, date]
+  );
+}
+
+// ============================================================================
+// Reminder Log (dedup channel reminders)
+// ============================================================================
+
+/** Check if a reminder was already sent for a daily on a given date */
+export async function wasReminderSent(
+  db: DbClient,
+  dailyName: string,
+  date: string
+): Promise<boolean> {
+  const result = await db.query<{ id: number }>(
+    `SELECT id FROM reminder_log WHERE daily_name = $1 AND date = $2`,
+    [dailyName, date]
+  );
+  return result.length > 0;
+}
+
+/** Record that a reminder was sent */
+export async function recordReminderSent(
+  db: DbClient,
+  dailyName: string,
+  date: string
+): Promise<void> {
+  await db.query(
+    `INSERT INTO reminder_log (daily_name, date)
+     VALUES ($1, $2)
+     ON CONFLICT (daily_name, date) DO NOTHING`,
     [dailyName, date]
   );
 }

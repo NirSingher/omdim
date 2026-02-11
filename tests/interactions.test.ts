@@ -14,6 +14,8 @@ vi.mock('../lib/db', () => ({
   markItemsDone: vi.fn(),
   markItemsDropped: vi.fn(),
   incrementCarryCount: vi.fn(),
+  markItemsInProgress: vi.fn(),
+  getInProgressCarryCounts: vi.fn(() => Promise.resolve({})),
   createWorkItems: vi.fn(),
   getGitHubUsername: vi.fn(() => Promise.resolve(null)),
   getLinearUserId: vi.fn(() => Promise.resolve(null)),
@@ -57,7 +59,7 @@ vi.mock('../lib/format', () => ({
 }));
 
 import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
-import { snoozeItem, getPreviousSubmission, saveSubmission } from '../lib/db';
+import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts } from '../lib/db';
 import { openModal } from '../lib/slack';
 
 describe('interaction handlers', () => {
@@ -220,11 +222,13 @@ describe('interaction handlers', () => {
         date: '2025-12-21',
         yesterday_completed: ['A'],
         yesterday_incomplete: ['B'], // This was carried over
+        yesterday_in_progress: null,
         unplanned: null,
         today_plans: ['C'], // This was new plan
         blockers: null,
         custom_answers: null,
         slack_message_ts: null,
+        posted: true,
       });
 
       vi.mocked(openModal).mockResolvedValueOnce(true);
@@ -273,11 +277,13 @@ describe('interaction handlers', () => {
         date: '2025-12-21',
         yesterday_completed: [],
         yesterday_incomplete: ['Task carried twice'], // Still being carried
+        yesterday_in_progress: null,
         unplanned: null,
         today_plans: ['New task from yesterday'],
         blockers: null,
         custom_answers: null,
         slack_message_ts: null,
+        posted: true,
       });
 
       vi.mocked(openModal).mockResolvedValueOnce(true);
@@ -445,6 +451,93 @@ describe('interaction handlers', () => {
           today_plans: "Add today's plans or carry over items from yesterday",
         },
       });
+    });
+
+    it('succeeds when items are in_progress but no new today plans', async () => {
+      vi.mocked(saveSubmission).mockResolvedValueOnce({ id: 1 } as any);
+
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'done', 1: 'in_progress' },
+        todayPlans: '',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      const result = await handleStandupSubmission(payload, ctx);
+
+      expect(result).toBe(true);
+      expect(saveSubmission).toHaveBeenCalled();
+    });
+
+    it('calls markItemsInProgress for in-progress items', async () => {
+      vi.mocked(saveSubmission).mockResolvedValueOnce({ id: 1 } as any);
+
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'in_progress', 1: 'done' },
+        todayPlans: 'New task',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      await handleStandupSubmission(payload, ctx);
+
+      expect(markItemsInProgress).toHaveBeenCalledWith({}, 'U12345', 'daily-il', ['Task A']);
+    });
+
+    it('saves yesterdayInProgress in submission', async () => {
+      vi.mocked(saveSubmission).mockResolvedValueOnce({ id: 1 } as any);
+
+      const payload = createSubmissionPayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'in_progress', 1: 'continue' },
+        todayPlans: '',
+      });
+
+      const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+      await handleStandupSubmission(payload, ctx);
+
+      const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
+      expect(saveCall.yesterdayInProgress).toEqual(['Task A']);
+      expect(saveCall.yesterdayIncomplete).toEqual(['Task B']);
+    });
+  });
+
+  describe('handleOpenStandup - in-progress items in allPlans', () => {
+    it('includes in-progress items from previous day in modal', async () => {
+      vi.mocked(getPreviousSubmission).mockResolvedValueOnce({
+        id: 1,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-il',
+        submitted_at: new Date(),
+        date: '2025-12-21',
+        yesterday_completed: [],
+        yesterday_incomplete: ['Carried task'],
+        yesterday_in_progress: ['WIP task'],
+        unplanned: null,
+        today_plans: ['New task'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: null,
+        posted: true,
+      });
+
+      vi.mocked(openModal).mockResolvedValueOnce(true);
+
+      const payload: InteractionPayload = {
+        type: 'block_actions',
+        trigger_id: 'trigger123',
+        user: { id: 'U12345' },
+        actions: [{ action_id: 'open_standup', value: 'daily-il' }],
+      };
+
+      await handleOpenStandup(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      const modalCall = vi.mocked(openModal).mock.calls[0];
+      const modal = modalCall[2];
+      const metadata = JSON.parse(modal.private_metadata);
+
+      // In-progress items should come first, then carried, then new plans
+      expect(metadata.yesterdayPlans).toEqual(['WIP task', 'Carried task', 'New task']);
     });
   });
 });

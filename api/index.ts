@@ -8,7 +8,7 @@ import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } f
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
-import { runPromptCron, runScheduledPosts, formatDate, getUserDate } from '../lib/prompt';
+import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
@@ -97,6 +97,10 @@ export default {
       // Run scheduled posts cron (post pre-filled "tomorrow" submissions)
       const scheduledStats = await runScheduledPosts(db, env.SLACK_BOT_TOKEN, env);
       console.log('Scheduled posts cron complete:', scheduledStats);
+
+      // Run reminder cron (send channel reminders before daily standups)
+      const reminderStats = await runReminderCron(db, env.SLACK_BOT_TOKEN);
+      console.log('Reminder cron complete:', reminderStats);
 
       // Check if it's time to send digests (based on configured digest_time)
       if (isDigestTime()) {

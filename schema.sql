@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   blockers TEXT,
   custom_answers JSONB,       -- {"question": "answer"}
   slack_message_ts TEXT,      -- posted message ID
+  yesterday_in_progress JSONB, -- ["item5"]
   posted BOOLEAN DEFAULT TRUE, -- false for scheduled (tomorrow) submissions
   UNIQUE(slack_user_id, daily_name, date)
 );
@@ -58,11 +59,20 @@ CREATE TABLE IF NOT EXISTS work_items (
   daily_name TEXT NOT NULL,
   text TEXT NOT NULL,
   created_date DATE NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',  -- pending, done, dropped, carried
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending, done, dropped, carried, in_progress
   carry_count INTEGER NOT NULL DEFAULT 0,
   completed_date DATE,
   snoozed_until DATE,  -- null = not snoozed, date = hidden from bottlenecks until this date
   submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL
+);
+
+-- Channel reminder dedup log
+CREATE TABLE IF NOT EXISTS reminder_log (
+  id SERIAL PRIMARY KEY,
+  daily_name TEXT NOT NULL,
+  date DATE NOT NULL,
+  sent_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(daily_name, date)
 );
 
 -- Migration for existing databases:
@@ -70,6 +80,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 -- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS posted BOOLEAN DEFAULT TRUE;
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;
+-- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS yesterday_in_progress JSONB;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (

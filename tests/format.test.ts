@@ -87,6 +87,58 @@ describe('format utilities', () => {
       expect(yesterdayBlock?.text?.text).toContain('❌ No longer needed _(dropped)_');
     });
 
+    it('shows in-progress items with 🔄 emoji in today section', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayInProgress: ['WIP task'],
+        unplanned: [],
+        todayPlans: ['New task'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(in progress)_');
+      expect(todayBlock?.text?.text).toContain('⬜ New task');
+    });
+
+    it('shows ⚠️ for in-progress items with carry_count >= 3', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayInProgress: ['Stuck task'],
+        unplanned: [],
+        todayPlans: [],
+        blockers: '',
+        customAnswers: {},
+        inProgressCarryCounts: { 'Stuck task': 3 },
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(in progress)_');
+    });
+
+    it('renders in-progress items before carried-over items', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: ['Carried task'],
+        yesterdayInProgress: ['WIP task'],
+        unplanned: [],
+        todayPlans: ['New task'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      const text = todayBlock?.text?.text || '';
+      const wipIdx = text.indexOf('WIP task');
+      const carriedIdx = text.indexOf('Carried task');
+      const newIdx = text.indexOf('New task');
+      expect(wipIdx).toBeLessThan(carriedIdx);
+      expect(carriedIdx).toBeLessThan(newIdx);
+    });
+
     it('shows carried over items in today section', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],

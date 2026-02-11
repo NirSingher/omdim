@@ -9,6 +9,8 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "i-team"
+    # Channel reminder: minutes before daily to post a heads-up (0 to disable, default 90)
+    reminder_minutes_before: 60
     # Field order: lower numbers appear first in the modal
     # Standard fields: unplanned (default 10), today_plans (default 20), blockers (default 30)
     # Custom questions use their own 'order' value to interleave with standard fields
@@ -44,10 +46,12 @@ schedules:
   - name: "i-team"
     days: [sun, mon, tue, wed, thu]
     default_time: "09:00"
+    timezone: "Asia/Jerusalem"  # Required for channel reminders
 
   - name: "us-team"
     days: [mon, tue, wed, thu, fri]
     default_time: "09:00"
+    timezone: "America/New_York"
 
 # Slack user IDs who can manage the bot
 # Find your ID: Slack profile → ⋮ menu → "Copy member ID"
