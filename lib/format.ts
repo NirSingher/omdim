@@ -8,6 +8,7 @@
 import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats } from './db';
 import { postMessage, sendDM as slackSendDM } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
+import { TeamLinearData, CycleProgress } from './linear';
 
 // Re-export sendDM for backward compatibility
 export { sendDM as sendDM } from './slack';
@@ -345,6 +346,8 @@ export interface DigestOptions {
   trends?: TrendData;
   integrations?: IntegrationStatus;
   teamPRData?: TeamPRData[]; // GitHub PR data for team
+  teamLinearData?: TeamLinearData[]; // Linear data for team
+  cycleProgress?: CycleProgress | null; // Linear cycle progress
 }
 
 /**
@@ -471,6 +474,14 @@ export function formatManagerDigest(options: DigestOptions): string {
     const prSection = formatPRDigestSection(options.teamPRData);
     if (prSection) {
       lines.push(prSection);
+    }
+  }
+
+  // Linear cycle section (if Linear integration data available)
+  if (options.cycleProgress) {
+    const linearSection = formatLinearDigestSection(options.teamLinearData || [], options.cycleProgress);
+    if (linearSection) {
+      lines.push(linearSection);
     }
   }
 
@@ -803,28 +814,41 @@ function formatTrend(
 
 /**
  * Format PR section block for standup messages
- * Shows authored PRs awaiting review and review requests
+ * Shows draft PRs, ready-to-merge PRs, and review requests
  */
 function formatPRSectionBlock(prData: UserPRData): Block | null {
   const lines: string[] = [];
 
-  // Authored PRs awaiting review
-  if (prData.authoredPRs.length > 0) {
-    for (const pr of prData.authoredPRs.slice(0, 3)) {
+  // Draft PRs
+  if (prData.draftPRs.length > 0) {
+    lines.push('*Draft:*');
+    for (const pr of prData.draftPRs.slice(0, 3)) {
       const ref = formatPRRef(pr);
-      const waiting = pr.reviewsNeeded > 0 ? ` (${pr.reviewsNeeded} pending)` : '';
-      lines.push(`• \`${ref}\` needs review${waiting}`);
+      lines.push(`• \`${ref}\` ${pr.title.length > 40 ? pr.title.slice(0, 37) + '...' : pr.title}`);
     }
-    if (prData.authoredPRs.length > 3) {
-      lines.push(`  _...and ${prData.authoredPRs.length - 3} more_`);
+    if (prData.draftPRs.length > 3) {
+      lines.push(`  _...and ${prData.draftPRs.length - 3} more_`);
     }
   }
 
-  // Review requests
+  // Ready to merge (approved)
+  if (prData.readyToMerge.length > 0) {
+    lines.push('*Ready to merge:*');
+    for (const pr of prData.readyToMerge.slice(0, 3)) {
+      const ref = formatPRRef(pr);
+      lines.push(`• \`${ref}\` ✅ approved`);
+    }
+    if (prData.readyToMerge.length > 3) {
+      lines.push(`  _...and ${prData.readyToMerge.length - 3} more_`);
+    }
+  }
+
+  // Review requests (to review)
   if (prData.reviewRequests.length > 0) {
+    lines.push('*To review:*');
     for (const pr of prData.reviewRequests.slice(0, 3)) {
       const ref = formatPRRef(pr);
-      lines.push(`• Review requested: \`${ref}\` by @${pr.author}`);
+      lines.push(`• \`${ref}\` by @${pr.author}`);
     }
     if (prData.reviewRequests.length > 3) {
       lines.push(`  _...and ${prData.reviewRequests.length - 3} more_`);
@@ -837,60 +861,59 @@ function formatPRSectionBlock(prData: UserPRData): Block | null {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: '*📦 PRs needing attention:*\n' + lines.join('\n'),
+      text: '*📦 PRs:*\n' + lines.join('\n'),
     },
   };
 }
 
 /**
  * Format PR summary for manager digest
- * Shows team-wide PR stats
+ * Shows team-wide PR stats across 3 categories
  */
 export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
   const lines: string[] = [];
 
   // Calculate totals
-  let totalAuthored = 0;
+  let totalDrafts = 0;
+  let totalReadyToMerge = 0;
   let totalReviewRequests = 0;
-  const usersWithPRs: string[] = [];
-  const usersWithReviews: string[] = [];
 
   for (const member of teamPRData) {
-    totalAuthored += member.data.authoredPRs.length;
+    totalDrafts += member.data.draftPRs.length;
+    totalReadyToMerge += member.data.readyToMerge.length;
     totalReviewRequests += member.data.reviewRequests.length;
-
-    if (member.data.authoredPRs.length > 0) {
-      usersWithPRs.push(member.slackUserId);
-    }
-    if (member.data.reviewRequests.length > 0) {
-      usersWithReviews.push(member.slackUserId);
-    }
   }
 
-  if (totalAuthored === 0 && totalReviewRequests === 0) {
+  if (totalDrafts === 0 && totalReadyToMerge === 0 && totalReviewRequests === 0) {
     return '';
   }
 
   lines.push('');
   lines.push('*📦 PR Activity*');
 
-  if (totalAuthored > 0) {
-    lines.push(`${totalAuthored} PR${totalAuthored !== 1 ? 's' : ''} awaiting review`);
+  const statParts: string[] = [];
+  if (totalDrafts > 0) {
+    statParts.push(`${totalDrafts} draft`);
   }
-
+  if (totalReadyToMerge > 0) {
+    statParts.push(`${totalReadyToMerge} ready to merge`);
+  }
   if (totalReviewRequests > 0) {
-    lines.push(`${totalReviewRequests} review request${totalReviewRequests !== 1 ? 's' : ''} pending`);
+    statParts.push(`${totalReviewRequests} to review`);
   }
+  lines.push(statParts.join(' · '));
 
   // Show specific users with many open PRs or reviews
   for (const member of teamPRData) {
-    const authored = member.data.authoredPRs.length;
+    const drafts = member.data.draftPRs.length;
+    const ready = member.data.readyToMerge.length;
     const reviews = member.data.reviewRequests.length;
 
-    if (authored >= 3 || reviews >= 3) {
+    if (drafts + ready >= 3 || reviews >= 3) {
       const parts: string[] = [];
-      if (authored >= 3) parts.push(`${authored} PRs awaiting review`);
-      if (reviews >= 3) parts.push(`${reviews} reviews pending`);
+      if (drafts > 0) parts.push(`${drafts} draft`);
+      if (ready > 0) parts.push(`${ready} ready`);
+      if (reviews >= 3) parts.push(`${reviews} to review`);
       lines.push(`  ⚠️ <@${member.slackUserId}>: ${parts.join(', ')}`);
     }
   }
@@ -902,17 +925,63 @@ export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
  * Format PR summary for individual member in full report
  */
 export function formatMemberPRSummary(prData: UserPRData): string {
+  const parts: string[] = [];
+
+  if (prData.draftPRs.length > 0) {
+    parts.push(`${prData.draftPRs.length} draft`);
+  }
+  if (prData.readyToMerge.length > 0) {
+    parts.push(`${prData.readyToMerge.length} ready`);
+  }
+  if (prData.reviewRequests.length > 0) {
+    parts.push(`${prData.reviewRequests.length} to review`);
+  }
+
+  return parts.join(' · ');
+}
+
+// ============================================================================
+// Linear Digest Formatting
+// ============================================================================
+
+/**
+ * Format Linear cycle progress section for manager digest
+ */
+export function formatLinearDigestSection(
+  teamData: TeamLinearData[],
+  cycleProgress: CycleProgress
+): string {
   const lines: string[] = [];
 
-  if (prData.authoredPRs.length > 0) {
-    lines.push(`PRs awaiting review: ${prData.authoredPRs.length}`);
+  lines.push('');
+  lines.push(`*🎫 Cycle: ${cycleProgress.cycleName}*`);
+
+  // Date range
+  const formatShort = (d: string) => {
+    const date = new Date(d);
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  lines.push(`${formatShort(cycleProgress.startDate)} – ${formatShort(cycleProgress.endDate)}`);
+
+  // Progress bar
+  const total = cycleProgress.done + cycleProgress.inProgress + cycleProgress.todo;
+  lines.push(`${cycleProgress.completionPct}% complete · ${cycleProgress.done} done · ${cycleProgress.inProgress} in progress · ${cycleProgress.todo} to do`);
+
+  // Per-member breakdown (only if there are team members with issues)
+  const membersWithIssues = teamData.filter((m) => m.data.issues.length > 0);
+  if (membersWithIssues.length > 0) {
+    for (const member of membersWithIssues) {
+      const issues = member.data.issues;
+      const started = issues.filter((i) => i.state.type === 'started').length;
+      const unstarted = issues.filter((i) => i.state.type !== 'started').length;
+      const parts: string[] = [];
+      if (started > 0) parts.push(`${started} in progress`);
+      if (unstarted > 0) parts.push(`${unstarted} to do`);
+      lines.push(`  <@${member.slackUserId}>: ${parts.join(', ')}`);
+    }
   }
 
-  if (prData.reviewRequests.length > 0) {
-    lines.push(`Review requests: ${prData.reviewRequests.length}`);
-  }
-
-  return lines.join(' · ');
+  return lines.join('\n');
 }
 
 // ============================================================================

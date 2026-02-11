@@ -17,6 +17,7 @@ vi.mock('../lib/slack', () => ({
 }));
 
 import { buildStandupModal, YesterdayData } from '../lib/modal';
+import type { LinearIssue } from '../lib/linear';
 
 describe('modal builder', () => {
   describe('buildStandupModal', () => {
@@ -271,6 +272,245 @@ describe('modal builder', () => {
       expect(firstInConfig?.block_id).toBe('custom_1'); // Index 1 in original array
       expect(secondInConfig?.block_id).toBe('custom_2'); // Index 2 in original array
       expect(thirdInConfig?.block_id).toBe('custom_0'); // Index 0 in original array
+    });
+
+    it('includes Linear issue checkboxes when issues are provided', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: 'Fix authentication bug',
+          state: { name: 'In Progress', type: 'started' },
+          priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+        {
+          id: 'issue-2',
+          identifier: 'ENG-124',
+          title: 'Add new dashboard feature',
+          state: { name: 'Todo', type: 'unstarted' },
+          priority: 2,
+          url: 'https://linear.app/issue/ENG-124',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      // Find the linear tickets block
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+
+      expect(linearBlock).toBeDefined();
+      expect(linearBlock?.type).toBe('input');
+      expect(linearBlock?.label?.text).toBe('🎫 Cycle tickets (select to add to plans)');
+      expect(linearBlock?.optional).toBe(true);
+      expect(linearBlock?.element?.type).toBe('checkboxes');
+      expect(linearBlock?.element?.action_id).toBe('linear_tickets_input');
+      expect(linearBlock?.element?.options).toHaveLength(2);
+    });
+
+    it('formats Linear issue checkboxes with identifier and title', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: 'Fix bug',
+          state: { name: 'In Progress', type: 'started' },
+          priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      const option = linearBlock?.element?.options?.[0];
+
+      expect(option?.text?.text).toContain('ENG-123');
+      expect(option?.text?.text).toContain('Fix bug');
+      expect(option?.description?.text).toBe('In Progress');
+      expect(option?.value).toBe('issue-1');
+    });
+
+    it('truncates long Linear issue titles', () => {
+      const longTitle = 'A'.repeat(100);
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: longTitle,
+          state: { name: 'Todo', type: 'unstarted' },
+          priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      const option = linearBlock?.element?.options?.[0];
+
+      expect(option?.text?.text?.length).toBeLessThanOrEqual(60);
+      expect(option?.text?.text).toContain('...');
+    });
+
+    it('limits Linear issues to max 10 checkboxes', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+
+      expect(linearBlock?.element?.options).toHaveLength(10);
+    });
+
+    it('shows context message when more than 10 issues available', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const contextBlock = modal.blocks.find(
+        b => b.type === 'context' && b.elements?.[0]?.text?.includes('Showing 10 of')
+      );
+
+      expect(contextBlock).toBeDefined();
+      expect(contextBlock?.elements?.[0]?.text).toContain('Showing 10 of 15 assigned tickets');
+    });
+
+    it('includes linearIssueMap in private_metadata when issues provided', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: 'Fix bug',
+          state: { name: 'In Progress', type: 'started' },
+          priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+        {
+          id: 'issue-2',
+          identifier: 'ENG-124',
+          title: 'Add feature',
+          state: { name: 'Todo', type: 'unstarted' },
+          priority: 2,
+          url: 'https://linear.app/issue/ENG-124',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const metadata = JSON.parse(modal.private_metadata);
+
+      expect(metadata.linearIssueMap).toBeDefined();
+      expect(metadata.linearIssueMap['issue-1']).toEqual({
+        identifier: 'ENG-123',
+        title: 'Fix bug',
+      });
+      expect(metadata.linearIssueMap['issue-2']).toEqual({
+        identifier: 'ENG-124',
+        title: 'Add feature',
+      });
+    });
+
+    it('excludes linearIssueMap from private_metadata when no issues', () => {
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        undefined
+      );
+
+      const metadata = JSON.parse(modal.private_metadata);
+
+      expect(metadata.linearIssueMap).toBeUndefined();
+    });
+
+    it('does not include Linear block when no issues provided', () => {
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        undefined
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+
+      expect(linearBlock).toBeUndefined();
     });
   });
 });

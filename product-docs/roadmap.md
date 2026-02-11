@@ -142,6 +142,92 @@ integrations:
 
 ---
 
+## Phase 4: Status Tracking & Smart Digests
+
+### In-Progress Item Tracking
+Items gain a 4th status: **In Progress** (alongside Done, Carry Over, Drop).
+
+- [ ] Add "In Progress" status option to yesterday's items in standup modal
+- [ ] In-progress items auto-carry to today under the same status (no re-prompting needed)
+- [ ] Track consecutive in-progress days per item in DB
+- [ ] Items in-progress for 3+ days flagged as "needs attention" in digest and report
+- [ ] Visual indicator in standup post (e.g., 🔄 Day 3)
+
+### Configurable Digest & Report Cadence
+Digest and full report schedules are set per-daily in config (replacing the hardcoded 2pm UTC / weekly pattern).
+
+- [ ] `digest_schedule` config: cron-like or named cadence (e.g., `daily@14:00`, `every_other_day`)
+- [ ] `report_schedule` config: cadence for full report (e.g., `weekly@fri`, `biweekly@fri`)
+- [ ] Both respect the daily's timezone/schedule context
+- [ ] Backward compatible: defaults to current behavior if not set
+
+```yaml
+dailies:
+  - name: "engineering-daily"
+    digest_schedule: "daily@14:00"     # When to send digest
+    report_schedule: "weekly@fri"      # When to send full report
+```
+
+### Flexible Digest & Report Recipients
+Any Slack member can be configured to receive digest and/or report per daily — not just managers.
+
+- [ ] `digest_recipients` and `report_recipients` config arrays per daily
+- [ ] Each entry specifies a Slack user ID
+- [ ] Falls back to `managers` list if recipients not configured
+- [ ] Self-subscribe command: `/standup subscribe <daily> digest|report`
+- [ ] Unsubscribe: `/standup unsubscribe <daily> digest|report`
+
+```yaml
+dailies:
+  - name: "engineering-daily"
+    managers: ["U123"]
+    digest_recipients: ["U123", "U456", "U789"]   # Broader than managers
+    report_recipients: ["U123"]                     # Narrower for full report
+```
+
+---
+
+## Phase 5: Linear Intelligence
+
+> Builds on Phase 3 Linear Integration. Requires Linear sync to be active.
+
+### Cross-Reference Plans vs Linear
+Compare what people commit to in standups with what's actually assigned in Linear.
+
+- [ ] On standup submission, match plan items to assigned Linear issues (fuzzy title match + issue ID detection)
+- [ ] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
+- [ ] Weekly report section: plan-to-Linear alignment score per user
+- [ ] Configurable strictness: `off` / `soft` (info only) / `strict` (prompt user to reconcile)
+
+### Auto-Update Items from Linear Status
+When a Linear issue's status changes, reflect it in the user's standup items automatically.
+
+- [ ] Webhook or poll for Linear status changes on linked issues
+- [ ] If Linear issue moves to "Done" → auto-mark standup item as Done
+- [ ] If Linear issue moves to "In Progress" → auto-mark standup item as In Progress
+- [ ] Notify user in DM when auto-updates happen: "Linear updated: [issue] → Done"
+- [ ] Configurable: `auto_sync: true|false` per daily
+
+### Priority Misalignment Detection
+Flag in digest when someone is working on lower-priority items while higher-priority Linear items are available.
+
+- [ ] Pull priority/urgency from Linear for user's assigned issues
+- [ ] Compare active standup items against Linear priority ordering
+- [ ] Digest flag: "Working on P3 while P1 items are unstarted"
+- [ ] Respect context — only flag when higher-priority items are unblocked and actionable
+- [ ] Configurable sensitivity: `off` / `flag_in_digest` / `dm_user`
+
+```yaml
+integrations:
+  linear:
+    enabled: true
+    priority_tracking: "flag_in_digest"   # off | flag_in_digest | dm_user
+    plan_alignment: "soft"                # off | soft | strict
+    auto_sync: true
+```
+
+---
+
 ## Future Considerations
 
 - Analytics dashboard (web UI with Slack OAuth)
@@ -157,6 +243,10 @@ integrations:
 1. **Alerts**: DM only or also post to a manager channel?
 2. **GitHub**: OAuth flow or static token per workspace?
 3. **Stats**: Store aggregated stats or compute on-demand?
+4. **In-progress threshold**: Is 3 days the right default, or should it be configurable per-daily?
+5. **Linear sync direction**: Webhook (real-time, needs public endpoint) vs polling (simpler, slight delay)?
+6. **Priority misalignment**: Should this block standup submission (strict mode) or purely advisory?
+7. **Self-subscribe**: Should non-managers be able to self-subscribe to digests, or admin-only?
 
 ---
 

@@ -20,7 +20,8 @@ export interface GitHubPR {
 }
 
 export interface UserPRData {
-  authoredPRs: GitHubPR[]; // PRs authored by user awaiting review
+  draftPRs: GitHubPR[]; // PRs authored by user that are still drafts
+  readyToMerge: GitHubPR[]; // PRs authored by user that are approved
   reviewRequests: GitHubPR[]; // PRs where user is requested to review
 }
 
@@ -50,15 +51,14 @@ interface GitHubSearchResponse {
 // ============================================================================
 
 /**
- * Fetch PRs authored by a user that are awaiting review
- * These are open PRs by the user in the org
+ * Fetch draft PRs authored by a user
  */
-export async function fetchUserPRs(
+export async function fetchDraftPRs(
   token: string,
   username: string,
   org: string
 ): Promise<GitHubPR[]> {
-  const query = `is:pr is:open author:${username} org:${org} draft:false`;
+  const query = `is:pr is:open author:${username} org:${org} draft:true`;
 
   try {
     const response = await fetch(
@@ -74,7 +74,7 @@ export async function fetchUserPRs(
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`GitHub API error for authored PRs: ${response.status} ${errorText}`);
+      console.error(`GitHub API error for draft PRs: ${response.status} ${errorText}`);
       return [];
     }
 
@@ -91,7 +91,53 @@ export async function fetchUserPRs(
       draft: item.draft,
     }));
   } catch (error) {
-    console.error('Failed to fetch authored PRs:', error);
+    console.error('Failed to fetch draft PRs:', error);
+    return [];
+  }
+}
+
+/**
+ * Fetch approved (ready to merge) PRs authored by a user
+ */
+export async function fetchApprovedPRs(
+  token: string,
+  username: string,
+  org: string
+): Promise<GitHubPR[]> {
+  const query = `is:pr is:open author:${username} org:${org} draft:false review:approved`;
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=10`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'omdim-bot',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`GitHub API error for approved PRs: ${response.status} ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json() as GitHubSearchResponse;
+
+    return data.items.map((item) => ({
+      number: item.number,
+      title: item.title,
+      url: item.html_url,
+      author: item.user.login,
+      reviewsNeeded: item.requested_reviewers?.length || 0,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      draft: item.draft,
+    }));
+  } catch (error) {
+    console.error('Failed to fetch approved PRs:', error);
     return [];
   }
 }
@@ -144,20 +190,21 @@ export async function fetchReviewRequests(
 
 /**
  * Fetch all PR data for a user in an org
- * Combines authored PRs and review requests
+ * Combines draft PRs, approved PRs, and review requests
  */
 export async function fetchUserPRData(
   token: string,
   username: string,
   org: string
 ): Promise<UserPRData> {
-  // Fetch both in parallel
-  const [authoredPRs, reviewRequests] = await Promise.all([
-    fetchUserPRs(token, username, org),
+  // Fetch all three in parallel
+  const [draftPRs, readyToMerge, reviewRequests] = await Promise.all([
+    fetchDraftPRs(token, username, org),
+    fetchApprovedPRs(token, username, org),
     fetchReviewRequests(token, username, org),
   ]);
 
-  return { authoredPRs, reviewRequests };
+  return { draftPRs, readyToMerge, reviewRequests };
 }
 
 // ============================================================================
