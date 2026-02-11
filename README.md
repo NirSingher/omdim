@@ -33,6 +33,9 @@ Omdim handles the boring part — collecting and organizing updates — so your 
 - **Custom questions** - Add team-specific questions with @mention support
 - **Configurable field order** - Control the order of all fields in the standup modal
 - **On-demand digests** - Daily and weekly summaries via DM
+- **GitHub PR integration** - Surface draft PRs, ready-to-merge PRs, and review requests in standup modal
+- **Linear issue integration** - Show current/previous cycle issues in standup modal
+- **Self-service account linking** - Users link their own GitHub/Linear accounts via `/standup github link` and `/standup linear link`
 - **Zero cost** - Runs entirely on free tiers, no credit card required
 
 ## Prerequisites
@@ -151,8 +154,13 @@ psql --version
    wrangler secret put SLACK_BOT_TOKEN
    wrangler secret put SLACK_SIGNING_SECRET
    wrangler secret put DATABASE_URL
-   wrangler secret put CRON_SECRET  # Optional: for HTTP-triggered crons
+   wrangler secret put CRON_SECRET       # Optional: for HTTP-triggered crons
+   wrangler secret put GITHUB_TOKEN      # Optional: for GitHub PR integration
+   wrangler secret put LINEAR_API_KEY    # Optional: for Linear issue integration
    ```
+
+   **GitHub token**: Generate at [github.com/settings/tokens](https://github.com/settings/tokens) with `repo` scope.
+   **Linear API key**: Generate at [linear.app/settings/api](https://linear.app/settings/api).
 
 5. Your app URL: `https://omdim.<your-subdomain>.workers.dev`
 
@@ -251,6 +259,29 @@ admins:
 
 **Field ordering**: Standard fields (`unplanned`, `today_plans`, `blockers`) and custom questions are sorted by their `order` value. Lower numbers appear earlier in the modal.
 
+**Integrations** (optional): Add GitHub/Linear to surface PRs and issues in the standup modal:
+
+```yaml
+dailies:
+  - name: "engineering"
+    # ... schedule, questions, etc.
+    integrations:
+      github:
+        enabled: true
+        org: "your-github-org"
+        user_mapping:                    # Optional: pre-link users
+          - slack_user_id: "U12345678"
+            external_username: "github-handle"
+      linear:
+        enabled: true
+        team_id: "your-linear-team-id"   # Find in Linear team settings URL
+        user_mapping:                    # Optional: pre-link users
+          - slack_user_id: "U12345678"
+            external_username: "linear-user-id"
+```
+
+Users can also self-link their accounts without config changes — see [Usage](#for-team-members) below.
+
 **Finding your Slack user ID**: Click your profile in Slack → three dots menu → "Copy member ID"
 
 Redeploy after changing config.
@@ -301,6 +332,14 @@ In Slack:
 - If you've already submitted today, `/daily` opens a form for tomorrow
 - Your update will post automatically at your scheduled time the next day
 - Use `/daily` again to edit your scheduled submission
+
+**Link integrations** (if GitHub/Linear are enabled):
+```
+/standup github link <username>    # Link your GitHub account
+/standup github status             # Check link status
+/standup linear link <user-id>     # Link your Linear account
+/standup linear status             # Check link status
+```
 
 ### For Admins
 
@@ -370,6 +409,10 @@ npx tsx scripts/migrate-ooo.ts
 
 # Add snooze column for work items (v1.0+)
 npx tsx scripts/migrate-snooze.ts
+
+# Add GitHub/Linear columns for integration linking (v1.2+)
+psql "$DATABASE_URL" -c "ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;"
+psql "$DATABASE_URL" -c "ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;"
 ```
 
 > **Note**: Migrations are idempotent - safe to run multiple times.
