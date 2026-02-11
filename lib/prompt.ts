@@ -5,8 +5,8 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, createWorkItems, getGitHubUsername } from './db';
-import { getSchedule, getConfigError, getDaily, getGitHubConfig, getGitHubUsernameFromConfig } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, wasReminderSent, recordReminderSent } from './db';
+import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getReminderMinutesBefore } from './config';
 import { getUserInfo, postMessage } from './slack';
 import { postStandupToChannel } from './format';
 import { fetchUserPRData, UserPRData } from './github';
@@ -555,6 +555,8 @@ async function processScheduledSubmission(
     }
   }
 
+  const yesterdayInProgress = parseJsonbArray(submission.yesterday_in_progress);
+
   const messageTs = await postStandupToChannel(
     slackToken,
     daily.channel,
@@ -563,6 +565,7 @@ async function processScheduledSubmission(
     {
       yesterdayCompleted: parseJsonbArray(submission.yesterday_completed),
       yesterdayIncomplete: parseJsonbArray(submission.yesterday_incomplete),
+      yesterdayInProgress,
       yesterdayDropped: [], // Not stored in DB, so empty for scheduled posts
       unplanned: parseJsonbArray(submission.unplanned),
       todayPlans: parseJsonbArray(submission.today_plans),
@@ -595,6 +598,9 @@ async function processScheduledSubmission(
     if (yesterdayIncomplete.length > 0) {
       await incrementCarryCount(db, userId, dailyName, yesterdayIncomplete);
     }
+    if (yesterdayInProgress.length > 0) {
+      await markItemsInProgress(db, userId, dailyName, yesterdayInProgress);
+    }
     if (todayPlans.length > 0) {
       await createWorkItems(
         db,
@@ -614,4 +620,129 @@ async function processScheduledSubmission(
 
   console.log(`Posted scheduled submission ${submission.id} for ${userId} to ${daily.channel}`);
   return 'posted';
+}
+
+// ============================================================================
+// Channel Reminder Cron
+// ============================================================================
+
+/**
+ * Get current time in a timezone using Intl.DateTimeFormat
+ */
+function getTimeInTimezone(timezone: string): Date {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(now);
+  const get = (type: string) => parts.find(p => p.type === type)?.value || '0';
+  return new Date(
+    Number(get('year')),
+    Number(get('month')) - 1,
+    Number(get('day')),
+    Number(get('hour')),
+    Number(get('minute'))
+  );
+}
+
+/**
+ * Send channel reminders before daily standups
+ * Checks each daily: is reminder enabled? Is it the right time window? Was it already sent?
+ */
+export async function runReminderCron(
+  db: DbClient,
+  slackToken: string
+): Promise<{ sent: number; skipped: number; errors: number }> {
+  const stats = { sent: 0, skipped: 0, errors: 0 };
+
+  const configErr = getConfigError();
+  if (configErr) {
+    console.error('Reminder cron aborted due to config error:', configErr);
+    return stats;
+  }
+
+  const dailies = getDailies();
+
+  for (const daily of dailies) {
+    try {
+      const reminderMinutes = getReminderMinutesBefore(daily);
+      if (reminderMinutes === 0) {
+        stats.skipped++;
+        continue;
+      }
+
+      const schedule = getSchedule(daily.schedule);
+      if (!schedule) {
+        stats.skipped++;
+        continue;
+      }
+
+      // Need timezone to check local time
+      const timezone = schedule.timezone;
+      if (!timezone) {
+        // No timezone configured, skip reminder for this daily
+        stats.skipped++;
+        continue;
+      }
+
+      // Get local time in the schedule's timezone
+      const localNow = getTimeInTimezone(timezone);
+
+      // Check if today is a workday
+      if (!isWorkday(schedule.days, localNow)) {
+        stats.skipped++;
+        continue;
+      }
+
+      // Calculate reminder time = default_time - reminder_minutes
+      const [scheduleHour, scheduleMinute] = schedule.default_time.split(':').map(Number);
+      const scheduleTotalMinutes = scheduleHour * 60 + scheduleMinute;
+      const reminderTotalMinutes = scheduleTotalMinutes - reminderMinutes;
+
+      // Current local time in minutes
+      const nowTotalMinutes = localNow.getHours() * 60 + localNow.getMinutes();
+
+      // Check if we're within a 30-minute window of the reminder time
+      // (cron runs every 30 minutes, so we accept anything within ±15 min)
+      const diff = nowTotalMinutes - reminderTotalMinutes;
+      if (diff < 0 || diff >= 30) {
+        stats.skipped++;
+        continue;
+      }
+
+      // Check dedup: was reminder already sent today?
+      const todayStr = formatDate(localNow);
+      const alreadySent = await wasReminderSent(db, daily.name, todayStr);
+      if (alreadySent) {
+        stats.skipped++;
+        continue;
+      }
+
+      // Send channel reminder
+      const formattedTime = schedule.default_time;
+      const message = `🔔 Reminder: The *${daily.name}* standup posts at *${formattedTime}*. Don't forget to fill yours in!`;
+      const result = await postMessage(slackToken, daily.channel, message);
+
+      if (result) {
+        await recordReminderSent(db, daily.name, todayStr);
+        stats.sent++;
+        console.log(`Sent reminder for ${daily.name} to ${daily.channel}`);
+      } else {
+        stats.errors++;
+        console.error(`Failed to send reminder for ${daily.name}`);
+      }
+    } catch (error) {
+      console.error(`Error processing reminder for ${daily.name}:`, error);
+      stats.errors++;
+    }
+  }
+
+  console.log(`Reminder cron complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.errors} errors`);
+  return stats;
 }

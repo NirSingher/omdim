@@ -13,6 +13,8 @@ import {
   markItemsDone,
   markItemsDropped,
   incrementCarryCount,
+  markItemsInProgress,
+  getInProgressCarryCounts,
   createWorkItems,
   snoozeItem,
   getSubmissionForDate,
@@ -160,8 +162,15 @@ export async function handleOpenStandup(
           : JSON.parse(previousSubmission.yesterday_incomplete as unknown as string))
       : [];
 
-    // Combine: carried items first (they're older/staler), then new plans
-    const allPlans = [...carriedItems, ...todayPlans];
+    // Parse yesterday_in_progress (items marked in progress yesterday)
+    const inProgressItems = previousSubmission.yesterday_in_progress
+      ? (Array.isArray(previousSubmission.yesterday_in_progress)
+          ? previousSubmission.yesterday_in_progress
+          : JSON.parse(previousSubmission.yesterday_in_progress as unknown as string))
+      : [];
+
+    // Combine: in-progress first, then carried, then new plans
+    const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
 
     if (allPlans.length > 0) {
       yesterdayData = {
@@ -229,6 +238,7 @@ export async function handleStandupSubmission(
   // Parse dropdown selections for yesterday's items
   const yesterdayCompleted: string[] = [];
   const yesterdayIncomplete: string[] = [];
+  const yesterdayInProgress: string[] = [];
   const yesterdayDropped: string[] = [];
 
   yesterdayPlanItems.forEach((item, index) => {
@@ -239,6 +249,8 @@ export async function handleStandupSubmission(
       yesterdayCompleted.push(item);
     } else if (status === 'continue') {
       yesterdayIncomplete.push(item);
+    } else if (status === 'in_progress') {
+      yesterdayInProgress.push(item);
     } else if (status === 'drop') {
       yesterdayDropped.push(item);
     }
@@ -260,8 +272,8 @@ export async function handleStandupSubmission(
     }
   }
 
-  // Validate: require today's plans if nothing is carried over
-  if (yesterdayIncomplete.length === 0 && todayPlans.length === 0) {
+  // Validate: require today's plans if nothing is carried over or in progress
+  if (yesterdayIncomplete.length === 0 && yesterdayInProgress.length === 0 && todayPlans.length === 0) {
     return {
       response_action: 'errors',
       errors: {
@@ -309,6 +321,7 @@ export async function handleStandupSubmission(
     date: submissionDate,
     yesterdayCompleted,
     yesterdayIncomplete,
+    yesterdayInProgress,
     unplanned,
     todayPlans,
     blockers,
@@ -351,6 +364,9 @@ export async function handleStandupSubmission(
     if (yesterdayIncomplete.length > 0) {
       await incrementCarryCount(ctx.db, userId, dailyName, yesterdayIncomplete);
     }
+    if (yesterdayInProgress.length > 0) {
+      await markItemsInProgress(ctx.db, userId, dailyName, yesterdayInProgress);
+    }
 
     // Create new work items for today's plans
     if (todayPlans.length > 0) {
@@ -368,6 +384,16 @@ export async function handleStandupSubmission(
   } catch (error) {
     // Don't fail the submission if work item tracking fails
     console.error('Failed to track work items:', error);
+  }
+
+  // Get carry counts for in-progress items (for attention warnings)
+  let inProgressCarryCounts: Record<string, number> | undefined;
+  if (yesterdayInProgress.length > 0) {
+    try {
+      inProgressCarryCounts = await getInProgressCarryCounts(ctx.db, userId, dailyName, yesterdayInProgress);
+    } catch (error) {
+      console.error('Failed to get in-progress carry counts:', error);
+    }
   }
 
   // Post to channel
@@ -402,6 +428,7 @@ export async function handleStandupSubmission(
       {
         yesterdayCompleted,
         yesterdayIncomplete,
+        yesterdayInProgress,
         yesterdayDropped,
         unplanned,
         todayPlans,
@@ -410,6 +437,7 @@ export async function handleStandupSubmission(
         questions: daily.questions,
         fieldOrder: daily.field_order,
         prData,
+        inProgressCarryCounts,
       }
     );
 
@@ -511,7 +539,8 @@ export async function handleHomeStartDaily(
     if (previousSubmission) {
       const todayPlans = previousSubmission.today_plans || [];
       const carriedItems = previousSubmission.yesterday_incomplete || [];
-      const allPlans = [...carriedItems, ...todayPlans];
+      const inProgressItems = previousSubmission.yesterday_in_progress || [];
+      const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
       if (allPlans.length > 0) {
         yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
       }
@@ -521,7 +550,8 @@ export async function handleHomeStartDaily(
     if (todaySubmission) {
       const todayPlans = todaySubmission.today_plans || [];
       const carriedItems = todaySubmission.yesterday_incomplete || [];
-      const allPlans = [...carriedItems, ...todayPlans];
+      const inProgressItems = todaySubmission.yesterday_in_progress || [];
+      const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
       if (allPlans.length > 0) {
         yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
       }

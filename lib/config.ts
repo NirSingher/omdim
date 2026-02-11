@@ -33,6 +33,7 @@ const ScheduleSchema = z.object({
   name: z.string().min(1, 'Schedule name cannot be empty'),
   days: z.array(DaySchema).min(1, 'Schedule must have at least one day'),
   default_time: z.string().regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format'),
+  timezone: z.string().optional(), // e.g. "Asia/Jerusalem"
 });
 
 // Integration user mapping for GitHub/Linear
@@ -76,6 +77,8 @@ const DailySchema = z.object({
   questions: z.array(QuestionSchema).optional(),
   // Integrations (placeholder for GitHub/Linear)
   integrations: IntegrationsSchema.optional(),
+  // Reminder: how many minutes before daily to send channel reminder (0 = disabled, default 90)
+  reminder_minutes_before: z.number().min(0).optional(),
 });
 
 const ConfigSchema = z.object({
@@ -239,6 +242,11 @@ export function getIntegrationStatus(daily: Daily): { github: boolean; linear: b
     github: daily.integrations?.github?.enabled === true,
     linear: daily.integrations?.linear?.enabled === true,
   };
+}
+
+/** Get the reminder minutes before daily (defaults to 90, 0 = disabled) */
+export function getReminderMinutesBefore(daily: Daily): number {
+  return daily.reminder_minutes_before ?? 90;
 }
 
 /** Get the digest time (UTC, HH:MM format, defaults to 14:00) */
