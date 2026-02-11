@@ -157,6 +157,52 @@ export async function getUsersWithGitHubLinks(
 }
 
 // ============================================================================
+// Linear User ID Linking
+// ============================================================================
+
+/** Get Linear user ID for a Slack user (from DB) */
+export async function getLinearUserId(
+  db: DbClient,
+  slackUserId: string
+): Promise<string | null> {
+  const result = await db.query<{ linear_user_id: string | null }>(
+    `SELECT linear_user_id FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  return result[0]?.linear_user_id || null;
+}
+
+/** Set Linear user ID for a Slack user */
+export async function setLinearUserId(
+  db: DbClient,
+  slackUserId: string,
+  linearUserId: string | null
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, linear_user_id, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       linear_user_id = $3`,
+    [slackUserId, linearUserId, linearUserId]
+  );
+}
+
+/** Get all Slack users with linked Linear user IDs */
+export async function getUsersWithLinearLinks(
+  db: DbClient
+): Promise<Array<{ slackUserId: string; linearUserId: string }>> {
+  const result = await db.query<{ slack_user_id: string; linear_user_id: string }>(
+    `SELECT slack_user_id, linear_user_id
+     FROM slack_users
+     WHERE linear_user_id IS NOT NULL`
+  );
+  return result.map((r) => ({
+    slackUserId: r.slack_user_id,
+    linearUserId: r.linear_user_id,
+  }));
+}
+
+// ============================================================================
 // Work Items (for analytics)
 // ============================================================================
 

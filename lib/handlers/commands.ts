@@ -3,9 +3,10 @@
  * Handles: help, prompt, add, remove, list, digest, week, daily
  */
 
-import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername } from '../db';
+import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser } from '../config';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
+import { fetchUserLinearData, LinearIssue } from '../linear';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
 import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse, openModal } from '../slack';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
@@ -21,6 +22,7 @@ export interface CommandContext {
   slackToken: string;
   devMode?: boolean;
   triggerId?: string; // For opening modals directly from slash commands
+  env?: Record<string, string | undefined>; // For accessing integration tokens
 }
 
 /** Re-export for convenience */
@@ -47,6 +49,7 @@ export function handleHelp(): CommandResponse {
     '`/standup prompt [daily|all]` - Send standup prompt(s) to your DMs\n' +
     '`/standup ooo [tomorrow|clear|dates]` - Manage out of office\n' +
     '`/standup github [link|unlink|status]` - Manage GitHub account link\n' +
+    '`/standup linear [link|unlink|status]` - Manage Linear account link\n' +
     '`/standup add @user <daily-name>` - Add user to a daily (admin only)\n' +
     '`/standup remove @user <daily-name>` - Remove user from a daily (admin only)\n' +
     '`/standup list [daily|all]` - List participants in a daily\n' +
@@ -844,6 +847,28 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       }
     }
 
+    // Fetch Linear issues if integration is enabled
+    let linearIssues: LinearIssue[] = [];
+    const linearConfig = getLinearConfig(daily);
+    if (linearConfig && ctx.env) {
+      const linearToken = ctx.env[linearConfig.tokenEnvVar];
+      if (linearToken) {
+        let linearUserId = getLinearUserIdFromConfig(daily, ctx.userId);
+        if (!linearUserId) {
+          linearUserId = await getLinearUserId(ctx.db, ctx.userId);
+        }
+        const teamId = getLinearTeamIdForUser(daily, ctx.userId);
+        if (linearUserId && teamId) {
+          try {
+            const data = await fetchUserLinearData(linearToken, teamId, linearUserId);
+            linearIssues = data.issues;
+          } catch (error) {
+            console.error('Failed to fetch Linear data for /daily:', error);
+          }
+        }
+      }
+    }
+
     // Build and open modal
     const modal = buildStandupModal(
       targetDailyName,
@@ -852,7 +877,8 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       daily.field_order,
       targetDate,
       mode,
-      prefill
+      prefill,
+      linearIssues
     );
 
     const opened = await openModal(ctx.slackToken, ctx.triggerId, modal);
@@ -994,6 +1020,119 @@ export async function handleGitHub(ctx: CommandContext): Promise<CommandResponse
 }
 
 // ============================================================================
+// Linear Integration Commands
+// ============================================================================
+
+/** Manage Linear user ID linking */
+export async function handleLinear(ctx: CommandContext): Promise<CommandResponse> {
+  const subcommand = ctx.args[1]?.toLowerCase();
+
+  try {
+    // Get user's dailies to check for config mappings
+    const userDailies = await getUserDailies(ctx.db, ctx.userId);
+
+    // Check for config-based mappings (takes precedence)
+    const configUserIds: string[] = [];
+    for (const d of userDailies) {
+      const daily = getDaily(d.daily_name);
+      if (daily) {
+        const configId = getLinearUserIdFromConfig(daily, ctx.userId);
+        if (configId && !configUserIds.includes(configId)) {
+          configUserIds.push(configId);
+        }
+      }
+    }
+
+    // No subcommand - show current status
+    if (!subcommand) {
+      const dbUserId = await getLinearUserId(ctx.db, ctx.userId);
+
+      const lines: string[] = ['*Linear Link Status*'];
+
+      if (configUserIds.length > 0) {
+        lines.push(`Config mapping: \`${configUserIds.join(', ')}\` _(set by admin)_`);
+      }
+
+      if (dbUserId) {
+        lines.push(`Self-linked: \`${dbUserId}\``);
+        if (configUserIds.length > 0) {
+          lines.push('_Note: Config mapping takes precedence over self-linked ID_');
+        }
+      }
+
+      if (configUserIds.length === 0 && !dbUserId) {
+        lines.push('_No Linear account linked_');
+        lines.push('\nUse `/standup linear link <linear-user-id>` to link your account.');
+        lines.push('_Find your Linear user ID in Settings → Account → API_');
+      }
+
+      return ephemeralResponse(lines.join('\n'));
+    }
+
+    // Handle 'link' subcommand
+    if (subcommand === 'link') {
+      const linearUserId = ctx.args[2];
+      if (!linearUserId) {
+        return ephemeralResponse('Usage: `/standup linear link <linear-user-id>`\n_Find your ID in Linear → Settings → Account → API_');
+      }
+
+      await setLinearUserId(ctx.db, ctx.userId, linearUserId);
+
+      let message = `✅ Linked Linear account: \`${linearUserId}\``;
+      if (configUserIds.length > 0) {
+        message += '\n_Note: Your admin has also set a config mapping, which takes precedence._';
+      }
+
+      return ephemeralResponse(message);
+    }
+
+    // Handle 'unlink' subcommand
+    if (subcommand === 'unlink') {
+      await setLinearUserId(ctx.db, ctx.userId, null);
+
+      let message = '✅ Unlinked Linear account.';
+      if (configUserIds.length > 0) {
+        message += `\n_Note: Config mapping (\`${configUserIds.join(', ')}\`) is still active._`;
+      }
+
+      return ephemeralResponse(message);
+    }
+
+    // Handle 'status' subcommand (same as no subcommand)
+    if (subcommand === 'status') {
+      const dbUserId = await getLinearUserId(ctx.db, ctx.userId);
+
+      const lines: string[] = ['*Linear Link Status*'];
+
+      if (configUserIds.length > 0) {
+        lines.push(`Config mapping: \`${configUserIds.join(', ')}\` _(set by admin)_`);
+      }
+
+      if (dbUserId) {
+        lines.push(`Self-linked: \`${dbUserId}\``);
+      }
+
+      if (configUserIds.length === 0 && !dbUserId) {
+        lines.push('_No Linear account linked_');
+      }
+
+      return ephemeralResponse(lines.join('\n'));
+    }
+
+    return ephemeralResponse(
+      '*Linear Commands:*\n' +
+      '`/standup linear` - Show current link status\n' +
+      '`/standup linear link <user-id>` - Link your Linear account\n' +
+      '`/standup linear unlink` - Unlink your Linear account\n' +
+      '`/standup linear status` - Show current link status'
+    );
+  } catch (err) {
+    console.error('Failed to manage Linear link:', err);
+    return ephemeralResponse('❌ Failed to manage Linear link. Please try again.');
+  }
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -1034,6 +1173,8 @@ export async function handleCommand(
       return handleOOO(ctx);
     case 'github':
       return handleGitHub(ctx);
+    case 'linear':
+      return handleLinear(ctx);
     case 'force-prompt':
       return handleForcePrompt(ctx);
     default:

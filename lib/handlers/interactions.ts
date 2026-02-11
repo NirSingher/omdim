@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -17,8 +17,10 @@ import {
   snoozeItem,
   getSubmissionForDate,
   getGitHubUsername,
+  getLinearUserId,
 } from '../db';
 import { fetchUserPRData, UserPRData } from '../github';
+import { fetchUserLinearData, LinearIssue } from '../linear';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
@@ -62,6 +64,47 @@ export interface InteractionPayload {
       }>>;
     };
   };
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Fetch Linear issues for a user if Linear integration is enabled for the daily
+ */
+async function fetchLinearIssuesForUser(
+  daily: ReturnType<typeof getDaily>,
+  userId: string,
+  ctx: InteractionContext
+): Promise<LinearIssue[]> {
+  if (!daily) return [];
+
+  const linearConfig = getLinearConfig(daily);
+  if (!linearConfig || !ctx.env) return [];
+
+  const linearToken = ctx.env[linearConfig.tokenEnvVar];
+  if (!linearToken) return [];
+
+  // Get Linear user ID: config mapping takes precedence over DB
+  let linearUserId = getLinearUserIdFromConfig(daily, userId);
+  if (!linearUserId) {
+    linearUserId = await getLinearUserId(ctx.db, userId);
+  }
+
+  if (!linearUserId) return [];
+
+  // Get per-user team ID (user mapping overrides daily default)
+  const teamId = getLinearTeamIdForUser(daily, userId);
+  if (!teamId) return [];
+
+  try {
+    const data = await fetchUserLinearData(linearToken, teamId, linearUserId);
+    return data.issues;
+  } catch (error) {
+    console.error('Failed to fetch Linear data:', error);
+    return [];
+  }
 }
 
 // ============================================================================
@@ -129,8 +172,11 @@ export async function handleOpenStandup(
     }
   }
 
+  // Fetch Linear issues if integration is enabled
+  const linearIssues = await fetchLinearIssuesForUser(daily, userId, ctx);
+
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -161,6 +207,7 @@ export async function handleStandupSubmission(
     yesterdayPlans?: string[];
     mode?: StandupMode;
     targetDate?: string;
+    linearIssueMap?: Record<string, { identifier: string; title: string }>;
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
@@ -201,6 +248,17 @@ export async function handleStandupSubmission(
   const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
   const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
+
+  // Parse Linear ticket selections and append to todayPlans
+  const linearSelections = values.linear_tickets?.linear_tickets_input?.selected_options;
+  if (linearSelections && linearSelections.length > 0 && metadata.linearIssueMap) {
+    for (const option of linearSelections) {
+      const issueInfo = metadata.linearIssueMap[option.value];
+      if (issueInfo) {
+        todayPlans.push(`[${issueInfo.identifier}] ${issueInfo.title}`);
+      }
+    }
+  }
 
   // Validate: require today's plans if nothing is carried over
   if (yesterdayIncomplete.length === 0 && todayPlans.length === 0) {
@@ -484,6 +542,9 @@ export async function handleHomeStartDaily(
     }
   }
 
+  // Fetch Linear issues if integration is enabled
+  const linearIssues = await fetchLinearIssuesForUser(daily, userId, ctx);
+
   // Build and open modal
   const modal = buildStandupModal(
     dailyName,
@@ -492,7 +553,8 @@ export async function handleHomeStartDaily(
     daily.field_order,
     targetDate,
     mode,
-    prefill
+    prefill,
+    linearIssues
   );
 
   return openModal(ctx.slackToken, triggerId, modal);

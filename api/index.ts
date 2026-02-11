@@ -3,10 +3,11 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings } from '../lib/config';
+import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks } from '../lib/db';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
+import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
 import { runPromptCron, runScheduledPosts, formatDate, getUserDate } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
@@ -24,7 +25,8 @@ export interface Env {
   CRON_SECRET?: string;
   DEV_MODE?: string;
   GITHUB_TOKEN?: string;
-  // Allow additional env vars for custom GitHub token names per daily
+  LINEAR_API_KEY?: string;
+  // Allow additional env vars for custom token names per daily
   [key: string]: string | undefined;
 }
 
@@ -174,6 +176,7 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
       db,
       slackToken: env.SLACK_BOT_TOKEN,
       triggerId: payload.trigger_id,
+      env,
     });
 
     return new Response(JSON.stringify(response), {
@@ -593,6 +596,68 @@ async function sendDigestToManagers(
     }
   }
 
+  // Fetch team Linear data if Linear integration is enabled
+  let teamLinearData: TeamLinearData[] | undefined;
+  let cycleProgress: CycleProgress | null | undefined;
+  const linearConfig = getLinearConfig(daily);
+  if (linearConfig) {
+    const linearToken = env[linearConfig.tokenEnvVar];
+    if (linearToken) {
+      try {
+        // Get Linear user mappings from config
+        const configMappings = getLinearUserMappings(daily);
+
+        // Get participants for this daily (reuse if already fetched for GitHub)
+        const linearParticipants = await getParticipants(db, daily.name);
+
+        // Get DB-linked Linear user IDs for participants not in config
+        const dbLinearLinks = await getUsersWithLinearLinks(db);
+        const dbLinearMap = new Map(dbLinearLinks.map(l => [l.slackUserId, l.linearUserId]));
+
+        // Build combined user list with per-user team IDs (config takes precedence)
+        const configLinearUserIds = new Set(configMappings.map(m => m.slackUserId));
+        const linearUsers: Array<{ slackUserId: string; linearUserId: string; teamId?: string }> = [
+          ...configMappings,
+        ];
+
+        for (const p of linearParticipants) {
+          if (!configLinearUserIds.has(p.slack_user_id)) {
+            const linearUserId = dbLinearMap.get(p.slack_user_id);
+            if (linearUserId) {
+              // DB-linked users get team_id from config default
+              linearUsers.push({ slackUserId: p.slack_user_id, linearUserId });
+            }
+          }
+        }
+
+        if (linearUsers.length > 0) {
+          // Resolve effective team_id per user and group by team
+          const teamGroups = new Map<string, Array<{ slackUserId: string; linearUserId: string }>>();
+          for (const u of linearUsers) {
+            const teamId = u.teamId || getLinearTeamIdForUser(daily, u.slackUserId) || linearConfig.defaultTeamId;
+            if (teamId) {
+              if (!teamGroups.has(teamId)) teamGroups.set(teamId, []);
+              teamGroups.get(teamId)!.push({ slackUserId: u.slackUserId, linearUserId: u.linearUserId });
+            }
+          }
+
+          // Fetch cycle data per team and merge results
+          teamLinearData = [];
+          for (const [teamId, users] of teamGroups) {
+            const result = await fetchTeamCycleData(linearToken, teamId, users);
+            teamLinearData.push(...result.teamData);
+            // Use the first team's cycle progress (or merge if needed)
+            if (!cycleProgress && result.cycleProgress) {
+              cycleProgress = result.cycleProgress;
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch team Linear data for digest:', error);
+      }
+    }
+  }
+
   const digestText = formatManagerDigest({
     dailyName: daily.name,
     period,
@@ -608,6 +673,8 @@ async function sendDigestToManagers(
     trends,
     integrations,
     teamPRData,
+    teamLinearData,
+    cycleProgress,
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)
