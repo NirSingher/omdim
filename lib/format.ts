@@ -31,6 +31,7 @@ interface FieldOrder {
 interface StandupData {
   yesterdayCompleted: string[];
   yesterdayIncomplete: string[];
+  yesterdayInProgress?: string[];
   yesterdayDropped: string[];
   unplanned: string[];
   todayPlans: string[];
@@ -39,6 +40,7 @@ interface StandupData {
   questions?: QuestionConfig[];
   fieldOrder?: FieldOrder;
   prData?: UserPRData; // GitHub PR data for integration
+  inProgressCarryCounts?: Record<string, number>; // carry counts for attention warnings
 }
 
 // Default field order values
@@ -121,15 +123,22 @@ export function formatStandupBlocks(
     },
   });
 
-  // Today's plans section - includes carried over items
+  // Today's plans section - includes in-progress and carried over items
   sections.push({
     order: todayOrder,
     render: () => {
       const todayItems: string[] = [];
+      // In-progress items first
+      for (const item of data.yesterdayInProgress || []) {
+        const carryCount = data.inProgressCarryCounts?.[item] || 0;
+        const emoji = carryCount >= 3 ? '⚠️' : '🔄';
+        todayItems.push(`${emoji} ${item} _(in progress)_`);
+      }
       for (const item of data.yesterdayIncomplete) {
         todayItems.push(`⬜ ${item} _(carried over)_`);
       }
-      if (data.yesterdayIncomplete.length > 0 && data.todayPlans.length > 0) {
+      const carryForwardCount = (data.yesterdayInProgress || []).length + data.yesterdayIncomplete.length;
+      if (carryForwardCount > 0 && data.todayPlans.length > 0) {
         todayItems.push('───');
       }
       for (const item of data.todayPlans) {
@@ -240,6 +249,7 @@ export function formatDailyDigest(
     // Parse JSON arrays
     const completed = parseJsonArray(sub.yesterday_completed);
     const incomplete = parseJsonArray(sub.yesterday_incomplete);
+    const inProgress = parseJsonArray(sub.yesterday_in_progress);
     const unplanned = parseJsonArray(sub.unplanned);
     const plans = parseJsonArray(sub.today_plans);
 
@@ -249,9 +259,14 @@ export function formatDailyDigest(
       lines.push(`  ✅ Completed: ${yesterdayCount} item${yesterdayCount !== 1 ? 's' : ''}`);
     }
 
-    // Today's plans
-    if (plans.length > 0 || incomplete.length > 0) {
-      const todayCount = plans.length + incomplete.length;
+    // In-progress items
+    if (inProgress.length > 0) {
+      lines.push(`  🔄 In progress: ${inProgress.length} item${inProgress.length !== 1 ? 's' : ''}`);
+    }
+
+    // Today's plans (carried + in-progress + new)
+    if (plans.length > 0 || incomplete.length > 0 || inProgress.length > 0) {
+      const todayCount = plans.length + incomplete.length + inProgress.length;
       lines.push(`  📋 Today: ${todayCount} item${todayCount !== 1 ? 's' : ''}`);
     }
 

@@ -68,6 +68,7 @@ type FieldType = 'unplanned' | 'today_plans' | 'blockers' | 'custom';
 // Dropdown options for yesterday's items
 const YESTERDAY_ITEM_OPTIONS = [
   { text: { type: 'plain_text' as const, text: '➡️ Carry over', emoji: true }, value: 'continue' },
+  { text: { type: 'plain_text' as const, text: '🔄 In progress', emoji: true }, value: 'in_progress' },
   { text: { type: 'plain_text' as const, text: '✅ Done', emoji: true }, value: 'done' },
   { text: { type: 'plain_text' as const, text: '❌ Drop', emoji: true }, value: 'drop' },
 ];
