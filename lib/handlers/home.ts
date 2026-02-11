@@ -3,11 +3,12 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername } from '../db';
-import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig } from '../config';
+import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername, getLinearUserId } from '../db';
+import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
 import { fetchUserPRData, UserPRData } from '../github';
+import { fetchUserLinearData, UserLinearData } from '../linear';
 
 // ============================================================================
 // Types
@@ -35,6 +36,7 @@ interface DailyStatus {
   todaySubmitted: boolean;
   tomorrowScheduled: boolean;
   prData?: UserPRData; // GitHub PR data if integration enabled
+  linearData?: UserLinearData; // Linear data if integration enabled
 }
 
 /**
@@ -82,19 +84,30 @@ function buildHomeView(dailyStatuses: DailyStatus[]): unknown {
         ? (status.tomorrowScheduled ? 'Tomorrow scheduled' : 'Today done')
         : 'Not submitted';
 
-      // Build status line with optional PR info
+      // Build status line with optional PR and Linear info
       let statusLine = `${statusEmoji} ${statusText}`;
       if (status.prData) {
         const prParts: string[] = [];
-        if (status.prData.authoredPRs.length > 0) {
-          prParts.push(`${status.prData.authoredPRs.length} PR${status.prData.authoredPRs.length !== 1 ? 's' : ''} awaiting review`);
+        if (status.prData.draftPRs.length > 0) {
+          prParts.push(`${status.prData.draftPRs.length} draft`);
+        }
+        if (status.prData.readyToMerge.length > 0) {
+          prParts.push(`${status.prData.readyToMerge.length} ready to merge`);
         }
         if (status.prData.reviewRequests.length > 0) {
-          prParts.push(`${status.prData.reviewRequests.length} review${status.prData.reviewRequests.length !== 1 ? 's' : ''} pending`);
+          prParts.push(`${status.prData.reviewRequests.length} to review`);
         }
         if (prParts.length > 0) {
           statusLine += `\n📦 ${prParts.join(' · ')}`;
         }
+      }
+      if (status.linearData && status.linearData.issues.length > 0) {
+        const started = status.linearData.issues.filter(i => i.state.type === 'started').length;
+        const todo = status.linearData.issues.filter(i => i.state.type !== 'started').length;
+        const linearParts: string[] = [];
+        if (started > 0) linearParts.push(`${started} in progress`);
+        if (todo > 0) linearParts.push(`${todo} to do`);
+        statusLine += `\n🎫 ${linearParts.join(', ')} this cycle`;
       }
 
       blocks.push({
@@ -213,11 +226,36 @@ export async function handleAppHomeOpened(
         }
       }
 
+      // Fetch Linear data if integration is enabled
+      let linearData: UserLinearData | undefined;
+      if (daily && ctx.env) {
+        const linearConfig = getLinearConfig(daily);
+        if (linearConfig) {
+          const linearToken = ctx.env[linearConfig.tokenEnvVar];
+          if (linearToken) {
+            let linearUserId = getLinearUserIdFromConfig(daily, userId);
+            if (!linearUserId) {
+              linearUserId = await getLinearUserId(ctx.db, userId);
+            }
+
+            const teamId = getLinearTeamIdForUser(daily, userId);
+            if (linearUserId && teamId) {
+              try {
+                linearData = await fetchUserLinearData(linearToken, teamId, linearUserId);
+              } catch (error) {
+                console.error(`Failed to fetch Linear data for ${userId}:`, error);
+              }
+            }
+          }
+        }
+      }
+
       dailyStatuses.push({
         dailyName,
         todaySubmitted,
         tomorrowScheduled,
         prData,
+        linearData,
       });
     }
 

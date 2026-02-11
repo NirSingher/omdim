@@ -17,3 +17,9 @@ CRON_SECRET=your-random-secret-string
 
 # Enable dev-only commands (force-prompt, etc.)
 DEV_MODE=true
+
+# GitHub integration - generate at https://github.com/settings/tokens (repo scope)
+GITHUB_TOKEN=ghp_your-github-token
+
+# Linear integration - generate at https://linear.app/settings/api
+LINEAR_API_KEY=lin_api_your-linear-key

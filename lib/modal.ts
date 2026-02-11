@@ -4,6 +4,7 @@
  */
 
 import { Question, FieldOrder } from './config';
+import { LinearIssue } from './linear';
 
 // Re-export openModal from slack.ts for backward compatibility
 export { openModal } from './slack';
@@ -93,6 +94,7 @@ export type StandupMode = 'today' | 'tomorrow';
 /**
  * Build the standup modal with configurable field ordering
  * @param prefill - Optional pre-fill data for editing existing submissions
+ * @param linearIssues - Optional Linear issues to show as checkboxes
  */
 export function buildStandupModal(
   dailyName: string,
@@ -101,7 +103,8 @@ export function buildStandupModal(
   fieldOrder?: FieldOrder,
   userDate?: Date,
   mode: StandupMode = 'today',
-  prefill?: SubmissionPrefill
+  prefill?: SubmissionPrefill,
+  linearIssues?: LinearIssue[]
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -335,13 +338,71 @@ export function buildStandupModal(
     }
   });
 
+  // Linear ticket checkboxes (if issues available)
+  const linearIssueMap: Record<string, { identifier: string; title: string }> = {};
+  if (linearIssues && linearIssues.length > 0) {
+    // Take max 10 issues (Slack checkbox limit)
+    const displayIssues = linearIssues.slice(0, 10);
+
+    // Build issue map for submission handler
+    for (const issue of displayIssues) {
+      linearIssueMap[issue.id] = { identifier: issue.identifier, title: issue.title };
+    }
+
+    const checkboxOptions = displayIssues.map((issue) => ({
+      text: {
+        type: 'mrkdwn' as const,
+        text: `*${issue.identifier}* ${issue.title.length > 50 ? issue.title.slice(0, 47) + '...' : issue.title}`,
+      },
+      description: {
+        type: 'plain_text' as const,
+        text: issue.state.name,
+        emoji: true,
+      },
+      value: issue.id,
+    }));
+
+    blocks.push({ type: 'divider' });
+    blocks.push({
+      type: 'input',
+      block_id: 'linear_tickets',
+      optional: true,
+      element: {
+        type: 'checkboxes',
+        action_id: 'linear_tickets_input',
+        options: checkboxOptions,
+      },
+      label: {
+        type: 'plain_text',
+        text: '🎫 Cycle tickets (select to add to plans)',
+        emoji: true,
+      },
+    });
+
+    if (linearIssues.length > 10) {
+      blocks.push({
+        type: 'context',
+        elements: [{
+          type: 'mrkdwn',
+          text: `_Showing 10 of ${linearIssues.length} assigned tickets_`,
+        }],
+      });
+    }
+  }
+
   // Calculate target date string for submission handler
   const targetDateStr = userDate ? userDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
   return {
     type: 'modal',
     callback_id: 'standup_submission',
-    private_metadata: JSON.stringify({ dailyName, yesterdayPlans, mode, targetDate: targetDateStr }),
+    private_metadata: JSON.stringify({
+      dailyName,
+      yesterdayPlans,
+      mode,
+      targetDate: targetDateStr,
+      ...(Object.keys(linearIssueMap).length > 0 ? { linearIssueMap } : {}),
+    }),
     title: {
       type: 'plain_text',
       text: mode === 'tomorrow' ? "Tomorrow's Standup" : 'Daily Standup',

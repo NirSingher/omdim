@@ -16,7 +16,12 @@ import {
   formatWeeklySummary,
   formatManagerDigest,
   buildBottleneckBlocks,
+  formatPRDigestSection,
+  formatLinearDigestSection,
+  formatMemberPRSummary,
 } from '../lib/format';
+import type { TeamPRData } from '../lib/github';
+import type { TeamLinearData, CycleProgress } from '../lib/linear';
 
 describe('format utilities', () => {
   describe('formatStandupBlocks', () => {
@@ -988,6 +993,372 @@ describe('format utilities', () => {
       const value = JSON.parse(sectionBlock?.accessory?.value || '{}');
       expect(value.itemId).toBe(42);
       expect(value.dailyName).toBe('daily-il');
+    });
+  });
+
+  describe('formatPRDigestSection', () => {
+    it('formats team PR data with 3 categories', () => {
+      const teamPRData: TeamPRData[] = [
+        {
+          slackUserId: 'U1',
+          githubUsername: 'alice',
+          data: {
+            draftPRs: [
+              {
+                number: 123,
+                title: 'Draft PR',
+                url: 'https://github.com/org/repo/pull/123',
+                author: 'alice',
+                reviewsNeeded: 0,
+                createdAt: '2025-01-15T10:00:00Z',
+                updatedAt: '2025-01-16T14:30:00Z',
+                draft: true,
+              },
+            ],
+            readyToMerge: [
+              {
+                number: 456,
+                title: 'Approved PR',
+                url: 'https://github.com/org/repo/pull/456',
+                author: 'alice',
+                reviewsNeeded: 0,
+                createdAt: '2025-01-10T10:00:00Z',
+                updatedAt: '2025-01-16T14:30:00Z',
+                draft: false,
+              },
+            ],
+            reviewRequests: [
+              {
+                number: 789,
+                title: 'Review needed',
+                url: 'https://github.com/org/repo/pull/789',
+                author: 'bob',
+                reviewsNeeded: 0,
+                createdAt: '2025-01-15T10:00:00Z',
+                updatedAt: '2025-01-16T14:30:00Z',
+                draft: false,
+              },
+            ],
+          },
+        },
+      ];
+
+      const result = formatPRDigestSection(teamPRData);
+
+      expect(result).toContain('📦 PR Activity');
+      expect(result).toContain('1 draft');
+      expect(result).toContain('1 ready to merge');
+      expect(result).toContain('1 to review');
+    });
+
+    it('returns empty string when no PR activity', () => {
+      const teamPRData: TeamPRData[] = [
+        {
+          slackUserId: 'U1',
+          githubUsername: 'alice',
+          data: {
+            draftPRs: [],
+            readyToMerge: [],
+            reviewRequests: [],
+          },
+        },
+      ];
+
+      const result = formatPRDigestSection(teamPRData);
+      expect(result).toBe('');
+    });
+
+    it('shows warning for members with many PRs', () => {
+      const teamPRData: TeamPRData[] = [
+        {
+          slackUserId: 'U1',
+          githubUsername: 'alice',
+          data: {
+            draftPRs: [
+              { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+              { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+              { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+            ],
+            readyToMerge: [],
+            reviewRequests: [],
+          },
+        },
+      ];
+
+      const result = formatPRDigestSection(teamPRData);
+
+      expect(result).toContain('⚠️ <@U1>');
+      expect(result).toContain('3 draft');
+    });
+
+    it('shows warning for members with many review requests', () => {
+      const teamPRData: TeamPRData[] = [
+        {
+          slackUserId: 'U2',
+          githubUsername: 'bob',
+          data: {
+            draftPRs: [],
+            readyToMerge: [],
+            reviewRequests: [
+              { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+              { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+              { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+            ],
+          },
+        },
+      ];
+
+      const result = formatPRDigestSection(teamPRData);
+
+      expect(result).toContain('⚠️ <@U2>');
+      expect(result).toContain('3 to review');
+    });
+
+    it('aggregates counts across team members', () => {
+      const teamPRData: TeamPRData[] = [
+        {
+          slackUserId: 'U1',
+          githubUsername: 'alice',
+          data: {
+            draftPRs: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true }],
+            readyToMerge: [],
+            reviewRequests: [],
+          },
+        },
+        {
+          slackUserId: 'U2',
+          githubUsername: 'bob',
+          data: {
+            draftPRs: [{ number: 2, title: 'PR 2', url: 'url', author: 'bob', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true }],
+            readyToMerge: [{ number: 3, title: 'PR 3', url: 'url', author: 'bob', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false }],
+            reviewRequests: [],
+          },
+        },
+      ];
+
+      const result = formatPRDigestSection(teamPRData);
+
+      expect(result).toContain('2 draft');
+      expect(result).toContain('1 ready to merge');
+    });
+  });
+
+  describe('formatLinearDigestSection', () => {
+    it('formats cycle progress with team breakdown', () => {
+      const cycleProgress: CycleProgress = {
+        cycleName: 'Sprint 42',
+        startDate: '2025-01-13',
+        endDate: '2025-01-27',
+        done: 10,
+        inProgress: 5,
+        todo: 8,
+        completionPct: 43,
+      };
+
+      const teamData: TeamLinearData[] = [
+        {
+          slackUserId: 'U1',
+          linearUserId: 'linear-1',
+          data: {
+            issues: [
+              {
+                id: 'issue-1',
+                identifier: 'ENG-123',
+                title: 'Fix bug',
+                state: { name: 'In Progress', type: 'started' },
+                priority: 1,
+                url: 'url',
+              },
+              {
+                id: 'issue-2',
+                identifier: 'ENG-124',
+                title: 'Add feature',
+                state: { name: 'Todo', type: 'unstarted' },
+                priority: 2,
+                url: 'url',
+              },
+            ],
+          },
+        },
+        {
+          slackUserId: 'U2',
+          linearUserId: 'linear-2',
+          data: {
+            issues: [
+              {
+                id: 'issue-3',
+                identifier: 'ENG-125',
+                title: 'Review code',
+                state: { name: 'In Progress', type: 'started' },
+                priority: 1,
+                url: 'url',
+              },
+            ],
+          },
+        },
+      ];
+
+      const result = formatLinearDigestSection(teamData, cycleProgress);
+
+      expect(result).toContain('🎫 Cycle: Sprint 42');
+      expect(result).toContain('43% complete');
+      expect(result).toContain('10 done');
+      expect(result).toContain('5 in progress');
+      expect(result).toContain('8 to do');
+      expect(result).toContain('<@U1>: 1 in progress, 1 to do');
+      expect(result).toContain('<@U2>: 1 in progress');
+    });
+
+    it('shows date range in short format', () => {
+      const cycleProgress: CycleProgress = {
+        cycleName: 'Sprint 42',
+        startDate: '2025-01-13',
+        endDate: '2025-01-27',
+        done: 5,
+        inProgress: 0,
+        todo: 0,
+        completionPct: 100,
+      };
+
+      const result = formatLinearDigestSection([], cycleProgress);
+
+      expect(result).toContain('Jan 13');
+      expect(result).toContain('Jan 27');
+    });
+
+    it('handles members with no issues', () => {
+      const cycleProgress: CycleProgress = {
+        cycleName: 'Sprint 42',
+        startDate: '2025-01-13',
+        endDate: '2025-01-27',
+        done: 5,
+        inProgress: 0,
+        todo: 0,
+        completionPct: 100,
+      };
+
+      const teamData: TeamLinearData[] = [
+        {
+          slackUserId: 'U1',
+          linearUserId: 'linear-1',
+          data: { issues: [] },
+        },
+      ];
+
+      const result = formatLinearDigestSection(teamData, cycleProgress);
+
+      // Should not include members with no issues
+      expect(result).not.toContain('<@U1>');
+    });
+
+    it('distinguishes between started and unstarted issues', () => {
+      const cycleProgress: CycleProgress = {
+        cycleName: 'Sprint 42',
+        startDate: '2025-01-13',
+        endDate: '2025-01-27',
+        done: 0,
+        inProgress: 0,
+        todo: 0,
+        completionPct: 0,
+      };
+
+      const teamData: TeamLinearData[] = [
+        {
+          slackUserId: 'U1',
+          linearUserId: 'linear-1',
+          data: {
+            issues: [
+              {
+                id: 'issue-1',
+                identifier: 'ENG-123',
+                title: 'Started task',
+                state: { name: 'In Progress', type: 'started' },
+                priority: 1,
+                url: 'url',
+              },
+              {
+                id: 'issue-2',
+                identifier: 'ENG-124',
+                title: 'Unstarted task 1',
+                state: { name: 'Todo', type: 'unstarted' },
+                priority: 1,
+                url: 'url',
+              },
+              {
+                id: 'issue-3',
+                identifier: 'ENG-125',
+                title: 'Unstarted task 2',
+                state: { name: 'Todo', type: 'unstarted' },
+                priority: 1,
+                url: 'url',
+              },
+            ],
+          },
+        },
+      ];
+
+      const result = formatLinearDigestSection(teamData, cycleProgress);
+
+      expect(result).toContain('<@U1>: 1 in progress, 2 to do');
+    });
+  });
+
+  describe('formatMemberPRSummary', () => {
+    it('formats all three PR categories', () => {
+      const prData = {
+        draftPRs: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true }],
+        readyToMerge: [
+          { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+          { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+        ],
+        reviewRequests: [{ number: 4, title: 'PR 4', url: 'url', author: 'bob', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false }],
+      };
+
+      const result = formatMemberPRSummary(prData);
+
+      expect(result).toBe('1 draft · 2 ready · 1 to review');
+    });
+
+    it('omits empty categories', () => {
+      const prData = {
+        draftPRs: [],
+        readyToMerge: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false }],
+        reviewRequests: [],
+      };
+
+      const result = formatMemberPRSummary(prData);
+
+      expect(result).toBe('1 ready');
+      expect(result).not.toContain('draft');
+      expect(result).not.toContain('to review');
+    });
+
+    it('returns empty string when no PRs', () => {
+      const prData = {
+        draftPRs: [],
+        readyToMerge: [],
+        reviewRequests: [],
+      };
+
+      const result = formatMemberPRSummary(prData);
+
+      expect(result).toBe('');
+    });
+
+    it('uses correct singular/plural forms', () => {
+      const prData = {
+        draftPRs: [
+          { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+          { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+          { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+        ],
+        readyToMerge: [],
+        reviewRequests: [],
+      };
+
+      const result = formatMemberPRSummary(prData);
+
+      expect(result).toBe('3 draft'); // "draft" not "drafts" - matches implementation
     });
   });
 });

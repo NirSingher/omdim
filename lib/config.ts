@@ -39,6 +39,7 @@ const ScheduleSchema = z.object({
 const IntegrationUserMappingSchema = z.object({
   slack_user_id: z.string(),
   external_username: z.string(),
+  team_id: z.string().optional(), // Per-user Linear team ID override
 });
 
 const GitHubIntegrationSchema = z.object({
@@ -51,6 +52,7 @@ const GitHubIntegrationSchema = z.object({
 const LinearIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
   team_id: z.string().optional(),
+  token: z.string().optional(), // Optional: env var name for token (defaults to LINEAR_API_KEY)
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
 });
 
@@ -298,5 +300,61 @@ export function getGitHubUserMappings(daily: Daily): Array<{ slackUserId: string
   return mapping.map((m) => ({
     slackUserId: m.slack_user_id,
     githubUsername: m.external_username,
+  }));
+}
+
+// ============================================================================
+// Linear Integration Helpers
+// ============================================================================
+
+export interface LinearConfig {
+  enabled: boolean;
+  defaultTeamId?: string; // Optional global default — per-user team_id in user_mapping takes precedence
+  tokenEnvVar: string;
+}
+
+/** Get Linear integration config for a daily, returns null if not enabled */
+export function getLinearConfig(daily: Daily): LinearConfig | null {
+  if (!daily.integrations?.linear?.enabled) {
+    return null;
+  }
+
+  const linear = daily.integrations.linear;
+
+  return {
+    enabled: true,
+    defaultTeamId: linear.team_id,
+    tokenEnvVar: linear.token || 'LINEAR_API_KEY',
+  };
+}
+
+/** Get Linear team ID for a specific user (per-user mapping overrides daily default) */
+export function getLinearTeamIdForUser(daily: Daily, slackUserId: string): string | null {
+  const mapping = daily.integrations?.linear?.user_mapping;
+  if (mapping) {
+    const match = mapping.find((m) => m.slack_user_id === slackUserId);
+    if (match?.team_id) return match.team_id;
+  }
+  return daily.integrations?.linear?.team_id || null;
+}
+
+/** Look up Linear user ID from config mapping for a daily */
+export function getLinearUserIdFromConfig(daily: Daily, slackUserId: string): string | null {
+  const mapping = daily.integrations?.linear?.user_mapping;
+  if (!mapping) return null;
+
+  const match = mapping.find((m) => m.slack_user_id === slackUserId);
+  return match?.external_username || null;
+}
+
+/** Get all Linear user mappings for a daily */
+export function getLinearUserMappings(daily: Daily): Array<{ slackUserId: string; linearUserId: string; teamId?: string }> {
+  const mapping = daily.integrations?.linear?.user_mapping;
+  if (!mapping) return [];
+
+  return mapping.map((m) => ({
+    slackUserId: m.slack_user_id,
+    linearUserId: m.external_username,
+    teamId: m.team_id,
   }));
 }
