@@ -291,8 +291,6 @@ export async function handleStandupSubmission(
     yesterdayPlans?: string[];
     mode?: StandupMode;
     targetDate?: string;
-    linearIssueMap?: Record<string, { identifier: string; title: string }>;
-    prMap?: Record<string, { repo: string; number: number; title: string }>;
     unmappedReviewers?: string[];
   };
   const dailyName = metadata.dailyName;
@@ -340,33 +338,28 @@ export async function handleStandupSubmission(
   const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
 
   // Parse Linear ticket selections and append to todayPlans
+  // Parse integration checkbox selections — extract display text from the option's text field
+  // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers
+  const parseOptionText = (text: string): string => text.replace(/^\*([^*]+)\*\s*/, '[$1] ');
+
   const linearSelections = values.linear_tickets?.linear_tickets_input?.selected_options;
-  if (linearSelections && linearSelections.length > 0 && metadata.linearIssueMap) {
+  if (linearSelections && linearSelections.length > 0) {
     for (const option of linearSelections) {
-      const issueInfo = metadata.linearIssueMap[option.value];
-      if (issueInfo) {
-        todayPlans.push(`[${issueInfo.identifier}] ${issueInfo.title}`);
-      }
+      todayPlans.push(parseOptionText(option.text?.text || option.value));
     }
   }
 
-  // Parse GitHub PR selections (review requests + my PRs) and append to todayPlans
+  // Parse GitHub PR selections (review requests + my PRs)
   const reviewSelections = values.review_requests?.review_requests_input?.selected_options;
-  if (reviewSelections && reviewSelections.length > 0 && metadata.prMap) {
+  if (reviewSelections && reviewSelections.length > 0) {
     for (const option of reviewSelections) {
-      const prInfo = metadata.prMap[option.value];
-      if (prInfo) {
-        todayPlans.push(`[${prInfo.repo}#${prInfo.number}] ${prInfo.title}`);
-      }
+      todayPlans.push(parseOptionText(option.text?.text || option.value));
     }
   }
   const myPrSelections = values.my_prs?.my_prs_input?.selected_options;
-  if (myPrSelections && myPrSelections.length > 0 && metadata.prMap) {
+  if (myPrSelections && myPrSelections.length > 0) {
     for (const option of myPrSelections) {
-      const prInfo = metadata.prMap[option.value];
-      if (prInfo) {
-        todayPlans.push(`[${prInfo.repo}#${prInfo.number}] ${prInfo.title}`);
-      }
+      todayPlans.push(parseOptionText(option.text?.text || option.value));
     }
   }
 

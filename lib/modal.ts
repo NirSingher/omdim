@@ -241,9 +241,6 @@ export function buildStandupModal(
   // Sort by order
   orderedFields.sort((a, b) => a.order - b.order);
 
-  // Maps populated inside the loop when rendering integration checkboxes
-  const linearIssueMap: Record<string, { identifier: string; title: string }> = {};
-  const prMap: Record<string, { repo: string; number: number; title: string }> = {};
   let unmappedReviewerLogins: string[] = [];
 
   // Render fields in order
@@ -286,9 +283,6 @@ export function buildStandupModal(
         // Integration checkboxes go right above today's plans
         if (linearIssues && linearIssues.length > 0) {
           const displayIssues = linearIssues.slice(0, 10);
-          for (const issue of displayIssues) {
-            linearIssueMap[issue.id] = { identifier: issue.identifier, title: issue.title };
-          }
           const linearOptions = displayIssues.map((issue) => ({
             text: {
               type: 'mrkdwn' as const,
@@ -357,11 +351,6 @@ export function buildStandupModal(
         if (prData) {
           // PRs where others are requesting my review
           const reviewPRs = prData.reviewRequests.slice(0, 10);
-          for (const pr of reviewPRs) {
-            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
-            const repo = repoMatch?.[1] || 'unknown';
-            prMap[`${repo}#${pr.number}`] = { repo, number: pr.number, title: pr.title };
-          }
           const reviewOptions = reviewPRs.map((pr) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
@@ -421,11 +410,6 @@ export function buildStandupModal(
           for (const pr of prData.readyToMerge) myPRsCategorized.push({ pr, category: 'Ready to Merge' });
           for (const pr of prData.draftPRs) myPRsCategorized.push({ pr, category: 'Draft' });
           const displayMyPRs = myPRsCategorized.slice(0, 10);
-          for (const { pr } of displayMyPRs) {
-            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
-            const repo = repoMatch?.[1] || 'unknown';
-            prMap[`${repo}#${pr.number}`] = { repo, number: pr.number, title: pr.title };
-          }
           const myPROptions = displayMyPRs.map(({ pr, category, descSuffix }) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
@@ -455,7 +439,7 @@ export function buildStandupModal(
             },
             label: {
               type: 'plain_text',
-              text: '🔀 My PRs (select to add to plans)',
+              text: '🔀 My PRs (select to request review, tag reviewers)',
               emoji: true,
             },
           });
@@ -560,18 +544,19 @@ export function buildStandupModal(
   // Calculate target date string for submission handler
   const targetDateStr = userDate ? userDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
-  return {
-    type: 'modal',
-    callback_id: 'standup_submission',
-    private_metadata: JSON.stringify({
+  const metadata = JSON.stringify({
       dailyName,
       yesterdayPlans,
       mode,
       targetDate: targetDateStr,
-      ...(Object.keys(linearIssueMap).length > 0 ? { linearIssueMap } : {}),
-      ...(Object.keys(prMap).length > 0 ? { prMap } : {}),
       ...(unmappedReviewerLogins.length > 0 ? { unmappedReviewers: unmappedReviewerLogins } : {}),
-    }),
+  });
+  console.log(`private_metadata length: ${metadata.length}`);
+
+  return {
+    type: 'modal',
+    callback_id: 'standup_submission',
+    private_metadata: metadata,
     title: {
       type: 'plain_text',
       text: mode === 'tomorrow' ? "Tomorrow's Standup" : 'Daily Standup',
