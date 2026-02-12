@@ -33,9 +33,11 @@ Omdim handles the boring part — collecting and organizing updates — so your 
 - **Custom questions** - Add team-specific questions with @mention support
 - **Configurable field order** - Control the order of all fields in the standup modal
 - **On-demand digests** - Daily and weekly summaries via DM
-- **GitHub PR integration** - Surface draft PRs, ready-to-merge PRs, and review requests in standup modal
-- **Linear issue integration** - Show current/previous cycle issues in standup modal
-- **Self-service account linking** - Users link their own GitHub/Linear accounts via `/standup github link` and `/standup linear link`
+- **GitHub PR integration** - Draft PRs, ready-to-merge PRs, and review requests as checkboxes in the standup modal
+- **Linear issue integration** - Current/previous cycle issues as checkboxes in the standup modal
+- **Self-service account linking** - Users link GitHub/Linear via slash commands or App Home buttons
+- **"In Progress" status** - Track actively-worked items separately from not-yet-started; staleness warnings after 3+ carries
+- **Channel reminders** - Configurable heads-up message before daily standup time
 - **Zero cost** - Runs entirely on free tiers, no credit card required
 
 ## Prerequisites
@@ -241,7 +243,7 @@ dailies:
       - text: "How're you feeling?"
         required: false
         order: 5      # Appears before unplanned (10)
-      - text: "Any PRs needing review?"
+      - text: "Customer calls today?"
         required: false
         order: 25     # Appears between today_plans (20) and blockers (30)
 
@@ -257,7 +259,17 @@ admins:
   - "U12345678"  # Your Slack user ID
 ```
 
-**Field ordering**: Standard fields (`unplanned`, `today_plans`, `blockers`) and custom questions are sorted by their `order` value. Lower numbers appear earlier in the modal.
+**Field ordering**: Standard fields (`unplanned`, `review_requests`, `today_plans`, `my_prs`, `blockers`) and custom questions are sorted by their `order` value. Lower numbers appear earlier in the modal.
+
+**Channel reminders** (optional): Get a heads-up in the standup channel before the daily is due:
+
+```yaml
+dailies:
+  - name: "engineering"
+    reminder_minutes_before: 60  # minutes before daily, 0 to disable (default 90)
+```
+
+Requires `timezone` on the schedule.
 
 **Integrations** (optional): Add GitHub/Linear to surface PRs and issues in the standup modal:
 
@@ -322,6 +334,7 @@ In Slack:
 **Filling out the form:**
 1. For each of yesterday's plans, choose:
    - ✅ **Done** - Mark as completed
+   - 🔄 **In Progress** - Actively working on it (carries forward; shows ⚠️ after 3+ carries)
    - ➡️ **Continue** - Carry over to today (default)
    - ❌ **Drop** - Remove from plans
 2. Add any unplanned work you completed
