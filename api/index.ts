@@ -12,7 +12,7 @@ import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserD
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
-import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks } from '../lib/format';
+import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics } from '../lib/format';
 
 // ============================================================================
 // Types

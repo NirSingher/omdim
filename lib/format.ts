@@ -40,6 +40,7 @@ interface StandupData {
   questions?: QuestionConfig[];
   fieldOrder?: FieldOrder;
   prData?: UserPRData; // GitHub PR data for integration
+  reviewerSlackMap?: Map<string, string>; // GitHub login → Slack user ID
   inProgressCarryCounts?: Record<string, number>; // carry counts for attention warnings
 }
 
@@ -189,7 +190,7 @@ export function formatStandupBlocks(
 
   // PR section (if data available)
   if (data.prData) {
-    const prBlock = formatPRSectionBlock(data.prData);
+    const prBlock = formatPRSectionBlock(data.prData, data.reviewerSlackMap);
     if (prBlock) {
       blocks.push(prBlock);
     }
@@ -489,6 +490,10 @@ export function formatManagerDigest(options: DigestOptions): string {
     const prSection = formatPRDigestSection(options.teamPRData);
     if (prSection) {
       lines.push(prSection);
+    }
+    const analyticsSection = formatPRDigestAnalytics(options.teamPRData);
+    if (analyticsSection) {
+      lines.push(analyticsSection);
     }
   }
 
@@ -829,10 +834,27 @@ function formatTrend(
 
 /**
  * Format PR section block for standup messages
- * Shows draft PRs, ready-to-merge PRs, and review requests
+ * Shows awaiting review, draft PRs, ready-to-merge PRs, and review requests
  */
-function formatPRSectionBlock(prData: UserPRData): Block | null {
+function formatPRSectionBlock(prData: UserPRData, reviewerSlackMap?: Map<string, string>): Block | null {
   const lines: string[] = [];
+
+  // Awaiting review (shown first — most actionable for author)
+  if (prData.awaitingReview.length > 0) {
+    lines.push('*Awaiting review:*');
+    for (const pr of prData.awaitingReview.slice(0, 3)) {
+      const ref = formatPRRef(pr);
+      const reviewerTags = pr.requestedReviewers.map(login => {
+        const slackId = reviewerSlackMap?.get(login.toLowerCase());
+        return slackId ? `<@${slackId}>` : `@${login}`;
+      });
+      const waitingOn = reviewerTags.length > 0 ? ` — waiting on ${reviewerTags.join(', ')}` : '';
+      lines.push(`• \`${ref}\` ${pr.title.length > 35 ? pr.title.slice(0, 32) + '...' : pr.title}${waitingOn}`);
+    }
+    if (prData.awaitingReview.length > 3) {
+      lines.push(`  _...and ${prData.awaitingReview.length - 3} more_`);
+    }
+  }
 
   // Draft PRs
   if (prData.draftPRs.length > 0) {
@@ -891,15 +913,17 @@ export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
   // Calculate totals
   let totalDrafts = 0;
   let totalReadyToMerge = 0;
+  let totalAwaitingReview = 0;
   let totalReviewRequests = 0;
 
   for (const member of teamPRData) {
     totalDrafts += member.data.draftPRs.length;
     totalReadyToMerge += member.data.readyToMerge.length;
+    totalAwaitingReview += member.data.awaitingReview.length;
     totalReviewRequests += member.data.reviewRequests.length;
   }
 
-  if (totalDrafts === 0 && totalReadyToMerge === 0 && totalReviewRequests === 0) {
+  if (totalDrafts === 0 && totalReadyToMerge === 0 && totalAwaitingReview === 0 && totalReviewRequests === 0) {
     return '';
   }
 
@@ -907,6 +931,9 @@ export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
   lines.push('*📦 PR Activity*');
 
   const statParts: string[] = [];
+  if (totalAwaitingReview > 0) {
+    statParts.push(`${totalAwaitingReview} awaiting review`);
+  }
   if (totalDrafts > 0) {
     statParts.push(`${totalDrafts} draft`);
   }
@@ -922,14 +949,82 @@ export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
   for (const member of teamPRData) {
     const drafts = member.data.draftPRs.length;
     const ready = member.data.readyToMerge.length;
+    const awaiting = member.data.awaitingReview.length;
     const reviews = member.data.reviewRequests.length;
 
-    if (drafts + ready >= 3 || reviews >= 3) {
+    if (drafts + ready + awaiting >= 3 || reviews >= 3) {
       const parts: string[] = [];
+      if (awaiting > 0) parts.push(`${awaiting} awaiting review`);
       if (drafts > 0) parts.push(`${drafts} draft`);
       if (ready > 0) parts.push(`${ready} ready`);
       if (reviews >= 3) parts.push(`${reviews} to review`);
       lines.push(`  ⚠️ <@${member.slackUserId}>: ${parts.join(', ')}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Format PR review analytics for manager digest
+ * Shows stale reviews, review load distribution, and bottleneck reviewers
+ */
+export function formatPRDigestAnalytics(teamPRData: TeamPRData[]): string {
+  const lines: string[] = [];
+
+  // Collect all awaiting-review PRs across the team
+  const stalePRs: Array<{ pr: GitHubPR; slackUserId: string }> = [];
+  const reviewLoadMap = new Map<string, number>(); // reviewer github login → count of pending reviews
+
+  for (const member of teamPRData) {
+    for (const pr of member.data.awaitingReview) {
+      // Check age: > 3 days is stale
+      const ageMs = Date.now() - new Date(pr.createdAt).getTime();
+      const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+      if (ageDays >= 3) {
+        stalePRs.push({ pr, slackUserId: member.slackUserId });
+      }
+
+      // Count review load per reviewer
+      for (const reviewer of pr.requestedReviewers) {
+        const key = reviewer.toLowerCase();
+        reviewLoadMap.set(key, (reviewLoadMap.get(key) || 0) + 1);
+      }
+    }
+  }
+
+  if (stalePRs.length === 0 && reviewLoadMap.size === 0) {
+    return '';
+  }
+
+  lines.push('');
+  lines.push('*🔍 Review Analytics*');
+
+  // Stale reviews (PRs awaiting review > 3 days)
+  if (stalePRs.length > 0) {
+    lines.push(`_${stalePRs.length} stale review${stalePRs.length !== 1 ? 's' : ''} (>3 days):_`);
+    for (const { pr, slackUserId } of stalePRs.slice(0, 5)) {
+      const ref = formatPRRef(pr);
+      const ageMs = Date.now() - new Date(pr.createdAt).getTime();
+      const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24));
+      lines.push(`  • \`${ref}\` by <@${slackUserId}> — ${ageDays}d old`);
+    }
+    if (stalePRs.length > 5) {
+      lines.push(`  _...and ${stalePRs.length - 5} more_`);
+    }
+  }
+
+  // Review load: who has the most pending reviews
+  if (reviewLoadMap.size > 0) {
+    const sorted = Array.from(reviewLoadMap.entries()).sort((a, b) => b[1] - a[1]);
+    const topReviewers = sorted.slice(0, 3);
+    if (topReviewers.some(([_, count]) => count >= 2)) {
+      lines.push('_Review load:_');
+      for (const [login, count] of topReviewers) {
+        if (count >= 2) {
+          lines.push(`  • @${login}: ${count} pending review${count !== 1 ? 's' : ''}`);
+        }
+      }
     }
   }
 
@@ -942,6 +1037,9 @@ export function formatPRDigestSection(teamPRData: TeamPRData[]): string {
 export function formatMemberPRSummary(prData: UserPRData): string {
   const parts: string[] = [];
 
+  if (prData.awaitingReview.length > 0) {
+    parts.push(`${prData.awaitingReview.length} awaiting review`);
+  }
   if (prData.draftPRs.length > 0) {
     parts.push(`${prData.draftPRs.length} draft`);
   }

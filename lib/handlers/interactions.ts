@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -22,6 +22,7 @@ import {
   getLinearUserId,
   setGitHubUsername,
   setLinearUserId,
+  getUsersWithGitHubLinks,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
@@ -118,20 +119,47 @@ async function fetchLinearIssuesForUser(
 }
 
 /**
+ * Build a map from GitHub login (lowercase) → Slack user ID
+ * Combines config mappings + DB self-linked accounts (config takes precedence)
+ */
+async function buildGitHubUserMap(
+  daily: ReturnType<typeof getDaily>,
+  db: DbClient
+): Promise<Map<string, string>> {
+  if (!daily) return new Map();
+  const map = new Map<string, string>();
+
+  // DB links first (lower priority)
+  const dbLinks = await getUsersWithGitHubLinks(db);
+  for (const link of dbLinks) {
+    map.set(link.githubUsername.toLowerCase(), link.slackUserId);
+  }
+
+  // Config mappings override DB links
+  const configMappings = getGitHubUserMappings(daily);
+  for (const mapping of configMappings) {
+    map.set(mapping.githubUsername.toLowerCase(), mapping.slackUserId);
+  }
+
+  return map;
+}
+
+/**
  * Fetch GitHub PRs for a user if GitHub integration is enabled for the daily
+ * Returns PR data and reviewer map for tagging reviewers
  */
 async function fetchGitHubPRsForUser(
   daily: ReturnType<typeof getDaily>,
   userId: string,
   ctx: InteractionContext
-): Promise<UserPRData | undefined> {
-  if (!daily) return undefined;
+): Promise<{ prData?: UserPRData; reviewerMap?: Map<string, string> }> {
+  if (!daily) return {};
 
   const githubConfig = getGitHubConfig(daily);
-  if (!githubConfig || !ctx.env) return undefined;
+  if (!githubConfig || !ctx.env) return {};
 
   const githubToken = ctx.env[githubConfig.tokenEnvVar];
-  if (!githubToken) return undefined;
+  if (!githubToken) return {};
 
   // Get GitHub username: config mapping takes precedence over DB
   let githubUsername = getGitHubUsernameFromConfig(daily, userId);
@@ -139,13 +167,17 @@ async function fetchGitHubPRsForUser(
     githubUsername = await getGitHubUsername(ctx.db, userId);
   }
 
-  if (!githubUsername) return undefined;
+  if (!githubUsername) return {};
 
   try {
-    return await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+    const [prData, reviewerMap] = await Promise.all([
+      fetchUserPRData(githubToken, githubUsername, githubConfig.org),
+      buildGitHubUserMap(daily, ctx.db),
+    ]);
+    return { prData, reviewerMap };
   } catch (error) {
     console.error('Failed to fetch GitHub PR data:', error);
-    return undefined;
+    return {};
   }
 }
 
@@ -222,13 +254,13 @@ export async function handleOpenStandup(
   }
 
   // Fetch Linear issues and GitHub PRs in parallel
-  const [linearIssues, prData] = await Promise.all([
+  const [linearIssues, githubResult] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
   ]);
 
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues, prData);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues, githubResult.prData, githubResult.reviewerMap);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -261,6 +293,7 @@ export async function handleStandupSubmission(
     targetDate?: string;
     linearIssueMap?: Record<string, { identifier: string; title: string }>;
     prMap?: Record<string, { repo: string; number: number; title: string }>;
+    unmappedReviewers?: string[];
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
@@ -324,6 +357,21 @@ export async function handleStandupSubmission(
       const prInfo = metadata.prMap[option.value];
       if (prInfo) {
         todayPlans.push(`[${prInfo.repo}#${prInfo.number}] ${prInfo.title}`);
+      }
+    }
+  }
+
+  // Parse reviewer mapping selections and save to DB
+  if (metadata.unmappedReviewers && metadata.unmappedReviewers.length > 0) {
+    for (const login of metadata.unmappedReviewers) {
+      const selectedUser = values[`reviewer_map_${login}`]?.[`reviewer_map_input_${login}`] as { selected_user?: string } | undefined;
+      if (selectedUser?.selected_user) {
+        try {
+          await setGitHubUsername(ctx.db, selectedUser.selected_user, login);
+          console.log(`Linked GitHub @${login} → Slack ${selectedUser.selected_user}`);
+        } catch (error) {
+          console.error(`Failed to save reviewer mapping for ${login}:`, error);
+        }
       }
     }
   }
@@ -454,8 +502,9 @@ export async function handleStandupSubmission(
 
     // Post to channel
     if (daily?.channel) {
-      // Fetch GitHub PR data if integration is enabled
+      // Fetch GitHub PR data and reviewer map if integration is enabled
       let prData: UserPRData | undefined;
+      let reviewerSlackMap: Map<string, string> | undefined;
       const githubConfig = getGitHubConfig(daily);
       if (githubConfig && ctx.env) {
         const githubToken = ctx.env[githubConfig.tokenEnvVar];
@@ -468,7 +517,10 @@ export async function handleStandupSubmission(
 
           if (githubUsername) {
             try {
-              prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+              [prData, reviewerSlackMap] = await Promise.all([
+                fetchUserPRData(githubToken, githubUsername, githubConfig.org),
+                buildGitHubUserMap(daily, ctx.db),
+              ]);
             } catch (error) {
               console.error('Failed to fetch PR data:', error);
             }
@@ -493,6 +545,7 @@ export async function handleStandupSubmission(
           questions: daily.questions,
           fieldOrder: daily.field_order,
           prData,
+          reviewerSlackMap,
           inProgressCarryCounts,
         }
       );
@@ -638,7 +691,7 @@ export async function handleHomeStartDaily(
   }
 
   // Fetch Linear issues and GitHub PRs in parallel
-  const [linearIssues, prData] = await Promise.all([
+  const [linearIssues, githubResult] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
   ]);
@@ -653,7 +706,8 @@ export async function handleHomeStartDaily(
     mode,
     prefill,
     linearIssues,
-    prData
+    githubResult.prData,
+    githubResult.reviewerMap
   );
 
   return openModal(ctx.slackToken, triggerId, modal);

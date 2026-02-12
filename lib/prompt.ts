@@ -5,8 +5,8 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, wasReminderSent, recordReminderSent } from './db';
-import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getReminderMinutesBefore } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent } from './db';
+import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getReminderMinutesBefore } from './config';
 import { getUserInfo, postMessage } from './slack';
 import { postStandupToChannel } from './format';
 import { fetchUserPRData, UserPRData } from './github';
@@ -488,6 +488,30 @@ export async function runScheduledPosts(
 }
 
 /**
+ * Build a map from GitHub login (lowercase) → Slack user ID
+ * Combines config mappings + DB self-linked accounts (config takes precedence)
+ */
+async function buildGitHubUserMap(
+  daily: ReturnType<typeof getDaily>,
+  db: DbClient
+): Promise<Map<string, string>> {
+  if (!daily) return new Map();
+  const map = new Map<string, string>();
+
+  const dbLinks = await getUsersWithGitHubLinks(db);
+  for (const link of dbLinks) {
+    map.set(link.githubUsername.toLowerCase(), link.slackUserId);
+  }
+
+  const configMappings = getGitHubUserMappings(daily);
+  for (const mapping of configMappings) {
+    map.set(mapping.githubUsername.toLowerCase(), mapping.slackUserId);
+  }
+
+  return map;
+}
+
+/**
  * Process a single scheduled submission
  */
 async function processScheduledSubmission(
@@ -557,6 +581,7 @@ async function processScheduledSubmission(
 
   // Fetch GitHub PR data if integration is enabled
   let prData: UserPRData | undefined;
+  let reviewerSlackMap: Map<string, string> | undefined;
   const githubConfig = getGitHubConfig(daily);
   if (githubConfig && env) {
     const githubToken = env[githubConfig.tokenEnvVar];
@@ -569,7 +594,10 @@ async function processScheduledSubmission(
 
       if (githubUsername) {
         try {
-          prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+          [prData, reviewerSlackMap] = await Promise.all([
+            fetchUserPRData(githubToken, githubUsername, githubConfig.org),
+            buildGitHubUserMap(daily, db),
+          ]);
         } catch (error) {
           console.error('Failed to fetch PR data for scheduled post:', error);
         }
@@ -596,6 +624,7 @@ async function processScheduledSubmission(
       questions: daily.questions,
       fieldOrder: daily.field_order,
       prData,
+      reviewerSlackMap,
     }
   );
 
