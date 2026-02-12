@@ -10,6 +10,7 @@ global.fetch = vi.fn();
 import {
   fetchDraftPRs,
   fetchApprovedPRs,
+  fetchAwaitingReviewPRs,
   fetchReviewRequests,
   fetchUserPRData,
   extractPRSlug,
@@ -259,9 +260,74 @@ describe('github client', () => {
     });
   });
 
+  describe('fetchAwaitingReviewPRs', () => {
+    it('fetches non-draft non-approved PRs authored by a user', async () => {
+      const mockResponse = {
+        total_count: 1,
+        items: [
+          {
+            number: 555,
+            title: 'Needs review',
+            html_url: 'https://github.com/myorg/repo/pull/555',
+            user: { login: 'alice' },
+            created_at: '2025-01-15T10:00:00Z',
+            updated_at: '2025-01-16T14:30:00Z',
+            draft: false,
+            requested_reviewers: [{ login: 'bob' }, { login: 'charlie' }],
+          },
+        ],
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchAwaitingReviewPRs('token', 'alice', 'myorg');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(555);
+      expect(result[0].requestedReviewers).toEqual(['bob', 'charlie']);
+      expect(result[0].reviewsNeeded).toBe(2);
+    });
+
+    it('constructs correct search query with -review:approved filter', async () => {
+      const mockResponse = { total_count: 0, items: [] };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      await fetchAwaitingReviewPRs('token', 'alice', 'myorg');
+
+      const fetchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const url = fetchCall[0] as string;
+
+      expect(url).toContain('is%3Apr');
+      expect(url).toContain('is%3Aopen');
+      expect(url).toContain('author%3Aalice');
+      expect(url).toContain('org%3Amyorg');
+      expect(url).toContain('draft%3Afalse');
+      expect(url).toContain('-review%3Aapproved');
+    });
+
+    it('returns empty array on API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => 'Forbidden',
+      });
+
+      const result = await fetchAwaitingReviewPRs('token', 'alice', 'myorg');
+
+      expect(result).toEqual([]);
+    });
+  });
+
   describe('fetchUserPRData', () => {
-    it('fetches all three PR categories in parallel', async () => {
-      // Mock responses for all three endpoints
+    it('fetches all four PR categories in parallel', async () => {
+      // Mock responses for all four endpoints
       const mockDrafts = {
         total_count: 1,
         items: [
@@ -294,6 +360,22 @@ describe('github client', () => {
         ],
       };
 
+      const mockAwaitingReview = {
+        total_count: 1,
+        items: [
+          {
+            number: 555,
+            title: 'Awaiting Review PR',
+            html_url: 'https://github.com/myorg/repo/pull/555',
+            user: { login: 'alice' },
+            created_at: '2025-01-14T10:00:00Z',
+            updated_at: '2025-01-16T14:30:00Z',
+            draft: false,
+            requested_reviewers: [{ login: 'bob' }],
+          },
+        ],
+      };
+
       const mockReviews = {
         total_count: 1,
         items: [
@@ -312,6 +394,7 @@ describe('github client', () => {
       (global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ok: true, json: async () => mockDrafts })
         .mockResolvedValueOnce({ ok: true, json: async () => mockApproved })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockAwaitingReview })
         .mockResolvedValueOnce({ ok: true, json: async () => mockReviews });
 
       const result = await fetchUserPRData('token', 'alice', 'myorg');
@@ -320,6 +403,9 @@ describe('github client', () => {
       expect(result.draftPRs[0].number).toBe(123);
       expect(result.readyToMerge).toHaveLength(1);
       expect(result.readyToMerge[0].number).toBe(456);
+      expect(result.awaitingReview).toHaveLength(1);
+      expect(result.awaitingReview[0].number).toBe(555);
+      expect(result.awaitingReview[0].requestedReviewers).toEqual(['bob']);
       expect(result.reviewRequests).toHaveLength(1);
       expect(result.reviewRequests[0].number).toBe(789);
     });
@@ -330,6 +416,7 @@ describe('github client', () => {
       (global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ok: true, json: async () => mockDrafts })
         .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' })
+        .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' })
         .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' });
 
       const result = await fetchUserPRData('token', 'alice', 'myorg');
@@ -337,6 +424,7 @@ describe('github client', () => {
       // Should still return structure even with errors
       expect(result.draftPRs).toEqual([]);
       expect(result.readyToMerge).toEqual([]);
+      expect(result.awaitingReview).toEqual([]);
       expect(result.reviewRequests).toEqual([]);
     });
   });
@@ -366,6 +454,7 @@ describe('github client', () => {
         url: 'https://github.com/myorg/my-repo/pull/123',
         author: 'alice',
         reviewsNeeded: 0,
+        requestedReviewers: [],
         createdAt: '2025-01-15T10:00:00Z',
         updatedAt: '2025-01-16T14:30:00Z',
         draft: false,
@@ -381,6 +470,7 @@ describe('github client', () => {
         url: 'invalid-url',
         author: 'alice',
         reviewsNeeded: 0,
+        requestedReviewers: [],
         createdAt: '2025-01-15T10:00:00Z',
         updatedAt: '2025-01-16T14:30:00Z',
         draft: false,

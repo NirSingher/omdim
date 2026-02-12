@@ -97,6 +97,7 @@ export type StandupMode = 'today' | 'tomorrow';
  * Build the standup modal with configurable field ordering
  * @param prefill - Optional pre-fill data for editing existing submissions
  * @param linearIssues - Optional Linear issues to show as checkboxes
+ * @param reviewerMap - GitHub login (lowercase) → Slack user ID mapping
  */
 export function buildStandupModal(
   dailyName: string,
@@ -107,7 +108,8 @@ export function buildStandupModal(
   mode: StandupMode = 'today',
   prefill?: SubmissionPrefill,
   linearIssues?: LinearIssue[],
-  prData?: UserPRData
+  prData?: UserPRData,
+  reviewerMap?: Map<string, string>
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -213,7 +215,7 @@ export function buildStandupModal(
   }
 
   orderedFields.push({ type: 'today_plans', order: order.today_plans });
-  if (prData && (prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
+  if (prData && (prData.awaitingReview.length + prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
     orderedFields.push({ type: 'github_prs', order: 24 });
   }
   orderedFields.push({ type: 'blockers', order: order.blockers });
@@ -235,6 +237,7 @@ export function buildStandupModal(
   // Maps populated inside the loop when rendering integration checkboxes
   const linearIssueMap: Record<string, { identifier: string; title: string }> = {};
   const prMap: Record<string, { repo: string; number: number; title: string }> = {};
+  let unmappedReviewerLogins: string[] = [];
 
   // Render fields in order
   orderedFields.forEach((field, idx) => {
@@ -345,7 +348,17 @@ export function buildStandupModal(
 
       case 'github_prs':
         if (prData) {
-          const categorized: Array<{ pr: GitHubPR; category: string }> = [];
+          // Order: awaiting review (most actionable), review requested, ready to merge, draft
+          const categorized: Array<{ pr: GitHubPR; category: string; descSuffix?: string }> = [];
+          for (const pr of prData.awaitingReview) {
+            // Show reviewer names in description
+            const reviewerNames = pr.requestedReviewers.map(login => {
+              const slackId = reviewerMap?.get(login.toLowerCase());
+              return slackId ? `<@${slackId}>` : `@${login}`;
+            });
+            const descSuffix = reviewerNames.length > 0 ? ` — ${reviewerNames.join(', ')}` : '';
+            categorized.push({ pr, category: 'Awaiting Review', descSuffix });
+          }
           for (const pr of prData.reviewRequests) categorized.push({ pr, category: 'Review Requested' });
           for (const pr of prData.readyToMerge) categorized.push({ pr, category: 'Ready to Merge' });
           for (const pr of prData.draftPRs) categorized.push({ pr, category: 'Draft' });
@@ -355,9 +368,10 @@ export function buildStandupModal(
             const repo = repoMatch?.[1] || 'unknown';
             prMap[`${repo}#${pr.number}`] = { repo, number: pr.number, title: pr.title };
           }
-          const prOptions = displayPRs.map(({ pr, category }) => {
+          const prOptions = displayPRs.map(({ pr, category, descSuffix }) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
+            const descText = descSuffix ? `${category}${descSuffix}` : category;
             return {
               text: {
                 type: 'mrkdwn' as const,
@@ -365,7 +379,7 @@ export function buildStandupModal(
               },
               description: {
                 type: 'plain_text' as const,
-                text: category,
+                text: descText.length > 75 ? descText.slice(0, 72) + '...' : descText,
                 emoji: true,
               },
               value: `${repo}#${pr.number}`,
@@ -388,7 +402,7 @@ export function buildStandupModal(
               emoji: true,
             },
           });
-          const totalPRs = prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length;
+          const totalPRs = prData.awaitingReview.length + prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length;
           if (totalPRs > 10) {
             blocks.push({
               type: 'context',
@@ -397,6 +411,43 @@ export function buildStandupModal(
                 text: `_Showing 10 of ${totalPRs} PRs_`,
               }],
             });
+          }
+
+          // Add unmapped reviewer dropdowns (capped at 3)
+          if (reviewerMap) {
+            const allReviewers = new Set<string>();
+            for (const pr of prData.awaitingReview) {
+              for (const login of pr.requestedReviewers) {
+                if (!reviewerMap.has(login.toLowerCase())) {
+                  allReviewers.add(login);
+                }
+              }
+            }
+            const unmappedLogins = Array.from(allReviewers).slice(0, 3);
+            for (const login of unmappedLogins) {
+              blocks.push({
+                type: 'input',
+                block_id: `reviewer_map_${login}`,
+                optional: true,
+                element: {
+                  type: 'users_select',
+                  action_id: `reviewer_map_input_${login}`,
+                  placeholder: {
+                    type: 'plain_text',
+                    text: 'Select a Slack user',
+                  },
+                },
+                label: {
+                  type: 'plain_text',
+                  text: `Who is @${login} on Slack?`,
+                  emoji: true,
+                },
+              });
+            }
+            // Store unmapped logins in metadata for submission handler
+            if (unmappedLogins.length > 0) {
+              unmappedReviewerLogins = unmappedLogins;
+            }
           }
         }
         break;
@@ -463,6 +514,7 @@ export function buildStandupModal(
       targetDate: targetDateStr,
       ...(Object.keys(linearIssueMap).length > 0 ? { linearIssueMap } : {}),
       ...(Object.keys(prMap).length > 0 ? { prMap } : {}),
+      ...(unmappedReviewerLogins.length > 0 ? { unmappedReviewers: unmappedReviewerLogins } : {}),
     }),
     title: {
       type: 'plain_text',
