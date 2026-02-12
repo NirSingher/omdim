@@ -4,6 +4,7 @@
  */
 
 import { Question, FieldOrder } from './config';
+import { UserPRData, GitHubPR } from './github';
 import { LinearIssue } from './linear';
 
 // Re-export openModal from slack.ts for backward compatibility
@@ -63,7 +64,7 @@ const DEFAULT_FIELD_ORDER: Required<FieldOrder> = {
 };
 
 // Field type for ordering
-type FieldType = 'unplanned' | 'today_plans' | 'blockers' | 'custom';
+type FieldType = 'unplanned' | 'today_plans' | 'github_prs' | 'blockers' | 'custom';
 
 // Dropdown options for yesterday's items
 const YESTERDAY_ITEM_OPTIONS = [
@@ -105,7 +106,8 @@ export function buildStandupModal(
   userDate?: Date,
   mode: StandupMode = 'today',
   prefill?: SubmissionPrefill,
-  linearIssues?: LinearIssue[]
+  linearIssues?: LinearIssue[],
+  prData?: UserPRData
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -211,6 +213,9 @@ export function buildStandupModal(
   }
 
   orderedFields.push({ type: 'today_plans', order: order.today_plans });
+  if (prData && (prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
+    orderedFields.push({ type: 'github_prs', order: 24 });
+  }
   orderedFields.push({ type: 'blockers', order: order.blockers });
 
   // Add custom questions with their indices
@@ -226,6 +231,10 @@ export function buildStandupModal(
 
   // Sort by order
   orderedFields.sort((a, b) => a.order - b.order);
+
+  // Maps populated inside the loop when rendering integration checkboxes
+  const linearIssueMap: Record<string, { identifier: string; title: string }> = {};
+  const prMap: Record<string, { repo: string; number: number; title: string }> = {};
 
   // Render fields in order
   orderedFields.forEach((field, idx) => {
@@ -264,6 +273,50 @@ export function buildStandupModal(
         break;
 
       case 'today_plans':
+        // Integration checkboxes go right above today's plans
+        if (linearIssues && linearIssues.length > 0) {
+          const displayIssues = linearIssues.slice(0, 10);
+          for (const issue of displayIssues) {
+            linearIssueMap[issue.id] = { identifier: issue.identifier, title: issue.title };
+          }
+          const linearOptions = displayIssues.map((issue) => ({
+            text: {
+              type: 'mrkdwn' as const,
+              text: `*${issue.identifier}* ${issue.title.length > 50 ? issue.title.slice(0, 47) + '...' : issue.title}`,
+            },
+            description: {
+              type: 'plain_text' as const,
+              text: issue.state.name,
+              emoji: true,
+            },
+            value: issue.id,
+          }));
+          blocks.push({
+            type: 'input',
+            block_id: 'linear_tickets',
+            optional: true,
+            element: {
+              type: 'checkboxes',
+              action_id: 'linear_tickets_input',
+              options: linearOptions,
+            },
+            label: {
+              type: 'plain_text',
+              text: '🎫 Cycle tickets (select to add to plans)',
+              emoji: true,
+            },
+          });
+          if (linearIssues.length > 10) {
+            blocks.push({
+              type: 'context',
+              elements: [{
+                type: 'mrkdwn',
+                text: `_Showing 10 of ${linearIssues.length} assigned tickets_`,
+              }],
+            });
+          }
+        }
+
         const plansElement: Record<string, unknown> = {
           type: 'plain_text_input',
           action_id: 'plans_input',
@@ -288,6 +341,64 @@ export function buildStandupModal(
             emoji: true,
           },
         });
+        break;
+
+      case 'github_prs':
+        if (prData) {
+          const categorized: Array<{ pr: GitHubPR; category: string }> = [];
+          for (const pr of prData.reviewRequests) categorized.push({ pr, category: 'Review Requested' });
+          for (const pr of prData.readyToMerge) categorized.push({ pr, category: 'Ready to Merge' });
+          for (const pr of prData.draftPRs) categorized.push({ pr, category: 'Draft' });
+          const displayPRs = categorized.slice(0, 10);
+          for (const { pr } of displayPRs) {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            prMap[`${repo}#${pr.number}`] = { repo, number: pr.number, title: pr.title };
+          }
+          const prOptions = displayPRs.map(({ pr, category }) => {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            return {
+              text: {
+                type: 'mrkdwn' as const,
+                text: `*${repo}#${pr.number}* ${pr.title.length > 45 ? pr.title.slice(0, 42) + '...' : pr.title}`,
+              },
+              description: {
+                type: 'plain_text' as const,
+                text: category,
+                emoji: true,
+              },
+              value: `${repo}#${pr.number}`,
+            };
+          });
+          // All PRs pre-checked by default
+          blocks.push({
+            type: 'input',
+            block_id: 'github_prs',
+            optional: true,
+            element: {
+              type: 'checkboxes',
+              action_id: 'github_prs_input',
+              options: prOptions,
+              initial_options: prOptions,
+            },
+            label: {
+              type: 'plain_text',
+              text: '🔀 GitHub PRs (select to add to plans)',
+              emoji: true,
+            },
+          });
+          const totalPRs = prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length;
+          if (totalPRs > 10) {
+            blocks.push({
+              type: 'context',
+              elements: [{
+                type: 'mrkdwn',
+                text: `_Showing 10 of ${totalPRs} PRs_`,
+              }],
+            });
+          }
+        }
         break;
 
       case 'blockers':
@@ -339,58 +450,6 @@ export function buildStandupModal(
     }
   });
 
-  // Linear ticket checkboxes (if issues available)
-  const linearIssueMap: Record<string, { identifier: string; title: string }> = {};
-  if (linearIssues && linearIssues.length > 0) {
-    // Take max 10 issues (Slack checkbox limit)
-    const displayIssues = linearIssues.slice(0, 10);
-
-    // Build issue map for submission handler
-    for (const issue of displayIssues) {
-      linearIssueMap[issue.id] = { identifier: issue.identifier, title: issue.title };
-    }
-
-    const checkboxOptions = displayIssues.map((issue) => ({
-      text: {
-        type: 'mrkdwn' as const,
-        text: `*${issue.identifier}* ${issue.title.length > 50 ? issue.title.slice(0, 47) + '...' : issue.title}`,
-      },
-      description: {
-        type: 'plain_text' as const,
-        text: issue.state.name,
-        emoji: true,
-      },
-      value: issue.id,
-    }));
-
-    blocks.push({ type: 'divider' });
-    blocks.push({
-      type: 'input',
-      block_id: 'linear_tickets',
-      optional: true,
-      element: {
-        type: 'checkboxes',
-        action_id: 'linear_tickets_input',
-        options: checkboxOptions,
-      },
-      label: {
-        type: 'plain_text',
-        text: '🎫 Cycle tickets (select to add to plans)',
-        emoji: true,
-      },
-    });
-
-    if (linearIssues.length > 10) {
-      blocks.push({
-        type: 'context',
-        elements: [{
-          type: 'mrkdwn',
-          text: `_Showing 10 of ${linearIssues.length} assigned tickets_`,
-        }],
-      });
-    }
-  }
-
   // Calculate target date string for submission handler
   const targetDateStr = userDate ? userDate.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
@@ -403,6 +462,7 @@ export function buildStandupModal(
       mode,
       targetDate: targetDateStr,
       ...(Object.keys(linearIssueMap).length > 0 ? { linearIssueMap } : {}),
+      ...(Object.keys(prMap).length > 0 ? { prMap } : {}),
     }),
     title: {
       type: 'plain_text',

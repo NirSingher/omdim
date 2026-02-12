@@ -25,7 +25,7 @@ import {
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
-import { fetchUserLinearData, LinearIssue } from '../linear';
+import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue } from '../linear';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
@@ -102,14 +102,50 @@ async function fetchLinearIssuesForUser(
 
   // Get per-user team ID (user mapping overrides daily default)
   const teamId = getLinearTeamIdForUser(daily, userId);
-  if (!teamId) return [];
 
   try {
+    // If no team_id configured, use cross-team user query
+    if (!teamId) {
+      const data = await fetchUserAssignedIssues(linearToken, linearUserId);
+      return data.issues;
+    }
     const data = await fetchUserLinearData(linearToken, teamId, linearUserId);
     return data.issues;
   } catch (error) {
     console.error('Failed to fetch Linear data:', error);
     return [];
+  }
+}
+
+/**
+ * Fetch GitHub PRs for a user if GitHub integration is enabled for the daily
+ */
+async function fetchGitHubPRsForUser(
+  daily: ReturnType<typeof getDaily>,
+  userId: string,
+  ctx: InteractionContext
+): Promise<UserPRData | undefined> {
+  if (!daily) return undefined;
+
+  const githubConfig = getGitHubConfig(daily);
+  if (!githubConfig || !ctx.env) return undefined;
+
+  const githubToken = ctx.env[githubConfig.tokenEnvVar];
+  if (!githubToken) return undefined;
+
+  // Get GitHub username: config mapping takes precedence over DB
+  let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+  if (!githubUsername) {
+    githubUsername = await getGitHubUsername(ctx.db, userId);
+  }
+
+  if (!githubUsername) return undefined;
+
+  try {
+    return await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+  } catch (error) {
+    console.error('Failed to fetch GitHub PR data:', error);
+    return undefined;
   }
 }
 
@@ -185,11 +221,14 @@ export async function handleOpenStandup(
     }
   }
 
-  // Fetch Linear issues if integration is enabled
-  const linearIssues = await fetchLinearIssuesForUser(daily, userId, ctx);
+  // Fetch Linear issues and GitHub PRs in parallel
+  const [linearIssues, prData] = await Promise.all([
+    fetchLinearIssuesForUser(daily, userId, ctx),
+    fetchGitHubPRsForUser(daily, userId, ctx),
+  ]);
 
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues, prData);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -221,6 +260,7 @@ export async function handleStandupSubmission(
     mode?: StandupMode;
     targetDate?: string;
     linearIssueMap?: Record<string, { identifier: string; title: string }>;
+    prMap?: Record<string, { repo: string; number: number; title: string }>;
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
@@ -273,6 +313,17 @@ export async function handleStandupSubmission(
       const issueInfo = metadata.linearIssueMap[option.value];
       if (issueInfo) {
         todayPlans.push(`[${issueInfo.identifier}] ${issueInfo.title}`);
+      }
+    }
+  }
+
+  // Parse GitHub PR selections and append to todayPlans
+  const prSelections = values.github_prs?.github_prs_input?.selected_options;
+  if (prSelections && prSelections.length > 0 && metadata.prMap) {
+    for (const option of prSelections) {
+      const prInfo = metadata.prMap[option.value];
+      if (prInfo) {
+        todayPlans.push(`[${prInfo.repo}#${prInfo.number}] ${prInfo.title}`);
       }
     }
   }
@@ -586,8 +637,11 @@ export async function handleHomeStartDaily(
     }
   }
 
-  // Fetch Linear issues if integration is enabled
-  const linearIssues = await fetchLinearIssuesForUser(daily, userId, ctx);
+  // Fetch Linear issues and GitHub PRs in parallel
+  const [linearIssues, prData] = await Promise.all([
+    fetchLinearIssuesForUser(daily, userId, ctx),
+    fetchGitHubPRsForUser(daily, userId, ctx),
+  ]);
 
   // Build and open modal
   const modal = buildStandupModal(
@@ -598,7 +652,8 @@ export async function handleHomeStartDaily(
     targetDate,
     mode,
     prefill,
-    linearIssues
+    linearIssues,
+    prData
   );
 
   return openModal(ctx.slackToken, triggerId, modal);
@@ -635,6 +690,13 @@ export async function handleLinkGitHub(
     submit: { type: 'plain_text', text: 'Link' },
     blocks: [
       {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Enter your GitHub username — it\'s the handle shown in parentheses next to your name at <https://github.com/settings/profile|github.com/settings/profile>, or the part after `github.com/` in your profile URL.',
+        },
+      },
+      {
         type: 'input',
         block_id: 'github_username',
         label: { type: 'plain_text', text: 'GitHub Username' },
@@ -663,13 +725,20 @@ export async function handleLinkLinear(
     submit: { type: 'plain_text', text: 'Link' },
     blocks: [
       {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Enter your Linear user ID — a UUID like `a1b2c3d4-e5f6-...`. Ask your workspace admin for it, or find it by querying `{ viewer { id } }` in the <https://studio.apollographql.com/sandbox/explorer|GraphQL API explorer> using your Linear API key.',
+        },
+      },
+      {
         type: 'input',
         block_id: 'linear_user_id',
         label: { type: 'plain_text', text: 'Linear User ID' },
         element: {
           type: 'plain_text_input',
           action_id: 'linear_user_id_input',
-          placeholder: { type: 'plain_text', text: 'Your Linear user ID' },
+          placeholder: { type: 'plain_text', text: 'e.g. a1b2c3d4-e5f6-...' },
         },
       },
     ],
@@ -719,8 +788,7 @@ export async function handleGitHubLinkSubmission(
     };
   }
   await setGitHubUsername(ctx.db, userId, username);
-  // Refresh home after modal closes (use setTimeout-like pattern via non-blocking call)
-  refreshHome(userId, ctx).catch(err => console.error('Failed to refresh home after GitHub link:', err));
+  await refreshHome(userId, ctx);
   return true;
 }
 
@@ -740,7 +808,7 @@ export async function handleLinearLinkSubmission(
     };
   }
   await setLinearUserId(ctx.db, userId, linearUserId);
-  refreshHome(userId, ctx).catch(err => console.error('Failed to refresh home after Linear link:', err));
+  await refreshHome(userId, ctx);
   return true;
 }
 

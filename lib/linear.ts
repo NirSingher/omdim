@@ -88,6 +88,96 @@ async function linearQuery<T>(
 // Data Fetching
 // ============================================================================
 
+// --- Cross-team assigned issues (no team_id required) ---
+
+interface UserAssignedIssuesResponse {
+  user: {
+    assignedIssues: {
+      nodes: Array<{
+        id: string;
+        identifier: string;
+        title: string;
+        state: { name: string; type: string };
+        priority: number;
+        url: string;
+      }>;
+    };
+  };
+}
+
+const USER_ASSIGNED_ISSUES_QUERY = `
+  query UserAssignedIssues($userId: String!) {
+    user(id: $userId) {
+      assignedIssues(
+        filter: {
+          state: { type: { nin: ["completed", "canceled"] } }
+        }
+        first: 50
+        orderBy: updatedAt
+      ) {
+        nodes {
+          id
+          identifier
+          title
+          state { name type }
+          priority
+          url
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Fetch a user's assigned issues across all teams (no team_id needed).
+ * Uses user(id:) query so it works with a shared workspace token.
+ */
+export async function fetchUserAssignedIssues(
+  token: string,
+  userId: string
+): Promise<UserLinearData> {
+  try {
+    const data = await linearQuery<UserAssignedIssuesResponse>(
+      token,
+      USER_ASSIGNED_ISSUES_QUERY,
+      { userId }
+    );
+
+    if (!data.user) {
+      return { issues: [] };
+    }
+
+    const issues = data.user.assignedIssues.nodes.map((issue) => ({
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      state: { name: issue.state.name, type: issue.state.type },
+      priority: issue.priority,
+      url: issue.url,
+    }));
+
+    // Sort by priority (1=Urgent first) then by state type (started before unstarted)
+    const stateOrder: Record<string, number> = {
+      'started': 0,
+      'unstarted': 1,
+      'triage': 2,
+      'backlog': 3,
+    };
+
+    issues.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return (stateOrder[a.state.type] ?? 99) - (stateOrder[b.state.type] ?? 99);
+    });
+
+    return { issues };
+  } catch (error) {
+    console.error('Failed to fetch assigned Linear issues:', error);
+    return { issues: [] };
+  }
+}
+
+// --- Team-scoped cycle issues ---
+
 interface CycleIssuesResponse {
   team: {
     activeCycle: {
