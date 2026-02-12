@@ -17,7 +17,9 @@ const QuestionSchema = z.object({
 
 const FieldOrderSchema = z.object({
   unplanned: z.number().optional(),
+  review_requests: z.number().optional(),  // PRs I need to review (default 18, near Linear tickets)
   today_plans: z.number().optional(),
+  my_prs: z.number().optional(),           // PRs I authored — draft, awaiting review, ready to merge (default 24)
   blockers: z.number().optional(),
 });
 
