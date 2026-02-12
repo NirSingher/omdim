@@ -14,6 +14,7 @@ export interface GitHubPR {
   url: string;
   author: string;
   reviewsNeeded: number; // Count of pending review requests
+  requestedReviewers: string[]; // GitHub logins of requested reviewers
   createdAt: string;
   updatedAt: string;
   draft: boolean;
@@ -22,6 +23,7 @@ export interface GitHubPR {
 export interface UserPRData {
   draftPRs: GitHubPR[]; // PRs authored by user that are still drafts
   readyToMerge: GitHubPR[]; // PRs authored by user that are approved
+  awaitingReview: GitHubPR[]; // PRs authored by user, not draft, not yet approved
   reviewRequests: GitHubPR[]; // PRs where user is requested to review
 }
 
@@ -86,6 +88,7 @@ export async function fetchDraftPRs(
       url: item.html_url,
       author: item.user.login,
       reviewsNeeded: item.requested_reviewers?.length || 0,
+      requestedReviewers: item.requested_reviewers?.map(r => r.login) || [],
       createdAt: item.created_at,
       updatedAt: item.updated_at,
       draft: item.draft,
@@ -132,6 +135,7 @@ export async function fetchApprovedPRs(
       url: item.html_url,
       author: item.user.login,
       reviewsNeeded: item.requested_reviewers?.length || 0,
+      requestedReviewers: item.requested_reviewers?.map(r => r.login) || [],
       createdAt: item.created_at,
       updatedAt: item.updated_at,
       draft: item.draft,
@@ -178,6 +182,7 @@ export async function fetchReviewRequests(
       url: item.html_url,
       author: item.user.login,
       reviewsNeeded: 0,
+      requestedReviewers: item.requested_reviewers?.map(r => r.login) || [],
       createdAt: item.created_at,
       updatedAt: item.updated_at,
       draft: item.draft,
@@ -189,22 +194,71 @@ export async function fetchReviewRequests(
 }
 
 /**
+ * Fetch non-draft PRs authored by a user that haven't been approved yet
+ * (awaiting review from others)
+ */
+export async function fetchAwaitingReviewPRs(
+  token: string,
+  username: string,
+  org: string
+): Promise<GitHubPR[]> {
+  const query = `is:pr is:open author:${username} org:${org} draft:false -review:approved`;
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=10`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'omdim-bot',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`GitHub API error for awaiting review PRs: ${response.status} ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json() as GitHubSearchResponse;
+
+    return data.items.map((item) => ({
+      number: item.number,
+      title: item.title,
+      url: item.html_url,
+      author: item.user.login,
+      reviewsNeeded: item.requested_reviewers?.length || 0,
+      requestedReviewers: item.requested_reviewers?.map(r => r.login) || [],
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      draft: item.draft,
+    }));
+  } catch (error) {
+    console.error('Failed to fetch awaiting review PRs:', error);
+    return [];
+  }
+}
+
+/**
  * Fetch all PR data for a user in an org
- * Combines draft PRs, approved PRs, and review requests
+ * Combines draft PRs, approved PRs, awaiting review PRs, and review requests
  */
 export async function fetchUserPRData(
   token: string,
   username: string,
   org: string
 ): Promise<UserPRData> {
-  // Fetch all three in parallel
-  const [draftPRs, readyToMerge, reviewRequests] = await Promise.all([
+  // Fetch all four in parallel
+  const [draftPRs, readyToMerge, awaitingReview, reviewRequests] = await Promise.all([
     fetchDraftPRs(token, username, org),
     fetchApprovedPRs(token, username, org),
+    fetchAwaitingReviewPRs(token, username, org),
     fetchReviewRequests(token, username, org),
   ]);
 
-  return { draftPRs, readyToMerge, reviewRequests };
+  return { draftPRs, readyToMerge, awaitingReview, reviewRequests };
 }
 
 // ============================================================================
@@ -274,3 +328,4 @@ export function formatPRRef(pr: GitHubPR): string {
   const slug = extractPRSlug(pr.url);
   return slug || `#${pr.number}`;
 }
+

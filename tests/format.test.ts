@@ -1062,6 +1062,7 @@ describe('format utilities', () => {
                 url: 'https://github.com/org/repo/pull/123',
                 author: 'alice',
                 reviewsNeeded: 0,
+                requestedReviewers: [],
                 createdAt: '2025-01-15T10:00:00Z',
                 updatedAt: '2025-01-16T14:30:00Z',
                 draft: true,
@@ -1074,11 +1075,13 @@ describe('format utilities', () => {
                 url: 'https://github.com/org/repo/pull/456',
                 author: 'alice',
                 reviewsNeeded: 0,
+                requestedReviewers: [],
                 createdAt: '2025-01-10T10:00:00Z',
                 updatedAt: '2025-01-16T14:30:00Z',
                 draft: false,
               },
             ],
+            awaitingReview: [],
             reviewRequests: [
               {
                 number: 789,
@@ -1086,6 +1089,7 @@ describe('format utilities', () => {
                 url: 'https://github.com/org/repo/pull/789',
                 author: 'bob',
                 reviewsNeeded: 0,
+                requestedReviewers: [],
                 createdAt: '2025-01-15T10:00:00Z',
                 updatedAt: '2025-01-16T14:30:00Z',
                 draft: false,
@@ -1111,6 +1115,7 @@ describe('format utilities', () => {
           data: {
             draftPRs: [],
             readyToMerge: [],
+            awaitingReview: [],
             reviewRequests: [],
           },
         },
@@ -1127,11 +1132,12 @@ describe('format utilities', () => {
           githubUsername: 'alice',
           data: {
             draftPRs: [
-              { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
-              { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
-              { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+              { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true },
+              { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true },
+              { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true },
             ],
             readyToMerge: [],
+            awaitingReview: [],
             reviewRequests: [],
           },
         },
@@ -1151,10 +1157,11 @@ describe('format utilities', () => {
           data: {
             draftPRs: [],
             readyToMerge: [],
+            awaitingReview: [],
             reviewRequests: [
-              { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
-              { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
-              { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+              { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false },
+              { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false },
+              { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false },
             ],
           },
         },
@@ -1172,8 +1179,9 @@ describe('format utilities', () => {
           slackUserId: 'U1',
           githubUsername: 'alice',
           data: {
-            draftPRs: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true }],
+            draftPRs: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true }],
             readyToMerge: [],
+            awaitingReview: [],
             reviewRequests: [],
           },
         },
@@ -1181,8 +1189,9 @@ describe('format utilities', () => {
           slackUserId: 'U2',
           githubUsername: 'bob',
           data: {
-            draftPRs: [{ number: 2, title: 'PR 2', url: 'url', author: 'bob', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true }],
-            readyToMerge: [{ number: 3, title: 'PR 3', url: 'url', author: 'bob', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false }],
+            draftPRs: [{ number: 2, title: 'PR 2', url: 'url', author: 'bob', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true }],
+            readyToMerge: [{ number: 3, title: 'PR 3', url: 'url', author: 'bob', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false }],
+            awaitingReview: [],
             reviewRequests: [],
           },
         },
@@ -1356,25 +1365,27 @@ describe('format utilities', () => {
   });
 
   describe('formatMemberPRSummary', () => {
-    it('formats all three PR categories', () => {
+    it('formats all four PR categories', () => {
       const prData = {
-        draftPRs: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true }],
+        draftPRs: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true }],
         readyToMerge: [
-          { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
-          { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false },
+          { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false },
+          { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false },
         ],
-        reviewRequests: [{ number: 4, title: 'PR 4', url: 'url', author: 'bob', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false }],
+        awaitingReview: [{ number: 5, title: 'PR 5', url: 'url', author: 'alice', reviewsNeeded: 1, requestedReviewers: ['bob'], createdAt: '', updatedAt: '', draft: false }],
+        reviewRequests: [{ number: 4, title: 'PR 4', url: 'url', author: 'bob', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false }],
       };
 
       const result = formatMemberPRSummary(prData);
 
-      expect(result).toBe('1 draft · 2 ready · 1 to review');
+      expect(result).toBe('1 awaiting review · 1 draft · 2 ready · 1 to review');
     });
 
     it('omits empty categories', () => {
       const prData = {
         draftPRs: [],
-        readyToMerge: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: false }],
+        readyToMerge: [{ number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false }],
+        awaitingReview: [],
         reviewRequests: [],
       };
 
@@ -1383,12 +1394,14 @@ describe('format utilities', () => {
       expect(result).toBe('1 ready');
       expect(result).not.toContain('draft');
       expect(result).not.toContain('to review');
+      expect(result).not.toContain('awaiting');
     });
 
     it('returns empty string when no PRs', () => {
       const prData = {
         draftPRs: [],
         readyToMerge: [],
+        awaitingReview: [],
         reviewRequests: [],
       };
 
@@ -1400,17 +1413,18 @@ describe('format utilities', () => {
     it('uses correct singular/plural forms', () => {
       const prData = {
         draftPRs: [
-          { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
-          { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
-          { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, createdAt: '', updatedAt: '', draft: true },
+          { number: 1, title: 'PR 1', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true },
+          { number: 2, title: 'PR 2', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true },
+          { number: 3, title: 'PR 3', url: 'url', author: 'alice', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true },
         ],
         readyToMerge: [],
+        awaitingReview: [],
         reviewRequests: [],
       };
 
       const result = formatMemberPRSummary(prData);
 
-      expect(result).toBe('3 draft'); // "draft" not "drafts" - matches implementation
+      expect(result).toBe('3 draft');
     });
   });
 });
