@@ -453,7 +453,7 @@ describe('modal builder', () => {
       expect(contextBlock?.elements?.[0]?.text).toContain('Showing 10 of 15 assigned tickets');
     });
 
-    it('includes linearIssueMap in private_metadata when issues provided', () => {
+    it('does not store integration maps in private_metadata (titles extracted from option text on submission)', () => {
       const linearIssues: LinearIssue[] = [
         {
           id: 'issue-1',
@@ -462,14 +462,6 @@ describe('modal builder', () => {
           state: { name: 'In Progress', type: 'started' },
           priority: 1,
           url: 'https://linear.app/issue/ENG-123',
-        },
-        {
-          id: 'issue-2',
-          identifier: 'ENG-124',
-          title: 'Add feature',
-          state: { name: 'Todo', type: 'unstarted' },
-          priority: 2,
-          url: 'https://linear.app/issue/ENG-124',
         },
       ];
 
@@ -486,32 +478,8 @@ describe('modal builder', () => {
 
       const metadata = JSON.parse(modal.private_metadata);
 
-      expect(metadata.linearIssueMap).toBeDefined();
-      expect(metadata.linearIssueMap['issue-1']).toEqual({
-        identifier: 'ENG-123',
-        title: 'Fix bug',
-      });
-      expect(metadata.linearIssueMap['issue-2']).toEqual({
-        identifier: 'ENG-124',
-        title: 'Add feature',
-      });
-    });
-
-    it('excludes linearIssueMap from private_metadata when no issues', () => {
-      const modal = buildStandupModal(
-        'daily-il',
-        null,
-        [],
-        undefined,
-        undefined,
-        'today',
-        undefined,
-        undefined
-      );
-
-      const metadata = JSON.parse(modal.private_metadata);
-
       expect(metadata.linearIssueMap).toBeUndefined();
+      expect(metadata.prMap).toBeUndefined();
     });
 
     it('does not include Linear block when no issues provided', () => {

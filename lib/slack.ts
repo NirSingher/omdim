@@ -270,10 +270,10 @@ export async function openModal(
       }),
     });
 
-    const data = await response.json() as { ok: boolean; error?: string };
+    const data = await response.json() as { ok: boolean; error?: string; response_metadata?: { messages?: string[] } };
 
     if (!data.ok) {
-      console.error('Failed to open modal:', data.error);
+      console.error('Failed to open modal:', data.error, data.response_metadata?.messages);
       return false;
     }
 
