@@ -160,6 +160,16 @@ Items gain a 4th status: **In Progress** (alongside Done, Carry Over, Drop).
 - [ ] Items in-progress for 3+ days flagged as "needs attention" in digest and report
 - [ ] Visual indicator in standup post (e.g., 🔄 Day 3)
 
+### App Home: Today's Tasks Management
+View and manage today's standup items directly from the App Home tab — without reopening the modal.
+
+- [ ] Show today's planned items as an editable list in App Home
+- [ ] Quick-add new items inline
+- [ ] Mark items done / in-progress / drop from App Home
+- [ ] Carry over items to tomorrow
+- [ ] Show integration context (linked PR status, Linear ticket state) alongside each item
+- [ ] Real-time sync: changes in App Home reflect in the standup post (and vice versa)
+
 ### Configurable Digest & Report Cadence
 Digest and full report schedules are set per-daily in config (replacing the hardcoded 2pm UTC / weekly pattern).
 
