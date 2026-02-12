@@ -25,6 +25,7 @@ import {
   isWithinPromptWindow,
   shouldReprompt,
   getUserDate,
+  getDateInTimezone,
   formatDate,
   getMinutesLate,
   formatLatenessPrefix,
@@ -80,6 +81,48 @@ describe('prompt utilities', () => {
       const userDate = getUserDate(0);
       expect(userDate.getUTCHours()).toBe(10);
       expect(userDate.getUTCMinutes()).toBe(30);
+    });
+  });
+
+  describe('getDateInTimezone', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('returns correct date for Asia/Jerusalem timezone', () => {
+      // Set "now" to 23:00 UTC on Dec 17 → should be Dec 18 01:00 in Israel (UTC+2)
+      vi.setSystemTime(new Date('2025-12-17T23:00:00Z'));
+
+      const date = getDateInTimezone('Asia/Jerusalem');
+      expect(formatDate(date)).toBe('2025-12-18');
+    });
+
+    it('returns correct date for America/New_York timezone', () => {
+      // Set "now" to 03:00 UTC on Dec 18 → should be Dec 17 22:00 in NY (UTC-5)
+      vi.setSystemTime(new Date('2025-12-18T03:00:00Z'));
+
+      const date = getDateInTimezone('America/New_York');
+      expect(formatDate(date)).toBe('2025-12-17');
+    });
+
+    it('returns correct hours for timezone', () => {
+      vi.setSystemTime(new Date('2025-12-18T10:00:00Z'));
+
+      // Israel is UTC+2, so 10:00 UTC = 12:00 Israel
+      const date = getDateInTimezone('Asia/Jerusalem');
+      expect(date.getUTCHours()).toBe(12);
+    });
+
+    it('falls back to UTC for UTC timezone', () => {
+      vi.setSystemTime(new Date('2025-12-18T15:30:00Z'));
+
+      const date = getDateInTimezone('UTC');
+      expect(date.getUTCHours()).toBe(15);
+      expect(date.getUTCMinutes()).toBe(30);
     });
   });
 
