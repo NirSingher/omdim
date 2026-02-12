@@ -109,34 +109,41 @@ dailies:
 
 ## Phase 3: Integrations
 
-> **Note**: Config schema supports `integrations` placeholder for future GitHub/Linear integration. Work alignment section removed from digest for compactness - will be re-added when integrations are implemented.
+### GitHub Integration ✅
 
-### GitHub Integration
+**User Linking**
+- [x] Link GitHub username to Slack user (config `user_mapping` + self-service `/link github`)
+- [x] App Home linked accounts section with link/unlink buttons
+
+**PR Review Tracking**
+- [x] Fetch open PRs by category: draft, awaiting review, ready to merge, review requests
+- [x] PR checkboxes in standup modal (pre-checked, grouped by category)
+- [x] Reviewer tagging in standup messages (`<@U123>` for mapped users)
+- [x] Unmapped reviewer dropdowns in modal for self-service linking
+- [x] Stale review detection (>3 days) in manager digest
+- [x] Review load analytics (pending reviews per team member) in digest
 
 **Work Alignment**
-- [ ] Link GitHub username to Slack user
 - [ ] Compare "today's plans" keywords to commit messages/PR titles
 - [ ] Surface misalignment: "You said X but worked on Y"
 - [ ] Auto-populate yesterday's work from commits
 
-**PR Review Tracking**
-- [ ] Fetch open PRs needing review from user
-- [ ] Auto-populate "PRs needing review" field
-- [ ] Track PR review turnaround time
-- [ ] Alert on stale PRs (>48h without review)
-
 ```yaml
 integrations:
   github:
-    enabled: false
+    enabled: true
     org: "your-org"
     user_mapping:
       - slack_user_id: "U123"
         external_username: "github-user"
 ```
 
-### Linear Integration
-- [ ] Auto-pull assigned issues as "Today's plan" suggestions
+### Linear Integration ✅
+
+- [x] Fetch assigned issues from current cycle (active + upcoming)
+- [x] Linear ticket checkboxes in standup modal (pre-checked)
+- [x] Link Linear user to Slack user (config `user_mapping` + self-service `/link linear`)
+- [x] App Home linked accounts section with link/unlink buttons
 - [ ] Mark issues as "in progress" when added to standup
 - [ ] Link blockers to Linear issues
 
@@ -144,10 +151,10 @@ integrations:
 
 ## Phase 4: Status Tracking & Smart Digests
 
-### In-Progress Item Tracking
+### In-Progress Item Tracking (Partial)
 Items gain a 4th status: **In Progress** (alongside Done, Carry Over, Drop).
 
-- [ ] Add "In Progress" status option to yesterday's items in standup modal
+- [x] Add "In Progress" status option to yesterday's items in standup modal
 - [ ] In-progress items auto-carry to today under the same status (no re-prompting needed)
 - [ ] Track consecutive in-progress days per item in DB
 - [ ] Items in-progress for 3+ days flagged as "needs attention" in digest and report
@@ -231,7 +238,7 @@ integrations:
 ## Future Considerations
 
 - Analytics dashboard (web UI with Slack OAuth)
-- Slack app home tab with personal stats
+- ~~Slack app home tab~~ ✅ (linked accounts, start daily button)
 - Manager dashboard
 - AI-generated standup summaries
 - Mobile-friendly standup submission
@@ -241,7 +248,7 @@ integrations:
 ## Open Questions
 
 1. **Alerts**: DM only or also post to a manager channel?
-2. **GitHub**: OAuth flow or static token per workspace?
+2. ~~**GitHub**: OAuth flow or static token per workspace?~~ → Static token (decided)
 3. **Stats**: Store aggregated stats or compute on-demand?
 4. **In-progress threshold**: Is 3 days the right default, or should it be configurable per-daily?
 5. **Linear sync direction**: Webhook (real-time, needs public endpoint) vs polling (simpler, slight delay)?

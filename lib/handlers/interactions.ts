@@ -350,10 +350,19 @@ export async function handleStandupSubmission(
     }
   }
 
-  // Parse GitHub PR selections and append to todayPlans
-  const prSelections = values.github_prs?.github_prs_input?.selected_options;
-  if (prSelections && prSelections.length > 0 && metadata.prMap) {
-    for (const option of prSelections) {
+  // Parse GitHub PR selections (review requests + my PRs) and append to todayPlans
+  const reviewSelections = values.review_requests?.review_requests_input?.selected_options;
+  if (reviewSelections && reviewSelections.length > 0 && metadata.prMap) {
+    for (const option of reviewSelections) {
+      const prInfo = metadata.prMap[option.value];
+      if (prInfo) {
+        todayPlans.push(`[${prInfo.repo}#${prInfo.number}] ${prInfo.title}`);
+      }
+    }
+  }
+  const myPrSelections = values.my_prs?.my_prs_input?.selected_options;
+  if (myPrSelections && myPrSelections.length > 0 && metadata.prMap) {
+    for (const option of myPrSelections) {
       const prInfo = metadata.prMap[option.value];
       if (prInfo) {
         todayPlans.push(`[${prInfo.repo}#${prInfo.number}] ${prInfo.title}`);

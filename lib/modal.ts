@@ -57,14 +57,16 @@ export interface SubmissionPrefill {
 }
 
 // Default field order values
-const DEFAULT_FIELD_ORDER: Required<FieldOrder> = {
+const DEFAULT_FIELD_ORDER = {
   unplanned: 10,
+  review_requests: 18,
   today_plans: 20,
+  my_prs: 24,
   blockers: 30,
 };
 
 // Field type for ordering
-type FieldType = 'unplanned' | 'today_plans' | 'github_prs' | 'blockers' | 'custom';
+type FieldType = 'unplanned' | 'review_requests' | 'today_plans' | 'my_prs' | 'blockers' | 'custom';
 
 // Dropdown options for yesterday's items
 const YESTERDAY_ITEM_OPTIONS = [
@@ -118,7 +120,9 @@ export function buildStandupModal(
   // Merge field order with defaults
   const order = {
     unplanned: fieldOrder?.unplanned ?? DEFAULT_FIELD_ORDER.unplanned,
+    review_requests: fieldOrder?.review_requests ?? DEFAULT_FIELD_ORDER.review_requests,
     today_plans: fieldOrder?.today_plans ?? DEFAULT_FIELD_ORDER.today_plans,
+    my_prs: fieldOrder?.my_prs ?? DEFAULT_FIELD_ORDER.my_prs,
     blockers: fieldOrder?.blockers ?? DEFAULT_FIELD_ORDER.blockers,
   };
 
@@ -214,9 +218,12 @@ export function buildStandupModal(
     orderedFields.push({ type: 'unplanned', order: order.unplanned });
   }
 
+  if (prData && prData.reviewRequests.length > 0) {
+    orderedFields.push({ type: 'review_requests', order: order.review_requests });
+  }
   orderedFields.push({ type: 'today_plans', order: order.today_plans });
-  if (prData && (prData.awaitingReview.length + prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
-    orderedFields.push({ type: 'github_prs', order: 24 });
+  if (prData && (prData.awaitingReview.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
+    orderedFields.push({ type: 'my_prs', order: order.my_prs });
   }
   orderedFields.push({ type: 'blockers', order: order.blockers });
 
@@ -346,29 +353,80 @@ export function buildStandupModal(
         });
         break;
 
-      case 'github_prs':
+      case 'review_requests':
         if (prData) {
-          // Order: awaiting review (most actionable), review requested, ready to merge, draft
-          const categorized: Array<{ pr: GitHubPR; category: string; descSuffix?: string }> = [];
+          // PRs where others are requesting my review
+          const reviewPRs = prData.reviewRequests.slice(0, 10);
+          for (const pr of reviewPRs) {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            prMap[`${repo}#${pr.number}`] = { repo, number: pr.number, title: pr.title };
+          }
+          const reviewOptions = reviewPRs.map((pr) => {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            return {
+              text: {
+                type: 'mrkdwn' as const,
+                text: `*${repo}#${pr.number}* ${pr.title.length > 45 ? pr.title.slice(0, 42) + '...' : pr.title}`,
+              },
+              description: {
+                type: 'plain_text' as const,
+                text: `by ${pr.author}`,
+                emoji: true,
+              },
+              value: `${repo}#${pr.number}`,
+            };
+          });
+          blocks.push({
+            type: 'input',
+            block_id: 'review_requests',
+            optional: true,
+            element: {
+              type: 'checkboxes',
+              action_id: 'review_requests_input',
+              options: reviewOptions,
+              initial_options: reviewOptions,
+            },
+            label: {
+              type: 'plain_text',
+              text: '👀 PRs to review (select to add to plans)',
+              emoji: true,
+            },
+          });
+          if (prData.reviewRequests.length > 10) {
+            blocks.push({
+              type: 'context',
+              elements: [{
+                type: 'mrkdwn',
+                text: `_Showing 10 of ${prData.reviewRequests.length} review requests_`,
+              }],
+            });
+          }
+        }
+        break;
+
+      case 'my_prs':
+        if (prData) {
+          // PRs I authored: awaiting review, ready to merge, draft
+          const myPRsCategorized: Array<{ pr: GitHubPR; category: string; descSuffix?: string }> = [];
           for (const pr of prData.awaitingReview) {
-            // Show reviewer names in description
             const reviewerNames = pr.requestedReviewers.map(login => {
               const slackId = reviewerMap?.get(login.toLowerCase());
               return slackId ? `<@${slackId}>` : `@${login}`;
             });
             const descSuffix = reviewerNames.length > 0 ? ` — ${reviewerNames.join(', ')}` : '';
-            categorized.push({ pr, category: 'Awaiting Review', descSuffix });
+            myPRsCategorized.push({ pr, category: 'Awaiting Review', descSuffix });
           }
-          for (const pr of prData.reviewRequests) categorized.push({ pr, category: 'Review Requested' });
-          for (const pr of prData.readyToMerge) categorized.push({ pr, category: 'Ready to Merge' });
-          for (const pr of prData.draftPRs) categorized.push({ pr, category: 'Draft' });
-          const displayPRs = categorized.slice(0, 10);
-          for (const { pr } of displayPRs) {
+          for (const pr of prData.readyToMerge) myPRsCategorized.push({ pr, category: 'Ready to Merge' });
+          for (const pr of prData.draftPRs) myPRsCategorized.push({ pr, category: 'Draft' });
+          const displayMyPRs = myPRsCategorized.slice(0, 10);
+          for (const { pr } of displayMyPRs) {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
             prMap[`${repo}#${pr.number}`] = { repo, number: pr.number, title: pr.title };
           }
-          const prOptions = displayPRs.map(({ pr, category, descSuffix }) => {
+          const myPROptions = displayMyPRs.map(({ pr, category, descSuffix }) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
             const descText = descSuffix ? `${category}${descSuffix}` : category;
@@ -385,30 +443,29 @@ export function buildStandupModal(
               value: `${repo}#${pr.number}`,
             };
           });
-          // All PRs pre-checked by default
           blocks.push({
             type: 'input',
-            block_id: 'github_prs',
+            block_id: 'my_prs',
             optional: true,
             element: {
               type: 'checkboxes',
-              action_id: 'github_prs_input',
-              options: prOptions,
-              initial_options: prOptions,
+              action_id: 'my_prs_input',
+              options: myPROptions,
+              initial_options: myPROptions,
             },
             label: {
               type: 'plain_text',
-              text: '🔀 GitHub PRs (select to add to plans)',
+              text: '🔀 My PRs (select to add to plans)',
               emoji: true,
             },
           });
-          const totalPRs = prData.awaitingReview.length + prData.reviewRequests.length + prData.readyToMerge.length + prData.draftPRs.length;
-          if (totalPRs > 10) {
+          const totalMyPRs = prData.awaitingReview.length + prData.readyToMerge.length + prData.draftPRs.length;
+          if (totalMyPRs > 10) {
             blocks.push({
               type: 'context',
               elements: [{
                 type: 'mrkdwn',
-                text: `_Showing 10 of ${totalPRs} PRs_`,
+                text: `_Showing 10 of ${totalMyPRs} PRs_`,
               }],
             });
           }
@@ -444,7 +501,6 @@ export function buildStandupModal(
                 },
               });
             }
-            // Store unmapped logins in metadata for submission handler
             if (unmappedLogins.length > 0) {
               unmappedReviewerLogins = unmappedLogins;
             }
