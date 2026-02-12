@@ -20,12 +20,15 @@ import {
   getSubmissionForDate,
   getGitHubUsername,
   getLinearUserId,
+  setGitHubUsername,
+  setLinearUserId,
 } from '../db';
+import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
 import { fetchUserLinearData, LinearIssue } from '../linear';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
-import { formatDate, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
+import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
 import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
 import { StandupMode } from '../modal';
 
@@ -37,6 +40,7 @@ export interface InteractionContext {
   db: DbClient;
   slackToken: string;
   env?: Record<string, string | undefined>; // For accessing GitHub tokens etc.
+  waitUntil?: (promise: Promise<unknown>) => void; // Cloudflare Workers background processing
 }
 
 /** Validation error response for modal submissions */
@@ -226,10 +230,11 @@ export async function handleStandupSubmission(
   console.log('Modal submitted for', dailyName, 'by', userId, 'mode:', mode);
   console.log('Values block keys:', Object.keys(values));
 
-  // Get user's timezone and calculate today's date
-  const userInfo = await getUserTimezone(ctx.slackToken, userId);
-  const tzOffset = userInfo?.tz_offset || 0;
-  const userDate = getUserDate(tzOffset);
+  // Get the daily's schedule timezone (avoids Slack API call)
+  const daily = getDaily(dailyName);
+  const scheduleConfig = daily?.schedule ? getSchedule(daily.schedule) : null;
+  const timezone = scheduleConfig?.timezone || 'UTC';
+  const userDate = getDateInTimezone(timezone);
   const todayStr = formatDate(userDate);
 
   // Use targetDate from metadata if in tomorrow mode, otherwise use today
@@ -282,8 +287,7 @@ export async function handleStandupSubmission(
     };
   }
 
-  // Parse custom question answers
-  const daily = getDaily(dailyName);
+  // Parse custom question answers (daily already fetched above for timezone)
   const customAnswers: Record<string, string> = {};
   if (daily?.questions) {
     console.log('Parsing custom questions, count:', daily.questions.length);
@@ -309,142 +313,152 @@ export async function handleStandupSubmission(
 
   // Determine if we should queue the post for later
   // Queue if: tomorrow mode OR today mode but before scheduled posting time
-  const scheduleConfig = daily?.schedule ? getSchedule(daily.schedule) : null;
   const scheduledTime = scheduleConfig?.default_time || '10:00';
   const isBeforeScheduledTime = !hasScheduledTimePassed(scheduledTime, userDate);
   const shouldQueue = isTomorrowMode || isBeforeScheduledTime;
 
-  // Save submission
-  const submission = await saveSubmission(ctx.db, {
-    slackUserId: userId,
-    dailyName,
-    date: submissionDate,
-    yesterdayCompleted,
-    yesterdayIncomplete,
-    yesterdayInProgress,
-    unplanned,
-    todayPlans,
-    blockers,
-    customAnswers,
-    posted: !shouldQueue,
-  });
+  // Run the heavy work (DB saves, API calls) in the background so Slack
+  // gets an immediate 200 response and doesn't show "trouble connecting".
+  const processSubmission = async () => {
+    // Save submission
+    const submission = await saveSubmission(ctx.db, {
+      slackUserId: userId,
+      dailyName,
+      date: submissionDate,
+      yesterdayCompleted,
+      yesterdayIncomplete,
+      yesterdayInProgress,
+      unplanned,
+      todayPlans,
+      blockers,
+      customAnswers,
+      posted: !shouldQueue,
+    });
 
-  console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, shouldQueue, todayPlans: todayPlans.length });
+    console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, shouldQueue, todayPlans: todayPlans.length });
 
-  // Queued mode: send confirmation DM, skip channel post and work item tracking
-  if (shouldQueue) {
-    // Format the target date for display
-    const targetDate = new Date(submissionDate + 'T00:00:00');
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const dateDisplay = `${days[targetDate.getDay()]}, ${months[targetDate.getMonth()]} ${targetDate.getDate()}`;
+    // Queued mode: send confirmation DM, skip channel post and work item tracking
+    if (shouldQueue) {
+      // Format the target date for display
+      const targetDate = new Date(submissionDate + 'T00:00:00');
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const dateDisplay = `${days[targetDate.getDay()]}, ${months[targetDate.getMonth()]} ${targetDate.getDate()}`;
 
-    // Mark prompt as submitted for the target date (prevents re-prompting)
-    await markPromptSubmitted(ctx.db, userId, dailyName, submissionDate);
+      // Mark prompt as submitted for the target date (prevents re-prompting)
+      await markPromptSubmitted(ctx.db, userId, dailyName, submissionDate);
 
-    // Send confirmation DM
-    const confirmationMsg = `✅ *Standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
-    await sendDM(ctx.slackToken, userId, confirmationMsg);
-
-    return true;
-  }
-
-  // Today mode: normal flow - mark prompt submitted, track work items, post to channel
-  await markPromptSubmitted(ctx.db, userId, dailyName, todayStr);
-
-  // Track work items for analytics
-  try {
-    // Mark yesterday's items based on status
-    if (yesterdayCompleted.length > 0) {
-      await markItemsDone(ctx.db, userId, dailyName, yesterdayCompleted, todayStr);
-    }
-    if (yesterdayDropped.length > 0) {
-      await markItemsDropped(ctx.db, userId, dailyName, yesterdayDropped);
-    }
-    if (yesterdayIncomplete.length > 0) {
-      await incrementCarryCount(ctx.db, userId, dailyName, yesterdayIncomplete);
-    }
-    if (yesterdayInProgress.length > 0) {
-      await markItemsInProgress(ctx.db, userId, dailyName, yesterdayInProgress);
+      // Send confirmation DM
+      const confirmationMsg = `✅ *Standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
+      await sendDM(ctx.slackToken, userId, confirmationMsg);
+      return;
     }
 
-    // Create new work items for today's plans
-    if (todayPlans.length > 0) {
-      await createWorkItems(
-        ctx.db,
-        todayPlans.map(text => ({
-          slackUserId: userId,
-          dailyName,
-          text,
-          date: todayStr,
-          submissionId: submission.id,
-        }))
-      );
-    }
-  } catch (error) {
-    // Don't fail the submission if work item tracking fails
-    console.error('Failed to track work items:', error);
-  }
+    // Today mode: normal flow - mark prompt submitted, track work items, post to channel
+    await markPromptSubmitted(ctx.db, userId, dailyName, todayStr);
 
-  // Get carry counts for in-progress items (for attention warnings)
-  let inProgressCarryCounts: Record<string, number> | undefined;
-  if (yesterdayInProgress.length > 0) {
+    // Track work items for analytics
     try {
-      inProgressCarryCounts = await getInProgressCarryCounts(ctx.db, userId, dailyName, yesterdayInProgress);
+      // Mark yesterday's items based on status
+      if (yesterdayCompleted.length > 0) {
+        await markItemsDone(ctx.db, userId, dailyName, yesterdayCompleted, todayStr);
+      }
+      if (yesterdayDropped.length > 0) {
+        await markItemsDropped(ctx.db, userId, dailyName, yesterdayDropped);
+      }
+      if (yesterdayIncomplete.length > 0) {
+        await incrementCarryCount(ctx.db, userId, dailyName, yesterdayIncomplete);
+      }
+      if (yesterdayInProgress.length > 0) {
+        await markItemsInProgress(ctx.db, userId, dailyName, yesterdayInProgress);
+      }
+
+      // Create new work items for today's plans
+      if (todayPlans.length > 0) {
+        await createWorkItems(
+          ctx.db,
+          todayPlans.map(text => ({
+            slackUserId: userId,
+            dailyName,
+            text,
+            date: todayStr,
+            submissionId: submission.id,
+          }))
+        );
+      }
     } catch (error) {
-      console.error('Failed to get in-progress carry counts:', error);
+      // Don't fail the submission if work item tracking fails
+      console.error('Failed to track work items:', error);
     }
-  }
 
-  // Post to channel
-  if (daily?.channel) {
-    // Fetch GitHub PR data if integration is enabled
-    let prData: UserPRData | undefined;
-    const githubConfig = getGitHubConfig(daily);
-    if (githubConfig && ctx.env) {
-      const githubToken = ctx.env[githubConfig.tokenEnvVar];
-      if (githubToken) {
-        // Get GitHub username: config mapping takes precedence over DB
-        let githubUsername = getGitHubUsernameFromConfig(daily, userId);
-        if (!githubUsername) {
-          githubUsername = await getGitHubUsername(ctx.db, userId);
-        }
+    // Get carry counts for in-progress items (for attention warnings)
+    let inProgressCarryCounts: Record<string, number> | undefined;
+    if (yesterdayInProgress.length > 0) {
+      try {
+        inProgressCarryCounts = await getInProgressCarryCounts(ctx.db, userId, dailyName, yesterdayInProgress);
+      } catch (error) {
+        console.error('Failed to get in-progress carry counts:', error);
+      }
+    }
 
-        if (githubUsername) {
-          try {
-            prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
-          } catch (error) {
-            console.error('Failed to fetch PR data:', error);
+    // Post to channel
+    if (daily?.channel) {
+      // Fetch GitHub PR data if integration is enabled
+      let prData: UserPRData | undefined;
+      const githubConfig = getGitHubConfig(daily);
+      if (githubConfig && ctx.env) {
+        const githubToken = ctx.env[githubConfig.tokenEnvVar];
+        if (githubToken) {
+          // Get GitHub username: config mapping takes precedence over DB
+          let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+          if (!githubUsername) {
+            githubUsername = await getGitHubUsername(ctx.db, userId);
+          }
+
+          if (githubUsername) {
+            try {
+              prData = await fetchUserPRData(githubToken, githubUsername, githubConfig.org);
+            } catch (error) {
+              console.error('Failed to fetch PR data:', error);
+            }
           }
         }
       }
-    }
 
-    const messageTs = await postStandupToChannel(
-      ctx.slackToken,
-      daily.channel,
-      userId,
-      dailyName,
-      {
-        yesterdayCompleted,
-        yesterdayIncomplete,
-        yesterdayInProgress,
-        yesterdayDropped,
-        unplanned,
-        todayPlans,
-        blockers,
-        customAnswers,
-        questions: daily.questions,
-        fieldOrder: daily.field_order,
-        prData,
-        inProgressCarryCounts,
+      const messageTs = await postStandupToChannel(
+        ctx.slackToken,
+        daily.channel,
+        userId,
+        dailyName,
+        {
+          yesterdayCompleted,
+          yesterdayIncomplete,
+          yesterdayInProgress,
+          yesterdayDropped,
+          unplanned,
+          todayPlans,
+          blockers,
+          customAnswers,
+          questions: daily.questions,
+          fieldOrder: daily.field_order,
+          prData,
+          inProgressCarryCounts,
+        }
+      );
+
+      // Store message timestamp for future reference
+      if (messageTs && submission.id) {
+        await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
       }
-    );
-
-    // Store message timestamp for future reference
-    if (messageTs && submission.id) {
-      await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
     }
+  };
+
+  // Use waitUntil for background processing if available (Cloudflare Workers),
+  // otherwise await inline (tests, local dev)
+  if (ctx.waitUntil) {
+    ctx.waitUntil(processSubmission().catch(err => console.error('Background submission processing failed:', err)));
+  } else {
+    await processSubmission();
   }
 
   return true;
@@ -591,6 +605,146 @@ export async function handleHomeStartDaily(
 }
 
 // ============================================================================
+// Button Handlers: Link/Unlink Accounts
+// ============================================================================
+
+/**
+ * Refresh the App Home view after link/unlink
+ */
+async function refreshHome(userId: string, ctx: InteractionContext): Promise<void> {
+  const homeCtx: HomeContext = {
+    db: ctx.db,
+    slackToken: ctx.slackToken,
+    env: ctx.env,
+  };
+  const event: AppHomeOpenedEvent = { type: 'app_home_opened', user: userId, tab: 'home' };
+  await handleAppHomeOpened(event, homeCtx);
+}
+
+/**
+ * Handle "Link GitHub" button — opens a modal with a text input
+ */
+export async function handleLinkGitHub(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const modal = {
+    type: 'modal',
+    callback_id: 'github_link_submission',
+    title: { type: 'plain_text', text: 'Link GitHub' },
+    submit: { type: 'plain_text', text: 'Link' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'github_username',
+        label: { type: 'plain_text', text: 'GitHub Username' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'github_username_input',
+          placeholder: { type: 'plain_text', text: 'e.g. octocat' },
+        },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, modal);
+}
+
+/**
+ * Handle "Link Linear" button — opens a modal with a text input
+ */
+export async function handleLinkLinear(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const modal = {
+    type: 'modal',
+    callback_id: 'linear_link_submission',
+    title: { type: 'plain_text', text: 'Link Linear' },
+    submit: { type: 'plain_text', text: 'Link' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'linear_user_id',
+        label: { type: 'plain_text', text: 'Linear User ID' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'linear_user_id_input',
+          placeholder: { type: 'plain_text', text: 'Your Linear user ID' },
+        },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, modal);
+}
+
+/**
+ * Handle "Unlink GitHub" button
+ */
+export async function handleUnlinkGitHub(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+  await setGitHubUsername(ctx.db, userId, null);
+  await refreshHome(userId, ctx);
+  return true;
+}
+
+/**
+ * Handle "Unlink Linear" button
+ */
+export async function handleUnlinkLinear(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+  await setLinearUserId(ctx.db, userId, null);
+  await refreshHome(userId, ctx);
+  return true;
+}
+
+/**
+ * Handle GitHub link modal submission
+ */
+export async function handleGitHubLinkSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+  const username = payload.view!.state.values.github_username?.github_username_input?.value?.trim();
+  if (!username) {
+    return {
+      response_action: 'errors',
+      errors: { github_username: 'Please enter your GitHub username' },
+    };
+  }
+  await setGitHubUsername(ctx.db, userId, username);
+  // Refresh home after modal closes (use setTimeout-like pattern via non-blocking call)
+  refreshHome(userId, ctx).catch(err => console.error('Failed to refresh home after GitHub link:', err));
+  return true;
+}
+
+/**
+ * Handle Linear link modal submission
+ */
+export async function handleLinearLinkSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+  const linearUserId = payload.view!.state.values.linear_user_id?.linear_user_id_input?.value?.trim();
+  if (!linearUserId) {
+    return {
+      response_action: 'errors',
+      errors: { linear_user_id: 'Please enter your Linear user ID' },
+    };
+  }
+  await setLinearUserId(ctx.db, userId, linearUserId);
+  refreshHome(userId, ctx).catch(err => console.error('Failed to refresh home after Linear link:', err));
+  return true;
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -624,9 +778,26 @@ export async function handleInteraction(
     return handleHomeStartDaily(payload, ctx);
   }
 
+  // Handle link/unlink account buttons from App Home
+  if (payload.type === 'block_actions') {
+    const actionId = payload.actions?.[0]?.action_id;
+    if (actionId === 'home_link_github') return handleLinkGitHub(payload, ctx);
+    if (actionId === 'home_link_linear') return handleLinkLinear(payload, ctx);
+    if (actionId === 'home_unlink_github') return handleUnlinkGitHub(payload, ctx);
+    if (actionId === 'home_unlink_linear') return handleUnlinkLinear(payload, ctx);
+  }
+
   // Handle modal submission
   if (payload.type === 'view_submission' && payload.view?.callback_id === 'standup_submission') {
     return handleStandupSubmission(payload, ctx);
+  }
+
+  // Handle link modal submissions
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'github_link_submission') {
+    return handleGitHubLinkSubmission(payload, ctx);
+  }
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'linear_link_submission') {
+    return handleLinearLinkSubmission(payload, ctx);
   }
 
   // Unknown interaction type

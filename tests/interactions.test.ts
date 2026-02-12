@@ -19,6 +19,10 @@ vi.mock('../lib/db', () => ({
   createWorkItems: vi.fn(),
   getGitHubUsername: vi.fn(() => Promise.resolve(null)),
   getLinearUserId: vi.fn(() => Promise.resolve(null)),
+  setGitHubUsername: vi.fn(),
+  setLinearUserId: vi.fn(),
+  getSubmissionForDate: vi.fn(() => Promise.resolve(null)),
+  getUserDailies: vi.fn(() => Promise.resolve([])),
 }));
 
 // Mock the config module
@@ -48,6 +52,7 @@ vi.mock('../lib/slack', () => ({
 // Mock the prompt module
 vi.mock('../lib/prompt', () => ({
   formatDate: vi.fn(() => '2025-12-22'),
+  getDateInTimezone: vi.fn(() => new Date('2025-12-22T12:00:00')), // Noon - after default 10:00 schedule
   getUserDate: vi.fn(() => new Date('2025-12-22T12:00:00')), // Noon - after default 10:00 schedule
   getUserTimezone: vi.fn(() => Promise.resolve({ tz: 'UTC', tz_offset: 0 })),
   hasScheduledTimePassed: vi.fn(() => true), // Default to after scheduled time (posts immediately)
@@ -56,6 +61,11 @@ vi.mock('../lib/prompt', () => ({
 // Mock the format module
 vi.mock('../lib/format', () => ({
   postStandupToChannel: vi.fn(),
+}));
+
+// Mock the home module (imported by interactions for refreshHome)
+vi.mock('../lib/handlers/home', () => ({
+  handleAppHomeOpened: vi.fn(() => Promise.resolve(true)),
 }));
 
 import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';

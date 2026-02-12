@@ -3,7 +3,7 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername, getLinearUserId } from '../db';
+import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId } from '../db';
 import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -39,10 +39,15 @@ interface DailyStatus {
   linearData?: UserLinearData; // Linear data if integration enabled
 }
 
+export interface LinkedAccounts {
+  github: string | null;  // username or null
+  linear: string | null;  // user ID or null
+}
+
 /**
  * Build the App Home view for a user
  */
-function buildHomeView(dailyStatuses: DailyStatus[]): unknown {
+export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: LinkedAccounts): unknown {
   const blocks: unknown[] = [];
 
   // Header
@@ -132,6 +137,78 @@ function buildHomeView(dailyStatuses: DailyStatus[]): unknown {
   }
 
   blocks.push({ type: 'divider' });
+
+  // Linked Accounts section
+  if (linkedAccounts) {
+    blocks.push({
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: '🔗 Linked Accounts',
+        emoji: true,
+      },
+    });
+
+    // GitHub row
+    if (linkedAccounts.github) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*GitHub*\n:white_check_mark: @${linkedAccounts.github}`,
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Unlink', emoji: true },
+          action_id: 'home_unlink_github',
+        },
+      });
+    } else {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*GitHub*\nNot linked',
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Link', emoji: true },
+          action_id: 'home_link_github',
+        },
+      });
+    }
+
+    // Linear row
+    if (linkedAccounts.linear) {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Linear*\n:white_check_mark: ${linkedAccounts.linear}`,
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Unlink', emoji: true },
+          action_id: 'home_unlink_linear',
+        },
+      });
+    } else {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Linear*\nNot linked',
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Link', emoji: true },
+          action_id: 'home_link_linear',
+        },
+      });
+    }
+
+    blocks.push({ type: 'divider' });
+  }
 
   // Footer with help text
   blocks.push({
@@ -259,8 +336,18 @@ export async function handleAppHomeOpened(
       });
     }
 
+    // Fetch linked accounts
+    const [githubUsername, linearUserId] = await Promise.all([
+      getGitHubUsername(ctx.db, userId),
+      getLinearUserId(ctx.db, userId),
+    ]);
+    const linkedAccounts: LinkedAccounts = {
+      github: githubUsername,
+      linear: linearUserId,
+    };
+
     // Build and publish the home view
-    const view = buildHomeView(dailyStatuses);
+    const view = buildHomeView(dailyStatuses, linkedAccounts);
     const published = await publishHomeView(ctx.slackToken, userId, view);
 
     if (!published) {

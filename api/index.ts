@@ -35,7 +35,7 @@ export interface Env {
 // ============================================================================
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -52,7 +52,7 @@ export default {
 
       // Slack interactions (modals, buttons)
       if (path === '/api/slack/interact') {
-        return handleSlackInteractions(request, env);
+        return handleSlackInteractions(request, env, ctx);
       }
 
       // Slack events (app_home_opened)
@@ -209,7 +209,7 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
 }
 
 /** Slack interactions endpoint */
-async function handleSlackInteractions(request: Request, env: Env): Promise<Response> {
+async function handleSlackInteractions(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
@@ -245,6 +245,7 @@ async function handleSlackInteractions(request: Request, env: Env): Promise<Resp
     db,
     slackToken: env.SLACK_BOT_TOKEN,
     env,
+    waitUntil: ctx.waitUntil.bind(ctx),
   });
 
   // Return validation errors for modal submissions
