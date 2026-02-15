@@ -18,6 +18,7 @@ vi.mock('../lib/slack', () => ({
 
 import { buildStandupModal, YesterdayData } from '../lib/modal';
 import type { LinearIssue } from '../lib/linear';
+import type { UserPRData, GitHubPR } from '../lib/github';
 
 describe('modal builder', () => {
   describe('buildStandupModal', () => {
@@ -480,6 +481,115 @@ describe('modal builder', () => {
 
       expect(metadata.linearIssueMap).toBeUndefined();
       expect(metadata.prMap).toBeUndefined();
+    });
+
+    it('filters out Linear issues that already appear in yesterday plans', () => {
+      const yesterday: YesterdayData = {
+        plans: ['[ENG-123] Fix authentication bug', 'Write unit tests'],
+        completed: [],
+        incomplete: [],
+      };
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: 'Fix authentication bug',
+          state: { name: 'In Progress', type: 'started' },
+          priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+        {
+          id: 'issue-2',
+          identifier: 'ENG-456',
+          title: 'New feature',
+          state: { name: 'Todo', type: 'unstarted' },
+          priority: 2,
+          url: 'https://linear.app/issue/ENG-456',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined, linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock).toBeDefined();
+      // Only ENG-456 should remain (ENG-123 is in yesterday's plans)
+      expect(linearBlock?.element?.options).toHaveLength(1);
+      expect((linearBlock?.element?.options as any[])[0].value).toBe('issue-2');
+    });
+
+    it('filters out GitHub PRs that already appear in yesterday plans', () => {
+      const yesterday: YesterdayData = {
+        plans: ['[my-repo#42] Fix typo', 'Regular task'],
+        completed: [],
+        incomplete: [],
+      };
+      const prData: UserPRData = {
+        reviewRequests: [{
+          number: 99, title: 'New PR', url: 'https://github.com/org/other-repo/pull/99',
+          author: 'alice', reviewsNeeded: 1, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false,
+        }],
+        awaitingReview: [{
+          number: 42, title: 'Fix typo', url: 'https://github.com/org/my-repo/pull/42',
+          author: 'me', reviewsNeeded: 1, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false,
+        }],
+        readyToMerge: [],
+        draftPRs: [],
+      };
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined, undefined, prData
+      );
+
+      // my-repo#42 should be filtered out of my_prs (awaitingReview)
+      const myPrsBlock = modal.blocks.find(b => b.block_id === 'my_prs');
+      expect(myPrsBlock).toBeUndefined(); // no PRs left after filtering
+
+      // other-repo#99 should still show in review_requests
+      const reviewBlock = modal.blocks.find(b => b.block_id === 'review_requests');
+      expect(reviewBlock).toBeDefined();
+      expect(reviewBlock?.element?.options).toHaveLength(1);
+    });
+
+    it('hides Linear block entirely when all issues are filtered out', () => {
+      const yesterday: YesterdayData = {
+        plans: ['[ENG-100] Only issue'],
+        completed: [],
+        incomplete: [],
+      };
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1', identifier: 'ENG-100', title: 'Only issue',
+          state: { name: 'In Progress', type: 'started' }, priority: 1,
+          url: 'https://linear.app/issue/ENG-100',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined, linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock).toBeUndefined();
+    });
+
+    it('does not filter integration items when there are no yesterday plans', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1', identifier: 'ENG-123', title: 'Fix bug',
+          state: { name: 'In Progress', type: 'started' }, priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined, linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock).toBeDefined();
+      expect(linearBlock?.element?.options).toHaveLength(1);
     });
 
     it('does not include Linear block when no issues provided', () => {
