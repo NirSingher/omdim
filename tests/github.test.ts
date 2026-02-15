@@ -16,6 +16,9 @@ import {
   extractPRSlug,
   formatPRRef,
   GitHubPR,
+  checkPRsMerged,
+  parsePRExternalId,
+  PRRef,
 } from '../lib/github';
 
 describe('github client', () => {
@@ -477,6 +480,214 @@ describe('github client', () => {
       };
 
       expect(formatPRRef(pr)).toBe('#456');
+    });
+  });
+
+  describe('parsePRExternalId', () => {
+    it('parses valid org/repo#number format', () => {
+      const result = parsePRExternalId('myorg/my-repo#123');
+
+      expect(result).toEqual({
+        owner: 'myorg',
+        repo: 'my-repo',
+        number: 123,
+      });
+    });
+
+    it('parses format with numeric repo name', () => {
+      const result = parsePRExternalId('github/2024-project#42');
+
+      expect(result).toEqual({
+        owner: 'github',
+        repo: '2024-project',
+        number: 42,
+      });
+    });
+
+    it('returns null for invalid format missing #', () => {
+      const result = parsePRExternalId('myorg/repo123');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for invalid format missing /', () => {
+      const result = parsePRExternalId('myorg-repo#123');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for invalid format with non-numeric PR number', () => {
+      const result = parsePRExternalId('myorg/repo#abc');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for empty string', () => {
+      const result = parsePRExternalId('');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null for URL instead of external ID', () => {
+      const result = parsePRExternalId('https://github.com/org/repo/pull/123');
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('checkPRsMerged', () => {
+    it('returns external IDs of merged PRs', async () => {
+      const prRefs: PRRef[] = [
+        { owner: 'myorg', repo: 'repo1', number: 123 },
+        { owner: 'myorg', repo: 'repo2', number: 456 },
+      ];
+
+      // Mock first PR as merged
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: true, state: 'closed' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: false, state: 'open' }),
+        });
+
+      const result = await checkPRsMerged('token', prRefs);
+
+      expect(result.size).toBe(1);
+      expect(result.has('myorg/repo1#123')).toBe(true);
+      expect(result.has('myorg/repo2#456')).toBe(false);
+    });
+
+    it('returns external IDs of closed (non-merged) PRs', async () => {
+      const prRefs: PRRef[] = [
+        { owner: 'org', repo: 'repo', number: 100 },
+      ];
+
+      // Mock PR as closed but not merged
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ merged: false, state: 'closed' }),
+      });
+
+      const result = await checkPRsMerged('token', prRefs);
+
+      expect(result.size).toBe(1);
+      expect(result.has('org/repo#100')).toBe(true);
+    });
+
+    it('handles mix of merged and open PRs', async () => {
+      const prRefs: PRRef[] = [
+        { owner: 'org', repo: 'repo', number: 1 },
+        { owner: 'org', repo: 'repo', number: 2 },
+        { owner: 'org', repo: 'repo', number: 3 },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: true, state: 'closed' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: false, state: 'open' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: false, state: 'closed' }),
+        });
+
+      const result = await checkPRsMerged('token', prRefs);
+
+      expect(result.size).toBe(2);
+      expect(result.has('org/repo#1')).toBe(true); // merged
+      expect(result.has('org/repo#2')).toBe(false); // open
+      expect(result.has('org/repo#3')).toBe(true); // closed
+    });
+
+    it('returns empty set for empty input', async () => {
+      const result = await checkPRsMerged('token', []);
+
+      expect(result.size).toBe(0);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('handles API errors gracefully', async () => {
+      const prRefs: PRRef[] = [
+        { owner: 'org', repo: 'repo1', number: 1 },
+        { owner: 'org', repo: 'repo2', number: 2 },
+      ];
+
+      // First call succeeds, second fails
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: true, state: 'closed' }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          text: async () => 'Not Found',
+        });
+
+      const result = await checkPRsMerged('token', prRefs);
+
+      // Should include the successful one, ignore the failed one
+      expect(result.size).toBe(1);
+      expect(result.has('org/repo1#1')).toBe(true);
+      expect(result.has('org/repo2#2')).toBe(false);
+    });
+
+    it('sends correct API requests with headers', async () => {
+      const prRefs: PRRef[] = [
+        { owner: 'myorg', repo: 'my-repo', number: 42 },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ merged: true, state: 'closed' }),
+      });
+
+      await checkPRsMerged('my-token', prRefs);
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.github.com/repos/myorg/my-repo/pulls/42',
+        expect.objectContaining({
+          headers: {
+            'Authorization': 'Bearer my-token',
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'omdim-bot',
+          },
+        })
+      );
+    });
+
+    it('checks multiple PRs in parallel', async () => {
+      const prRefs: PRRef[] = [
+        { owner: 'org', repo: 'repo', number: 1 },
+        { owner: 'org', repo: 'repo', number: 2 },
+        { owner: 'org', repo: 'repo', number: 3 },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: true, state: 'closed' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: true, state: 'closed' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ merged: true, state: 'closed' }),
+        });
+
+      await checkPRsMerged('token', prRefs);
+
+      // All 3 requests should have been made
+      expect(global.fetch).toHaveBeenCalledTimes(3);
     });
   });
 });

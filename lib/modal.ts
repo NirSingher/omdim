@@ -101,6 +101,13 @@ export type StandupMode = 'today' | 'tomorrow';
  * @param linearIssues - Optional Linear issues to show as checkboxes
  * @param reviewerMap - GitHub login (lowercase) → Slack user ID mapping
  */
+/** Items detected as completed externally (Linear done, GitHub merged) */
+export interface ExternalCompletion {
+  text: string;
+  externalType: string;
+  externalId: string;
+}
+
 export function buildStandupModal(
   dailyName: string,
   yesterday: YesterdayData | null,
@@ -111,7 +118,8 @@ export function buildStandupModal(
   prefill?: SubmissionPrefill,
   linearIssues?: LinearIssue[],
   prData?: UserPRData,
-  reviewerMap?: Map<string, string>
+  reviewerMap?: Map<string, string>,
+  externallyCompleted?: ExternalCompletion[]
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -185,6 +193,14 @@ export function buildStandupModal(
     blocks.push({ type: 'divider' });
   }
 
+  // Build set of yesterday items that were externally completed
+  const externallyDoneTexts = new Set<string>();
+  if (externallyCompleted) {
+    for (const item of externallyCompleted) {
+      externallyDoneTexts.add(item.text);
+    }
+  }
+
   // Yesterday section: plans + unplanned (grouped as "what happened")
   if (!isFirstDay && yesterdayPlans.length > 0) {
     blocks.push({
@@ -197,6 +213,10 @@ export function buildStandupModal(
 
     // Add a dropdown for each yesterday's plan item
     yesterdayPlans.forEach((plan, index) => {
+      // Auto-default to "Done" if externally completed
+      const isDoneExternally = externallyDoneTexts.has(plan);
+      const initialOption = isDoneExternally ? YESTERDAY_ITEM_OPTIONS[2] : YESTERDAY_ITEM_OPTIONS[0]; // [2] = "Done", [0] = "Carry over"
+
       blocks.push({
         type: 'section',
         block_id: `yesterday_item_${index}`,
@@ -208,7 +228,7 @@ export function buildStandupModal(
           type: 'static_select',
           action_id: `item_status_${index}`,
           options: YESTERDAY_ITEM_OPTIONS,
-          initial_option: YESTERDAY_ITEM_OPTIONS[0], // Default to "Carry over"
+          initial_option: initialOption,
         },
       });
     });
@@ -325,7 +345,7 @@ export function buildStandupModal(
               text: issue.state.name,
               emoji: true,
             },
-            value: issue.id,
+            value: issue.teamId ? `${issue.teamId}:${issue.id}` : issue.id,
           }));
           blocks.push({
             type: 'input',

@@ -329,3 +329,70 @@ export function formatPRRef(pr: GitHubPR): string {
   return slug || `#${pr.number}`;
 }
 
+// ============================================================================
+// Sync: Check PR Merge Status
+// ============================================================================
+
+export interface PRRef {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+/**
+ * Parse an external ID like "org/repo#123" back to {owner, repo, number}
+ */
+export function parsePRExternalId(externalId: string): PRRef | null {
+  const match = externalId.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
+}
+
+/**
+ * Check which PRs have been merged or closed.
+ * Returns a Set of external ID strings (e.g., "org/repo#123") for merged/closed PRs.
+ */
+export async function checkPRsMerged(
+  token: string,
+  prRefs: PRRef[]
+): Promise<Set<string>> {
+  if (prRefs.length === 0) return new Set();
+
+  const mergedIds = new Set<string>();
+
+  // Check each PR individually (GitHub REST API, no batch endpoint)
+  const results = await Promise.all(
+    prRefs.map(async (ref) => {
+      try {
+        const response = await fetch(
+          `https://api.github.com/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'omdim-bot',
+            },
+          }
+        );
+
+        if (!response.ok) return null;
+
+        const data = await response.json() as { merged: boolean; state: string };
+        if (data.merged || data.state === 'closed') {
+          return `${ref.owner}/${ref.repo}#${ref.number}`;
+        }
+        return null;
+      } catch (error) {
+        console.error(`Failed to check PR ${ref.owner}/${ref.repo}#${ref.number}:`, error);
+        return null;
+      }
+    })
+  );
+
+  for (const id of results) {
+    if (id) mergedIds.add(id);
+  }
+
+  return mergedIds;
+}
+

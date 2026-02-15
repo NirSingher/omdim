@@ -11,6 +11,9 @@ import {
   calculateCycleProgress,
   fetchUserLinearData,
   fetchTeamCycleData,
+  checkIssuesCompleted,
+  fetchTeamDoneStateId,
+  transitionIssueToDone,
 } from '../lib/linear';
 
 describe('linear client', () => {
@@ -508,6 +511,257 @@ describe('linear client', () => {
       expect(result.teamData).toHaveLength(1);
       expect(result.teamData[0].data.issues).toEqual([]);
       expect(result.cycleProgress).toBeNull();
+    });
+  });
+
+  describe('checkIssuesCompleted', () => {
+    it('returns completed and canceled issue IDs', async () => {
+      const mockResponse = {
+        data: {
+          nodes: [
+            { id: 'issue-1', state: { type: 'completed' } },
+            { id: 'issue-2', state: { type: 'started' } },
+            { id: 'issue-3', state: { type: 'canceled' } },
+            { id: 'issue-4', state: { type: 'unstarted' } },
+          ],
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const { checkIssuesCompleted } = await import('../lib/linear');
+      const result = await checkIssuesCompleted('token', ['issue-1', 'issue-2', 'issue-3', 'issue-4']);
+
+      expect(result.size).toBe(2);
+      expect(result.has('issue-1')).toBe(true); // completed
+      expect(result.has('issue-3')).toBe(true); // canceled
+      expect(result.has('issue-2')).toBe(false); // started
+      expect(result.has('issue-4')).toBe(false); // unstarted
+    });
+
+    it('returns empty set for active issues only', async () => {
+      const mockResponse = {
+        data: {
+          nodes: [
+            { id: 'issue-1', state: { type: 'started' } },
+            { id: 'issue-2', state: { type: 'unstarted' } },
+          ],
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const { checkIssuesCompleted } = await import('../lib/linear');
+      const result = await checkIssuesCompleted('token', ['issue-1', 'issue-2']);
+
+      expect(result.size).toBe(0);
+    });
+
+    it('handles empty input array', async () => {
+      const { checkIssuesCompleted } = await import('../lib/linear');
+      const result = await checkIssuesCompleted('token', []);
+
+      expect(result.size).toBe(0);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('returns empty set on API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      });
+
+      const { checkIssuesCompleted } = await import('../lib/linear');
+      const result = await checkIssuesCompleted('token', ['issue-1']);
+
+      expect(result.size).toBe(0);
+    });
+  });
+
+  describe('fetchTeamDoneStateId', () => {
+    it('returns the first completed type state ID', async () => {
+      const mockResponse = {
+        data: {
+          team: {
+            states: {
+              nodes: [
+                { id: 'state-1', name: 'Todo', type: 'unstarted' },
+                { id: 'state-2', name: 'In Progress', type: 'started' },
+                { id: 'state-3', name: 'Done', type: 'completed' },
+                { id: 'state-4', name: 'Archive', type: 'completed' },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const { fetchTeamDoneStateId } = await import('../lib/linear');
+      const result = await fetchTeamDoneStateId('token', 'team-1');
+
+      expect(result).toBe('state-3'); // First completed type
+    });
+
+    it('returns null when no completed state exists', async () => {
+      const mockResponse = {
+        data: {
+          team: {
+            states: {
+              nodes: [
+                { id: 'state-1', name: 'Todo', type: 'unstarted' },
+                { id: 'state-2', name: 'In Progress', type: 'started' },
+                { id: 'state-3', name: 'Canceled', type: 'canceled' },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const { fetchTeamDoneStateId } = await import('../lib/linear');
+      const result = await fetchTeamDoneStateId('token', 'team-1');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null on API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => 'Unauthorized',
+      });
+
+      const { fetchTeamDoneStateId } = await import('../lib/linear');
+      const result = await fetchTeamDoneStateId('token', 'team-1');
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('transitionIssueToDone', () => {
+    it('successfully transitions issue to done state', async () => {
+      // Mock fetchTeamDoneStateId response
+      const mockStatesResponse = {
+        data: {
+          team: {
+            states: {
+              nodes: [
+                { id: 'state-done', name: 'Done', type: 'completed' },
+              ],
+            },
+          },
+        },
+      };
+
+      // Mock issueUpdate mutation response
+      const mockUpdateResponse = {
+        data: {
+          issueUpdate: {
+            success: true,
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStatesResponse,
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockUpdateResponse,
+        });
+
+      const { transitionIssueToDone } = await import('../lib/linear');
+      const result = await transitionIssueToDone('token', 'issue-1', 'team-1');
+
+      expect(result).toBe(true);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns false when no done state found', async () => {
+      // Mock fetchTeamDoneStateId response with no completed state
+      const mockStatesResponse = {
+        data: {
+          team: {
+            states: {
+              nodes: [
+                { id: 'state-1', name: 'Todo', type: 'unstarted' },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockStatesResponse,
+      });
+
+      const { transitionIssueToDone } = await import('../lib/linear');
+      const result = await transitionIssueToDone('token', 'issue-1', 'team-1');
+
+      expect(result).toBe(false);
+      expect(global.fetch).toHaveBeenCalledTimes(1); // Only fetched states, didn't try to update
+    });
+
+    it('returns false on API error during state fetch', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      });
+
+      const { transitionIssueToDone } = await import('../lib/linear');
+      const result = await transitionIssueToDone('token', 'issue-1', 'team-1');
+
+      expect(result).toBe(false);
+    });
+
+    it('returns false on API error during issue update', async () => {
+      // Mock successful state fetch
+      const mockStatesResponse = {
+        data: {
+          team: {
+            states: {
+              nodes: [
+                { id: 'state-done', name: 'Done', type: 'completed' },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStatesResponse,
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 403,
+          text: async () => 'Forbidden',
+        });
+
+      const { transitionIssueToDone } = await import('../lib/linear');
+      const result = await transitionIssueToDone('token', 'issue-1', 'team-1');
+
+      expect(result).toBe(false);
     });
   });
 });

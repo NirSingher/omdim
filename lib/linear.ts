@@ -18,6 +18,7 @@ export interface LinearIssue {
   };
   priority: number; // 0=No priority, 1=Urgent, 2=High, 3=Medium, 4=Low
   url: string;
+  teamId?: string; // Team ID the issue belongs to
 }
 
 export interface UserLinearData {
@@ -100,6 +101,7 @@ interface UserAssignedIssuesResponse {
         state: { name: string; type: string };
         priority: number;
         url: string;
+        team: { id: string };
       }>;
     };
   };
@@ -122,6 +124,7 @@ const USER_ASSIGNED_ISSUES_QUERY = `
           state { name type }
           priority
           url
+          team { id }
         }
       }
     }
@@ -154,6 +157,7 @@ export async function fetchUserAssignedIssues(
       state: { name: issue.state.name, type: issue.state.type },
       priority: issue.priority,
       url: issue.url,
+      teamId: issue.team.id,
     }));
 
     // Sort by priority (1=Urgent first) then by state type (started before unstarted)
@@ -254,6 +258,7 @@ export async function fetchUserLinearData(
         state: { name: issue.state.name, type: issue.state.type },
         priority: issue.priority,
         url: issue.url,
+        teamId,
       }));
 
     // Sort by priority (1=Urgent first) then by state type (started before unstarted)
@@ -393,4 +398,151 @@ export function calculateCycleProgress(
     todo,
     completionPct,
   };
+}
+
+// ============================================================================
+// Sync: Check Issue Completion Status
+// ============================================================================
+
+interface IssueStatusResponse {
+  nodes: Array<{
+    id: string;
+    state: { type: string };
+  }>;
+}
+
+const CHECK_ISSUES_QUERY = `
+  query CheckIssues($ids: [String!]!) {
+    nodes(ids: $ids) {
+      ... on Issue {
+        id
+        state { type }
+      }
+    }
+  }
+`;
+
+/**
+ * Check which Linear issues are now completed or canceled.
+ * Returns a Set of issue IDs that are done.
+ */
+export async function checkIssuesCompleted(
+  token: string,
+  issueIds: string[]
+): Promise<Set<string>> {
+  if (issueIds.length === 0) return new Set();
+
+  try {
+    const data = await linearQuery<IssueStatusResponse>(
+      token,
+      CHECK_ISSUES_QUERY,
+      { ids: issueIds }
+    );
+
+    const completedIds = new Set<string>();
+    for (const node of data.nodes) {
+      if (node.state?.type === 'completed' || node.state?.type === 'canceled') {
+        completedIds.add(node.id);
+      }
+    }
+    return completedIds;
+  } catch (error) {
+    console.error('Failed to check Linear issue status:', error);
+    return new Set();
+  }
+}
+
+// ============================================================================
+// Sync: Transition Issue to Done
+// ============================================================================
+
+interface TeamWorkflowStatesResponse {
+  team: {
+    states: {
+      nodes: Array<{
+        id: string;
+        name: string;
+        type: string;
+      }>;
+    };
+  };
+}
+
+const TEAM_WORKFLOW_STATES_QUERY = `
+  query TeamStates($teamId: String!) {
+    team(id: $teamId) {
+      states {
+        nodes {
+          id
+          name
+          type
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Fetch the "Done" state ID for a team (first state with type "completed").
+ */
+export async function fetchTeamDoneStateId(
+  token: string,
+  teamId: string
+): Promise<string | null> {
+  try {
+    const data = await linearQuery<TeamWorkflowStatesResponse>(
+      token,
+      TEAM_WORKFLOW_STATES_QUERY,
+      { teamId }
+    );
+
+    const doneState = data.team.states.nodes.find(s => s.type === 'completed');
+    return doneState?.id || null;
+  } catch (error) {
+    console.error(`Failed to fetch done state for team ${teamId}:`, error);
+    return null;
+  }
+}
+
+interface IssueUpdateResponse {
+  issueUpdate: {
+    success: boolean;
+  };
+}
+
+const ISSUE_UPDATE_MUTATION = `
+  mutation UpdateIssue($issueId: String!, $stateId: String!) {
+    issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+      success
+    }
+  }
+`;
+
+/**
+ * Transition a Linear issue to Done state.
+ * Looks up the team's "completed" workflow state and applies it.
+ */
+export async function transitionIssueToDone(
+  token: string,
+  issueId: string,
+  teamId: string
+): Promise<boolean> {
+  try {
+    const doneStateId = await fetchTeamDoneStateId(token, teamId);
+    if (!doneStateId) {
+      console.error(`No completed state found for team ${teamId}`);
+      return false;
+    }
+
+    const data = await linearQuery<IssueUpdateResponse>(
+      token,
+      ISSUE_UPDATE_MUTATION,
+      { issueId, stateId: doneStateId }
+    );
+
+    return data.issueUpdate.success;
+  } catch (error) {
+    console.error(`Failed to transition issue ${issueId} to done:`, error);
+    return false;
+  }
 }

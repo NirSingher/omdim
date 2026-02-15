@@ -63,7 +63,9 @@ CREATE TABLE IF NOT EXISTS work_items (
   carry_count INTEGER NOT NULL DEFAULT 0,
   completed_date DATE,
   snoozed_until DATE,  -- null = not snoozed, date = hidden from bottlenecks until this date
-  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL
+  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+  external_type TEXT,   -- 'linear' | 'github'
+  external_id TEXT      -- Linear: "teamId:issueId", GitHub: "org/repo#123"
 );
 
 -- Channel reminder dedup log
@@ -81,6 +83,9 @@ CREATE TABLE IF NOT EXISTS reminder_log (
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;
 -- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS yesterday_in_progress JSONB;
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS external_type TEXT;
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS external_id TEXT;
+-- CREATE INDEX IF NOT EXISTS idx_work_items_external ON work_items(external_type, external_id) WHERE external_type IS NOT NULL;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (
@@ -103,4 +108,5 @@ CREATE INDEX IF NOT EXISTS idx_slack_users_updated ON slack_users(updated_at);
 CREATE INDEX IF NOT EXISTS idx_work_items_user_daily ON work_items(slack_user_id, daily_name);
 CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
 CREATE INDEX IF NOT EXISTS idx_work_items_carry ON work_items(carry_count) WHERE carry_count >= 3;
+CREATE INDEX IF NOT EXISTS idx_work_items_external ON work_items(external_type, external_id) WHERE external_type IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ooo_lookup ON ooo(slack_user_id, daily_name, start_date, end_date);

@@ -217,6 +217,8 @@ export interface WorkItem {
   completed_date: string | null;
   snoozed_until: string | null;
   submission_id: number | null;
+  external_type: string | null;
+  external_id: string | null;
 }
 
 /** Create work items from today's plans */
@@ -228,6 +230,8 @@ export async function createWorkItems(
     text: string;
     date: string;
     submissionId: number;
+    externalType?: string;
+    externalId?: string;
   }>
 ): Promise<WorkItem[]> {
   if (items.length === 0) return [];
@@ -235,14 +239,30 @@ export async function createWorkItems(
   const results: WorkItem[] = [];
   for (const item of items) {
     const result = await db.query<WorkItem>(
-      `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5)
+      `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id, external_type, external_id)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
        RETURNING *`,
-      [item.slackUserId, item.dailyName, item.text, item.date, item.submissionId]
+      [item.slackUserId, item.dailyName, item.text, item.date, item.submissionId, item.externalType || null, item.externalId || null]
     );
     if (result[0]) results.push(result[0]);
   }
   return results;
+}
+
+/** Get pending work items that have external references (for sync checks) */
+export async function getPendingExternalItems(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2
+       AND status IN ('pending', 'carried', 'in_progress')
+       AND external_type IS NOT NULL
+     ORDER BY created_date ASC`,
+    [slackUserId, dailyName]
+  );
 }
 
 /** Mark items as done */

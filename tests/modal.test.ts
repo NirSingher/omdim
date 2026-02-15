@@ -16,7 +16,7 @@ vi.mock('../lib/slack', () => ({
   openModal: vi.fn(),
 }));
 
-import { buildStandupModal, YesterdayData } from '../lib/modal';
+import { buildStandupModal, YesterdayData, ExternalCompletion } from '../lib/modal';
 import type { LinearIssue } from '../lib/linear';
 import type { UserPRData, GitHubPR } from '../lib/github';
 
@@ -607,6 +607,311 @@ describe('modal builder', () => {
       const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
 
       expect(linearBlock).toBeUndefined();
+    });
+
+    describe('externallyCompleted auto-defaulting', () => {
+      it('defaults matched items to "Done" when in externallyCompleted', () => {
+        const yesterday: YesterdayData = {
+          plans: ['[ENG-123] Fix bug', 'Write tests', '[PR-456] Review PR'],
+          completed: [],
+          incomplete: [],
+        };
+
+        const externallyCompleted: ExternalCompletion[] = [
+          { text: '[ENG-123] Fix bug', externalType: 'linear', externalId: 'issue-123' },
+          { text: '[PR-456] Review PR', externalType: 'github', externalId: 'org/repo#456' },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          yesterday,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          externallyCompleted
+        );
+
+        // Find the dropdown blocks for each plan
+        const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+        const item1 = modal.blocks.find(b => b.block_id === 'yesterday_item_1');
+        const item2 = modal.blocks.find(b => b.block_id === 'yesterday_item_2');
+
+        // Item 0 matches externallyCompleted, should default to "Done"
+        expect(item0?.accessory?.initial_option?.value).toBe('done');
+        expect(item0?.accessory?.initial_option?.text?.text).toContain('Done');
+
+        // Item 1 doesn't match, should default to "Carry over"
+        expect(item1?.accessory?.initial_option?.value).toBe('continue');
+        expect(item1?.accessory?.initial_option?.text?.text).toContain('Carry over');
+
+        // Item 2 matches externallyCompleted, should default to "Done"
+        expect(item2?.accessory?.initial_option?.value).toBe('done');
+        expect(item2?.accessory?.initial_option?.text?.text).toContain('Done');
+      });
+
+      it('defaults all items to "Carry over" when no externallyCompleted provided', () => {
+        const yesterday: YesterdayData = {
+          plans: ['Task A', 'Task B'],
+          completed: [],
+          incomplete: [],
+        };
+
+        const modal = buildStandupModal('daily-il', yesterday, []);
+
+        const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+        const item1 = modal.blocks.find(b => b.block_id === 'yesterday_item_1');
+
+        expect(item0?.accessory?.initial_option?.value).toBe('continue');
+        expect(item1?.accessory?.initial_option?.value).toBe('continue');
+      });
+
+      it('defaults all items to "Carry over" when externallyCompleted is empty array', () => {
+        const yesterday: YesterdayData = {
+          plans: ['Task A', 'Task B'],
+          completed: [],
+          incomplete: [],
+        };
+
+        const modal = buildStandupModal(
+          'daily-il',
+          yesterday,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          []
+        );
+
+        const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+        const item1 = modal.blocks.find(b => b.block_id === 'yesterday_item_1');
+
+        expect(item0?.accessory?.initial_option?.value).toBe('continue');
+        expect(item1?.accessory?.initial_option?.value).toBe('continue');
+      });
+
+      it('matches exactly on text (case-sensitive)', () => {
+        const yesterday: YesterdayData = {
+          plans: ['Fix Bug', 'fix bug'],
+          completed: [],
+          incomplete: [],
+        };
+
+        const externallyCompleted: ExternalCompletion[] = [
+          { text: 'Fix Bug', externalType: 'linear', externalId: 'issue-1' },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          yesterday,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          externallyCompleted
+        );
+
+        const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+        const item1 = modal.blocks.find(b => b.block_id === 'yesterday_item_1');
+
+        // Exact match
+        expect(item0?.accessory?.initial_option?.value).toBe('done');
+        // No match (different case)
+        expect(item1?.accessory?.initial_option?.value).toBe('continue');
+      });
+
+      it('handles multiple externally completed items', () => {
+        const yesterday: YesterdayData = {
+          plans: ['Item 1', 'Item 2', 'Item 3', 'Item 4'],
+          completed: [],
+          incomplete: [],
+        };
+
+        const externallyCompleted: ExternalCompletion[] = [
+          { text: 'Item 1', externalType: 'linear', externalId: 'id-1' },
+          { text: 'Item 2', externalType: 'linear', externalId: 'id-2' },
+          { text: 'Item 4', externalType: 'github', externalId: 'id-4' },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          yesterday,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          externallyCompleted
+        );
+
+        const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+        const item1 = modal.blocks.find(b => b.block_id === 'yesterday_item_1');
+        const item2 = modal.blocks.find(b => b.block_id === 'yesterday_item_2');
+        const item3 = modal.blocks.find(b => b.block_id === 'yesterday_item_3');
+
+        expect(item0?.accessory?.initial_option?.value).toBe('done');
+        expect(item1?.accessory?.initial_option?.value).toBe('done');
+        expect(item2?.accessory?.initial_option?.value).toBe('continue'); // Item 3 not in list
+        expect(item3?.accessory?.initial_option?.value).toBe('done');
+      });
+    });
+
+    describe('Linear issue teamId encoding', () => {
+      it('encodes value as teamId:issueId when teamId is present', () => {
+        const linearIssues: LinearIssue[] = [
+          {
+            id: 'issue-abc',
+            identifier: 'ENG-123',
+            title: 'Fix bug',
+            state: { name: 'In Progress', type: 'started' },
+            priority: 1,
+            url: 'https://linear.app/issue/ENG-123',
+            teamId: 'team-xyz',
+          },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          null,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          linearIssues
+        );
+
+        const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+        const option = linearBlock?.element?.options?.[0];
+
+        expect(option?.value).toBe('team-xyz:issue-abc');
+      });
+
+      it('encodes value as issueId only when teamId is absent', () => {
+        const linearIssues: LinearIssue[] = [
+          {
+            id: 'issue-abc',
+            identifier: 'ENG-123',
+            title: 'Fix bug',
+            state: { name: 'In Progress', type: 'started' },
+            priority: 1,
+            url: 'https://linear.app/issue/ENG-123',
+            // No teamId
+          },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          null,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          linearIssues
+        );
+
+        const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+        const option = linearBlock?.element?.options?.[0];
+
+        expect(option?.value).toBe('issue-abc');
+      });
+
+      it('handles mix of issues with and without teamId', () => {
+        const linearIssues: LinearIssue[] = [
+          {
+            id: 'issue-1',
+            identifier: 'ENG-100',
+            title: 'With team',
+            state: { name: 'Todo', type: 'unstarted' },
+            priority: 1,
+            url: 'https://linear.app/issue/ENG-100',
+            teamId: 'team-a',
+          },
+          {
+            id: 'issue-2',
+            identifier: 'ENG-101',
+            title: 'Without team',
+            state: { name: 'Todo', type: 'unstarted' },
+            priority: 1,
+            url: 'https://linear.app/issue/ENG-101',
+            // No teamId
+          },
+          {
+            id: 'issue-3',
+            identifier: 'ENG-102',
+            title: 'Another with team',
+            state: { name: 'Todo', type: 'unstarted' },
+            priority: 1,
+            url: 'https://linear.app/issue/ENG-102',
+            teamId: 'team-b',
+          },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          null,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          linearIssues
+        );
+
+        const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+        const options = linearBlock?.element?.options as any[];
+
+        expect(options[0].value).toBe('team-a:issue-1');
+        expect(options[1].value).toBe('issue-2');
+        expect(options[2].value).toBe('team-b:issue-3');
+      });
+
+      it('handles empty string teamId as absent', () => {
+        const linearIssues: LinearIssue[] = [
+          {
+            id: 'issue-1',
+            identifier: 'ENG-100',
+            title: 'Empty team',
+            state: { name: 'Todo', type: 'unstarted' },
+            priority: 1,
+            url: 'https://linear.app/issue/ENG-100',
+            teamId: '',
+          },
+        ];
+
+        const modal = buildStandupModal(
+          'daily-il',
+          null,
+          [],
+          undefined,
+          undefined,
+          'today',
+          undefined,
+          linearIssues
+        );
+
+        const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+        const option = linearBlock?.element?.options?.[0];
+
+        // Empty string is falsy, so should use issueId only
+        expect(option?.value).toBe('issue-1');
+      });
     });
   });
 });

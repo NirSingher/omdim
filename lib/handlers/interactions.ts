@@ -23,12 +23,14 @@ import {
   setGitHubUsername,
   setLinearUserId,
   getUsersWithGitHubLinks,
+  getPendingExternalItems,
+  WorkItem,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
-import { fetchUserPRData, UserPRData } from '../github';
-import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue } from '../linear';
+import { fetchUserPRData, UserPRData, checkPRsMerged, parsePRExternalId } from '../github';
+import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, checkIssuesCompleted, transitionIssueToDone } from '../linear';
 import { postStandupToChannel } from '../format';
-import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
+import { buildStandupModal, YesterdayData, SubmissionPrefill, ExternalCompletion } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
 import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
 import { StandupMode } from '../modal';
@@ -181,6 +183,87 @@ async function fetchGitHubPRsForUser(
   }
 }
 
+/**
+ * Check which previously-planned items have been completed externally
+ * (Linear issues done/canceled, GitHub PRs merged/closed).
+ * Runs DB query + API checks in parallel.
+ */
+async function checkExternalCompletions(
+  daily: ReturnType<typeof getDaily>,
+  userId: string,
+  dailyName: string,
+  ctx: InteractionContext
+): Promise<ExternalCompletion[]> {
+  if (!daily) return [];
+
+  try {
+    const pendingItems = await getPendingExternalItems(ctx.db, userId, dailyName);
+    if (pendingItems.length === 0) return [];
+
+    // Group by type
+    const linearItems = pendingItems.filter(i => i.external_type === 'linear');
+    const githubItems = pendingItems.filter(i => i.external_type === 'github');
+
+    // Extract IDs for batch checking
+    const linearIssueIds = linearItems
+      .map(i => {
+        // external_id format: "teamId:issueId"
+        const parts = i.external_id?.split(':');
+        return parts && parts.length === 2 ? parts[1] : null;
+      })
+      .filter((id): id is string => id !== null);
+
+    const githubPRRefs = githubItems
+      .map(i => i.external_id ? parsePRExternalId(i.external_id) : null)
+      .filter((ref): ref is NonNullable<typeof ref> => ref !== null);
+
+    // Check Linear + GitHub in parallel
+    const linearConfig = getLinearConfig(daily);
+    const githubConfig = getGitHubConfig(daily);
+    const linearToken = linearConfig && ctx.env ? ctx.env[linearConfig.tokenEnvVar] : undefined;
+    const githubToken = githubConfig && ctx.env ? ctx.env[githubConfig.tokenEnvVar] : undefined;
+
+    const [completedLinear, mergedGitHub] = await Promise.all([
+      linearToken && linearIssueIds.length > 0
+        ? checkIssuesCompleted(linearToken, linearIssueIds)
+        : new Set<string>(),
+      githubToken && githubPRRefs.length > 0
+        ? checkPRsMerged(githubToken, githubPRRefs)
+        : new Set<string>(),
+    ]);
+
+    const results: ExternalCompletion[] = [];
+
+    // Match completed Linear issues back to work items
+    for (const item of linearItems) {
+      const parts = item.external_id?.split(':');
+      if (parts && parts.length === 2 && completedLinear.has(parts[1])) {
+        results.push({
+          text: item.text,
+          externalType: 'linear',
+          externalId: item.external_id!,
+        });
+      }
+    }
+
+    // Match merged GitHub PRs back to work items
+    for (const item of githubItems) {
+      if (item.external_id && mergedGitHub.has(item.external_id)) {
+        results.push({
+          text: item.text,
+          externalType: 'github',
+          externalId: item.external_id,
+        });
+      }
+    }
+
+    return results;
+  } catch (error) {
+    console.error('Failed to check external completions:', error);
+    return [];
+  }
+}
+
 // ============================================================================
 // Button Handler: Open Standup
 // ============================================================================
@@ -253,14 +336,15 @@ export async function handleOpenStandup(
     }
   }
 
-  // Fetch Linear issues and GitHub PRs in parallel
-  const [linearIssues, githubResult] = await Promise.all([
+  // Fetch Linear issues, GitHub PRs, and external completions in parallel
+  const [linearIssues, githubResult, externalCompletions] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
+    checkExternalCompletions(daily, userId, dailyName, ctx),
   ]);
 
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues, githubResult.prData, githubResult.reviewerMap);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues, githubResult.prData, githubResult.reviewerMap, externalCompletions);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -337,15 +421,24 @@ export async function handleStandupSubmission(
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
   const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
 
-  // Parse Linear ticket selections and append to todayPlans
-  // Parse integration checkbox selections — extract display text from the option's text field
+  // Parse integration checkbox selections and track external refs
   // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers
   const parseOptionText = (text: string): string => text.replace(/^\*([^*]+)\*\s*/, '[$1] ');
+
+  // Map from plan index → external ref (populated as we add integration items to todayPlans)
+  const planExternalRefs = new Map<number, { type: string; id: string }>();
+
+  // Get GitHub org from config (needed to expand short PR refs to full external IDs)
+  const githubConfig = getGitHubConfig(daily!);
+  const githubOrg = githubConfig?.org || '';
 
   const linearSelections = values.linear_tickets?.linear_tickets_input?.selected_options;
   if (linearSelections && linearSelections.length > 0) {
     for (const option of linearSelections) {
+      const planIndex = todayPlans.length;
       todayPlans.push(parseOptionText(option.text?.text || option.value));
+      // option.value is "teamId:issueId" — store as Linear external ref
+      planExternalRefs.set(planIndex, { type: 'linear', id: option.value });
     }
   }
 
@@ -353,13 +446,20 @@ export async function handleStandupSubmission(
   const reviewSelections = values.review_requests?.review_requests_input?.selected_options;
   if (reviewSelections && reviewSelections.length > 0) {
     for (const option of reviewSelections) {
+      const planIndex = todayPlans.length;
       todayPlans.push(parseOptionText(option.text?.text || option.value));
+      // option.value is "repo#123" — expand to "org/repo#123"
+      const externalId = githubOrg ? `${githubOrg}/${option.value}` : option.value;
+      planExternalRefs.set(planIndex, { type: 'github', id: externalId });
     }
   }
   const myPrSelections = values.my_prs?.my_prs_input?.selected_options;
   if (myPrSelections && myPrSelections.length > 0) {
     for (const option of myPrSelections) {
+      const planIndex = todayPlans.length;
       todayPlans.push(parseOptionText(option.text?.text || option.value));
+      const externalId = githubOrg ? `${githubOrg}/${option.value}` : option.value;
+      planExternalRefs.set(planIndex, { type: 'github', id: externalId });
     }
   }
 
@@ -474,22 +574,60 @@ export async function handleStandupSubmission(
         await markItemsInProgress(ctx.db, userId, dailyName, yesterdayInProgress);
       }
 
-      // Create new work items for today's plans
+      // Create new work items for today's plans (with external refs where applicable)
       if (todayPlans.length > 0) {
         await createWorkItems(
           ctx.db,
-          todayPlans.map(text => ({
-            slackUserId: userId,
-            dailyName,
-            text,
-            date: todayStr,
-            submissionId: submission.id,
-          }))
+          todayPlans.map((text, index) => {
+            const extRef = planExternalRefs.get(index);
+            return {
+              slackUserId: userId,
+              dailyName,
+              text,
+              date: todayStr,
+              submissionId: submission.id,
+              externalType: extRef?.type,
+              externalId: extRef?.id,
+            };
+          })
         );
       }
     } catch (error) {
       // Don't fail the submission if work item tracking fails
       console.error('Failed to track work items:', error);
+    }
+
+    // Linear write-back: transition completed Linear issues to "Done"
+    if (yesterdayCompleted.length > 0) {
+      try {
+        const linearConfig = getLinearConfig(daily!);
+        const linearToken = linearConfig && ctx.env ? ctx.env[linearConfig.tokenEnvVar] : undefined;
+        if (linearToken) {
+          // Find work items that were just marked done and have Linear external refs
+          const completedExternalItems = await ctx.db.query<WorkItem>(
+            `SELECT * FROM work_items
+             WHERE slack_user_id = $1 AND daily_name = $2
+               AND status = 'done' AND external_type = 'linear'
+               AND completed_date = $3`,
+            [userId, dailyName, todayStr]
+          );
+
+          // Fire-and-forget: transition each to done in Linear
+          for (const item of completedExternalItems) {
+            if (!item.external_id) continue;
+            const parts = item.external_id.split(':');
+            if (parts.length === 2) {
+              const [teamId, issueId] = parts;
+              transitionIssueToDone(linearToken, issueId, teamId).catch(err =>
+                console.error(`Failed to transition Linear issue ${issueId} to done:`, err)
+              );
+            }
+          }
+        }
+      } catch (error) {
+        // Best-effort: don't fail submission on write-back errors
+        console.error('Linear write-back failed:', error);
+      }
     }
 
     // Get carry counts for in-progress items (for attention warnings)
@@ -507,9 +645,9 @@ export async function handleStandupSubmission(
       // Fetch GitHub PR data and reviewer map if integration is enabled
       let prData: UserPRData | undefined;
       let reviewerSlackMap: Map<string, string> | undefined;
-      const githubConfig = getGitHubConfig(daily);
-      if (githubConfig && ctx.env) {
-        const githubToken = ctx.env[githubConfig.tokenEnvVar];
+      const postGithubConfig = getGitHubConfig(daily);
+      if (postGithubConfig && ctx.env) {
+        const githubToken = ctx.env[postGithubConfig.tokenEnvVar];
         if (githubToken) {
           // Get GitHub username: config mapping takes precedence over DB
           let githubUsername = getGitHubUsernameFromConfig(daily, userId);
@@ -520,7 +658,7 @@ export async function handleStandupSubmission(
           if (githubUsername) {
             try {
               [prData, reviewerSlackMap] = await Promise.all([
-                fetchUserPRData(githubToken, githubUsername, githubConfig.org),
+                fetchUserPRData(githubToken, githubUsername, postGithubConfig.org),
                 buildGitHubUserMap(daily, ctx.db),
               ]);
             } catch (error) {
@@ -692,10 +830,11 @@ export async function handleHomeStartDaily(
     }
   }
 
-  // Fetch Linear issues and GitHub PRs in parallel
-  const [linearIssues, githubResult] = await Promise.all([
+  // Fetch Linear issues, GitHub PRs, and external completions in parallel
+  const [linearIssues, githubResult, externalCompletions] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
+    checkExternalCompletions(daily, userId, dailyName, ctx),
   ]);
 
   // Build and open modal
@@ -709,7 +848,8 @@ export async function handleHomeStartDaily(
     prefill,
     linearIssues,
     githubResult.prData,
-    githubResult.reviewerMap
+    githubResult.reviewerMap,
+    externalCompletions
   );
 
   return openModal(ctx.slackToken, triggerId, modal);

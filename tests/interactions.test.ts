@@ -23,6 +23,8 @@ vi.mock('../lib/db', () => ({
   setLinearUserId: vi.fn(),
   getSubmissionForDate: vi.fn(() => Promise.resolve(null)),
   getUserDailies: vi.fn(() => Promise.resolve([])),
+  getPendingExternalItems: vi.fn(() => Promise.resolve([])),
+  getUsersWithGitHubLinks: vi.fn(() => Promise.resolve([])),
 }));
 
 // Mock the config module
