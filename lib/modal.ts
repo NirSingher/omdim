@@ -117,6 +117,38 @@ export function buildStandupModal(
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
   const yesterdayPlans = yesterday?.plans || [];
 
+  // Deduplicate: extract integration IDs from yesterday's plans so we don't
+  // show the same Linear tickets or GitHub PRs as both "yesterday" items and
+  // fresh integration checkboxes
+  const yesterdayIntegrationIds = new Set<string>();
+  for (const plan of yesterdayPlans) {
+    const match = plan.match(/^\[([^\]]+)\]\s/);
+    if (match) {
+      yesterdayIntegrationIds.add(match[1]);
+    }
+  }
+  if (yesterdayIntegrationIds.size > 0) {
+    if (linearIssues) {
+      linearIssues = linearIssues.filter(
+        issue => !yesterdayIntegrationIds.has(issue.identifier)
+      );
+    }
+    if (prData) {
+      const filterPRs = (prs: GitHubPR[]) => prs.filter(pr => {
+        const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+        const repo = repoMatch?.[1] || 'unknown';
+        return !yesterdayIntegrationIds.has(`${repo}#${pr.number}`);
+      });
+      prData = {
+        ...prData,
+        reviewRequests: filterPRs(prData.reviewRequests),
+        awaitingReview: filterPRs(prData.awaitingReview),
+        readyToMerge: filterPRs(prData.readyToMerge),
+        draftPRs: filterPRs(prData.draftPRs),
+      };
+    }
+  }
+
   // Merge field order with defaults
   const order = {
     unplanned: fieldOrder?.unplanned ?? DEFAULT_FIELD_ORDER.unplanned,
