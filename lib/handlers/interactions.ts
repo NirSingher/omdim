@@ -503,33 +503,10 @@ export async function handleStandupSubmission(
     }
 
     // Post to channel
+    // NOTE: We do NOT re-fetch PR data here. The user's checkbox selections
+    // are already included in todayPlans — re-fetching would show ALL PRs
+    // regardless of what the user selected.
     if (daily?.channel) {
-      // Fetch GitHub PR data and reviewer map if integration is enabled
-      let prData: UserPRData | undefined;
-      let reviewerSlackMap: Map<string, string> | undefined;
-      const githubConfig = getGitHubConfig(daily);
-      if (githubConfig && ctx.env) {
-        const githubToken = ctx.env[githubConfig.tokenEnvVar];
-        if (githubToken) {
-          // Get GitHub username: config mapping takes precedence over DB
-          let githubUsername = getGitHubUsernameFromConfig(daily, userId);
-          if (!githubUsername) {
-            githubUsername = await getGitHubUsername(ctx.db, userId);
-          }
-
-          if (githubUsername) {
-            try {
-              [prData, reviewerSlackMap] = await Promise.all([
-                fetchUserPRData(githubToken, githubUsername, githubConfig.org),
-                buildGitHubUserMap(daily, ctx.db),
-              ]);
-            } catch (error) {
-              console.error('Failed to fetch PR data:', error);
-            }
-          }
-        }
-      }
-
       const messageTs = await postStandupToChannel(
         ctx.slackToken,
         daily.channel,
@@ -546,8 +523,6 @@ export async function handleStandupSubmission(
           customAnswers,
           questions: daily.questions,
           fieldOrder: daily.field_order,
-          prData,
-          reviewerSlackMap,
           inProgressCarryCounts,
         }
       );
