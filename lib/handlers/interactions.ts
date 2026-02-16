@@ -80,7 +80,7 @@ export interface InteractionPayload {
 /**
  * Fetch Linear issues for a user if Linear integration is enabled for the daily
  */
-async function fetchLinearIssuesForUser(
+export async function fetchLinearIssuesForUser(
   daily: ReturnType<typeof getDaily>,
   userId: string,
   ctx: InteractionContext
@@ -148,7 +148,7 @@ async function buildGitHubUserMap(
  * Fetch GitHub PRs for a user if GitHub integration is enabled for the daily
  * Returns PR data and reviewer map for tagging reviewers
  */
-async function fetchGitHubPRsForUser(
+export async function fetchGitHubPRsForUser(
   daily: ReturnType<typeof getDaily>,
   userId: string,
   ctx: InteractionContext
