@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-02-16
+
+### Fixed
+- **PR checkbox selections respected at post time** — stop re-fetching all PRs when submitting; use the user's actual checkbox selections
+- **Deduplicate integration items** — Linear tickets and GitHub PRs already in yesterday's plans no longer appear twice
+
+### Changed
+- Refactored `/daily` command to reuse shared fetch helpers from interactions handler, fetching Linear issues and GitHub PRs in parallel
+
 ## [1.2.0] - 2026-02-12
 
 ### Added
@@ -51,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Admin commands: add/remove users, list participants
 - Compact digest format and `/standup report` command
 
-[Unreleased]: https://github.com/NirSingher/omdim/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/NirSingher/omdim/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/NirSingher/omdim/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/NirSingher/omdim/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/NirSingher/omdim/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/NirSingher/omdim/releases/tag/v1.0.0
