@@ -17,6 +17,10 @@ crons = ["*/30 * * * *"]
 # Cleanup runs via HTTP endpoint (free tier limit of 2 crons):
 # curl "https://YOUR-URL/api/cron/cleanup?secret=YOUR_CRON_SECRET"
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 # Environment variables - set secrets via: wrangler secret put <NAME>
 # Required secrets:
 #   wrangler secret put SLACK_BOT_TOKEN

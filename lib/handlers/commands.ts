@@ -6,7 +6,7 @@
 import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser } from '../config';
 import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
-import { fetchUserLinearData, LinearIssue } from '../linear';
+import { fetchLinearIssuesForUser, fetchGitHubPRsForUser } from './interactions';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
 import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse, openModal } from '../slack';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
@@ -847,27 +847,12 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       }
     }
 
-    // Fetch Linear issues if integration is enabled
-    let linearIssues: LinearIssue[] = [];
-    const linearConfig = getLinearConfig(daily);
-    if (linearConfig && ctx.env) {
-      const linearToken = ctx.env[linearConfig.tokenEnvVar];
-      if (linearToken) {
-        let linearUserId = getLinearUserIdFromConfig(daily, ctx.userId);
-        if (!linearUserId) {
-          linearUserId = await getLinearUserId(ctx.db, ctx.userId);
-        }
-        const teamId = getLinearTeamIdForUser(daily, ctx.userId);
-        if (linearUserId && teamId) {
-          try {
-            const data = await fetchUserLinearData(linearToken, teamId, linearUserId);
-            linearIssues = data.issues;
-          } catch (error) {
-            console.error('Failed to fetch Linear data for /daily:', error);
-          }
-        }
-      }
-    }
+    // Fetch Linear issues and GitHub PRs in parallel
+    const interactionCtx = { db: ctx.db, slackToken: ctx.slackToken, env: ctx.env || {} };
+    const [linearIssues, githubResult] = await Promise.all([
+      fetchLinearIssuesForUser(daily, ctx.userId, interactionCtx),
+      fetchGitHubPRsForUser(daily, ctx.userId, interactionCtx),
+    ]);
 
     // Build and open modal
     const modal = buildStandupModal(
@@ -878,7 +863,9 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       targetDate,
       mode,
       prefill,
-      linearIssues
+      linearIssues,
+      githubResult.prData,
+      githubResult.reviewerMap
     );
 
     const opened = await openModal(ctx.slackToken, ctx.triggerId, modal);
