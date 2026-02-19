@@ -249,6 +249,7 @@ export async function handleOpenStandup(
         plans: allPlans,
         completed: [],
         incomplete: [],
+        inProgressCount: inProgressItems.length,
       };
     }
   }
@@ -292,6 +293,7 @@ export async function handleStandupSubmission(
     mode?: StandupMode;
     targetDate?: string;
     unmappedReviewers?: string[];
+    prReviewerTags?: Record<string, string>;
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
@@ -359,7 +361,12 @@ export async function handleStandupSubmission(
   const myPrSelections = values.my_prs?.my_prs_input?.selected_options;
   if (myPrSelections && myPrSelections.length > 0) {
     for (const option of myPrSelections) {
-      todayPlans.push(parseOptionText(option.text?.text || option.value));
+      let planText = parseOptionText(option.text?.text || option.value);
+      const reviewers = metadata.prReviewerTags?.[option.value];
+      if (reviewers) {
+        planText += ` — waiting on ${reviewers}`;
+      }
+      todayPlans.push(planText);
     }
   }
 
@@ -637,7 +644,7 @@ export async function handleHomeStartDaily(
       const inProgressItems = previousSubmission.yesterday_in_progress || [];
       const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
       if (allPlans.length > 0) {
-        yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+        yesterdayData = { plans: allPlans, completed: [], incomplete: [], inProgressCount: inProgressItems.length };
       }
     }
   } else {
@@ -648,7 +655,7 @@ export async function handleHomeStartDaily(
       const inProgressItems = todaySubmission.yesterday_in_progress || [];
       const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
       if (allPlans.length > 0) {
-        yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+        yesterdayData = { plans: allPlans, completed: [], incomplete: [], inProgressCount: inProgressItems.length };
       }
     }
   }

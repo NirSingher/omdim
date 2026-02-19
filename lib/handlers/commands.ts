@@ -816,9 +816,10 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       if (previousSubmission) {
         const todayPlans = previousSubmission.today_plans || [];
         const carriedItems = previousSubmission.yesterday_incomplete || [];
-        const allPlans = [...carriedItems, ...todayPlans];
+        const inProgressItems = previousSubmission.yesterday_in_progress || [];
+        const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
         if (allPlans.length > 0) {
-          yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+          yesterdayData = { plans: allPlans, completed: [], incomplete: [], inProgressCount: inProgressItems.length };
         }
       }
     } else {
@@ -826,9 +827,10 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       if (todaySubmission) {
         const todayPlans = todaySubmission.today_plans || [];
         const carriedItems = todaySubmission.yesterday_incomplete || [];
-        const allPlans = [...carriedItems, ...todayPlans];
+        const inProgressItems = todaySubmission.yesterday_in_progress || [];
+        const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
         if (allPlans.length > 0) {
-          yesterdayData = { plans: allPlans, completed: [], incomplete: [] };
+          yesterdayData = { plans: allPlans, completed: [], incomplete: [], inProgressCount: inProgressItems.length };
         }
       }
     }
