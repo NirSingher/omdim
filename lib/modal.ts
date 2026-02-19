@@ -46,6 +46,7 @@ export interface YesterdayData {
   plans: string[];
   completed: string[];
   incomplete: string[];
+  inProgressCount?: number; // First N items in plans[] that were "in progress"
 }
 
 /** Pre-fill data for editing an existing submission */
@@ -197,6 +198,7 @@ export function buildStandupModal(
 
     // Add a dropdown for each yesterday's plan item
     yesterdayPlans.forEach((plan, index) => {
+      const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
       blocks.push({
         type: 'section',
         block_id: `yesterday_item_${index}`,
@@ -208,7 +210,7 @@ export function buildStandupModal(
           type: 'static_select',
           action_id: `item_status_${index}`,
           options: YESTERDAY_ITEM_OPTIONS,
-          initial_option: YESTERDAY_ITEM_OPTIONS[0], // Default to "Carry over"
+          initial_option: isInProgress ? YESTERDAY_ITEM_OPTIONS[1] : YESTERDAY_ITEM_OPTIONS[0],
         },
       });
     });
@@ -274,6 +276,7 @@ export function buildStandupModal(
   orderedFields.sort((a, b) => a.order - b.order);
 
   let unmappedReviewerLogins: string[] = [];
+  const prReviewerTags: Record<string, string> = {};
 
   // Render fields in order
   orderedFields.forEach((field, idx) => {
@@ -407,7 +410,6 @@ export function buildStandupModal(
               type: 'checkboxes',
               action_id: 'review_requests_input',
               options: reviewOptions,
-              initial_options: reviewOptions,
             },
             label: {
               type: 'plain_text',
@@ -438,6 +440,12 @@ export function buildStandupModal(
             });
             const descSuffix = reviewerNames.length > 0 ? ` — ${reviewerNames.join(', ')}` : '';
             myPRsCategorized.push({ pr, category: 'Awaiting Review', descSuffix });
+            // Store reviewer tags keyed by PR ref for the submission handler
+            if (reviewerNames.length > 0) {
+              const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+              const repo = repoMatch?.[1] || 'unknown';
+              prReviewerTags[`${repo}#${pr.number}`] = reviewerNames.join(', ');
+            }
           }
           for (const pr of prData.readyToMerge) myPRsCategorized.push({ pr, category: 'Ready to Merge' });
           for (const pr of prData.draftPRs) myPRsCategorized.push({ pr, category: 'Draft' });
@@ -467,7 +475,6 @@ export function buildStandupModal(
               type: 'checkboxes',
               action_id: 'my_prs_input',
               options: myPROptions,
-              initial_options: myPROptions,
             },
             label: {
               type: 'plain_text',
@@ -582,6 +589,7 @@ export function buildStandupModal(
       mode,
       targetDate: targetDateStr,
       ...(unmappedReviewerLogins.length > 0 ? { unmappedReviewers: unmappedReviewerLogins } : {}),
+      ...(Object.keys(prReviewerTags).length > 0 ? { prReviewerTags } : {}),
   });
   console.log(`private_metadata length: ${metadata.length}`);
 
