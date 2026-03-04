@@ -592,6 +592,97 @@ describe('modal builder', () => {
       expect(linearBlock?.element?.options).toHaveLength(1);
     });
 
+    it('suppresses Linear checkboxes for recently done identifiers', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1', identifier: 'ENG-100', title: 'Recently done',
+          state: { name: 'In Progress', type: 'started' }, priority: 1,
+          url: 'https://linear.app/issue/ENG-100',
+        },
+        {
+          id: 'issue-2', identifier: 'ENG-200', title: 'Still active',
+          state: { name: 'In Progress', type: 'started' }, priority: 1,
+          url: 'https://linear.app/issue/ENG-200',
+        },
+      ];
+      const doneIdentifiers = new Set(['ENG-100']);
+
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        linearIssues, undefined, undefined, doneIdentifiers
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock).toBeDefined();
+      // Only ENG-200 should remain
+      expect(linearBlock?.element?.options).toHaveLength(1);
+      expect((linearBlock?.element?.options as any[])[0].value).toBe('issue-2');
+    });
+
+    it('hides Linear block when all issues are done-suppressed', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1', identifier: 'ENG-100', title: 'Done ticket',
+          state: { name: 'In Progress', type: 'started' }, priority: 1,
+          url: 'https://linear.app/issue/ENG-100',
+        },
+      ];
+      const doneIdentifiers = new Set(['ENG-100']);
+
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        linearIssues, undefined, undefined, doneIdentifiers
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock).toBeUndefined();
+    });
+
+    it('defaults yesterday dropdown to Done for auto-completed items', () => {
+      const yesterday: YesterdayData = {
+        plans: ['[ENG-100] Fix auth bug', 'Write tests', '[ENG-200] Add feature'],
+        completed: [],
+        incomplete: [],
+      };
+      const autoCompletedIds = new Set(['ENG-100']);
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, autoCompletedIds
+      );
+
+      // Find dropdown blocks
+      const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+      const item1 = modal.blocks.find(b => b.block_id === 'yesterday_item_1');
+      const item2 = modal.blocks.find(b => b.block_id === 'yesterday_item_2');
+
+      // ENG-100 should default to Done
+      expect(item0?.accessory?.initial_option?.value).toBe('done');
+      // "Write tests" (not a Linear item) should default to Carry over
+      expect(item1?.accessory?.initial_option?.value).toBe('continue');
+      // ENG-200 (not auto-completed) should default to Carry over
+      expect(item2?.accessory?.initial_option?.value).toBe('continue');
+    });
+
+    it('auto-completed overrides in-progress default', () => {
+      const yesterday: YesterdayData = {
+        plans: ['[ENG-100] WIP ticket'],
+        completed: [],
+        incomplete: [],
+        inProgressCount: 1, // First item was in progress
+      };
+      const autoCompletedIds = new Set(['ENG-100']);
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, autoCompletedIds
+      );
+
+      const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
+      // Auto-completed takes precedence over in-progress
+      expect(item0?.accessory?.initial_option?.value).toBe('done');
+    });
+
     it('does not include Linear block when no issues provided', () => {
       const modal = buildStandupModal(
         'daily-il',

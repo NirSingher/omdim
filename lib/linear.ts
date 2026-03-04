@@ -22,6 +22,7 @@ export interface LinearIssue {
 
 export interface UserLinearData {
   issues: LinearIssue[];
+  allActiveIdentifiers?: string[];  // All non-completed identifiers (pre-filter)
 }
 
 export interface TeamLinearData {
@@ -147,7 +148,7 @@ export async function fetchUserAssignedIssues(
       return { issues: [] };
     }
 
-    const issues = data.user.assignedIssues.nodes.map((issue) => ({
+    const allIssues = data.user.assignedIssues.nodes.map((issue) => ({
       id: issue.id,
       identifier: issue.identifier,
       title: issue.title,
@@ -155,6 +156,9 @@ export async function fetchUserAssignedIssues(
       priority: issue.priority,
       url: issue.url,
     }));
+
+    const allActiveIdentifiers = allIssues.map(i => i.identifier);
+    const issues = allIssues.filter((issue) => issue.state.type === 'started' || issue.priority === 1);
 
     // Sort by priority (1=Urgent first) then by state type (started before unstarted)
     const stateOrder: Record<string, number> = {
@@ -169,12 +173,52 @@ export async function fetchUserAssignedIssues(
       return (stateOrder[a.state.type] ?? 99) - (stateOrder[b.state.type] ?? 99);
     });
 
-    return { issues };
+    return { issues, allActiveIdentifiers };
   } catch (error) {
     console.error('Failed to fetch assigned Linear issues:', error);
     return { issues: [] };
   }
 }
+
+// --- Team-scoped issues (fallback when no active cycle) ---
+
+interface TeamIssuesResponse {
+  team: {
+    issues: {
+      nodes: Array<{
+        id: string;
+        identifier: string;
+        title: string;
+        state: { name: string; type: string };
+        priority: number;
+        url: string;
+        assignee: { id: string } | null;
+      }>;
+    };
+  } | null;
+}
+
+const TEAM_ISSUES_QUERY = `
+  query TeamIssues($teamId: String!) {
+    team(id: $teamId) {
+      issues(
+        filter: { state: { type: { nin: ["completed", "canceled"] } } }
+        first: 50
+        orderBy: updatedAt
+      ) {
+        nodes {
+          id
+          identifier
+          title
+          state { name type }
+          priority
+          url
+          assignee { id }
+        }
+      }
+    }
+  }
+`;
 
 // --- Team-scoped cycle issues ---
 
@@ -240,11 +284,50 @@ export async function fetchUserLinearData(
     );
 
     if (!data.team?.activeCycle) {
-      return { issues: [] };
+      // Fallback: fetch team issues directly, filtered to actionable items
+      const fallbackData = await linearQuery<TeamIssuesResponse>(
+        token,
+        TEAM_ISSUES_QUERY,
+        { teamId }
+      );
+
+      if (!fallbackData.team) {
+        return { issues: [] };
+      }
+
+      const allUserFallback = fallbackData.team.issues.nodes
+        .filter((issue) => issue.assignee?.id === userId)
+        .map((issue) => ({
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          state: { name: issue.state.name, type: issue.state.type },
+          priority: issue.priority,
+          url: issue.url,
+        }));
+
+      const fallbackActiveIdentifiers = allUserFallback.map(i => i.identifier);
+      const fallbackIssues = allUserFallback.filter(
+        (issue) => issue.state.type === 'started' || issue.priority === 1
+      );
+
+      const stateOrder: Record<string, number> = {
+        'started': 0,
+        'unstarted': 1,
+        'triage': 2,
+        'backlog': 3,
+      };
+
+      fallbackIssues.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return (stateOrder[a.state.type] ?? 99) - (stateOrder[b.state.type] ?? 99);
+      });
+
+      return { issues: fallbackIssues, allActiveIdentifiers: fallbackActiveIdentifiers };
     }
 
     const cycle = data.team.activeCycle;
-    const userIssues = cycle.issues.nodes
+    const allUserIssues = cycle.issues.nodes
       .filter((issue) => issue.assignee?.id === userId)
       .filter((issue) => issue.state.type !== 'completed' && issue.state.type !== 'canceled')
       .map((issue) => ({
@@ -256,6 +339,8 @@ export async function fetchUserLinearData(
         url: issue.url,
       }));
 
+    const allActiveIdentifiers = allUserIssues.map(i => i.identifier);
+
     // Sort by priority (1=Urgent first) then by state type (started before unstarted)
     const stateOrder: Record<string, number> = {
       'started': 0,
@@ -264,12 +349,12 @@ export async function fetchUserLinearData(
       'backlog': 3,
     };
 
-    userIssues.sort((a, b) => {
+    allUserIssues.sort((a, b) => {
       if (a.priority !== b.priority) return a.priority - b.priority;
       return (stateOrder[a.state.type] ?? 99) - (stateOrder[b.state.type] ?? 99);
     });
 
-    return { issues: userIssues };
+    return { issues: allUserIssues, allActiveIdentifiers };
   } catch (error) {
     console.error(`Failed to fetch Linear data for user ${userId}:`, error);
     return { issues: [] };

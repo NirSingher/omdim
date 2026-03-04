@@ -338,6 +338,26 @@ export async function markItemsInProgress(
   return updated;
 }
 
+/** Get recently done Linear items (items with [IDENTIFIER] prefix marked done within N days) */
+export async function getRecentlyDoneLinearItems(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  days: number = 7
+): Promise<string[]> {
+  const result = await db.query<{ text: string }>(
+    `SELECT text FROM work_items
+     WHERE slack_user_id = $1
+       AND daily_name = $2
+       AND status = 'done'
+       AND text LIKE '[%]%'
+       AND completed_date >= CURRENT_DATE - ($3 || ' days')::INTERVAL
+     ORDER BY completed_date DESC`,
+    [slackUserId, dailyName, days]
+  );
+  return result.map(r => r.text);
+}
+
 /** Get carry counts for in-progress items (for attention warnings) */
 export async function getInProgressCarryCounts(
   db: DbClient,
