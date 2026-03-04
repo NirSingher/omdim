@@ -9,6 +9,7 @@ global.fetch = vi.fn();
 
 import {
   calculateCycleProgress,
+  fetchUserAssignedIssues,
   fetchUserLinearData,
   fetchTeamCycleData,
 } from '../lib/linear';
@@ -124,6 +125,173 @@ describe('linear client', () => {
 
       expect(progress.startDate).toBe('2025-01-13');
       expect(progress.endDate).toBe('2025-01-27');
+    });
+  });
+
+  describe('fetchUserAssignedIssues', () => {
+    it('filters to only started issues and urgent (priority 1) issues', async () => {
+      const mockResponse = {
+        data: {
+          user: {
+            assignedIssues: {
+              nodes: [
+                {
+                  id: 'issue-1',
+                  identifier: 'ENG-100',
+                  title: 'In progress task',
+                  state: { name: 'In Progress', type: 'started' },
+                  priority: 3,
+                  url: 'https://linear.app/issue/ENG-100',
+                },
+                {
+                  id: 'issue-2',
+                  identifier: 'ENG-101',
+                  title: 'Urgent backlog',
+                  state: { name: 'Backlog', type: 'backlog' },
+                  priority: 1,
+                  url: 'https://linear.app/issue/ENG-101',
+                },
+                {
+                  id: 'issue-3',
+                  identifier: 'ENG-102',
+                  title: 'Medium priority unstarted',
+                  state: { name: 'Todo', type: 'unstarted' },
+                  priority: 2,
+                  url: 'https://linear.app/issue/ENG-102',
+                },
+                {
+                  id: 'issue-4',
+                  identifier: 'ENG-103',
+                  title: 'Low priority triage',
+                  state: { name: 'Triage', type: 'triage' },
+                  priority: 4,
+                  url: 'https://linear.app/issue/ENG-103',
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchUserAssignedIssues('token', 'user-1');
+
+      // Only started (ENG-100) and urgent/priority-1 (ENG-101) should remain
+      expect(result.issues).toHaveLength(2);
+      const identifiers = result.issues.map((i) => i.identifier);
+      expect(identifiers).toContain('ENG-100');
+      expect(identifiers).toContain('ENG-101');
+      // Non-started, non-urgent should be filtered out
+      expect(identifiers).not.toContain('ENG-102');
+      expect(identifiers).not.toContain('ENG-103');
+    });
+
+    it('keeps urgent issues even if unstarted', async () => {
+      const mockResponse = {
+        data: {
+          user: {
+            assignedIssues: {
+              nodes: [
+                {
+                  id: 'issue-1',
+                  identifier: 'ENG-200',
+                  title: 'Urgent unstarted',
+                  state: { name: 'Todo', type: 'unstarted' },
+                  priority: 1,
+                  url: 'https://linear.app/issue/ENG-200',
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchUserAssignedIssues('token', 'user-1');
+
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].identifier).toBe('ENG-200');
+    });
+
+    it('returns allActiveIdentifiers including pre-filter items', async () => {
+      const mockResponse = {
+        data: {
+          user: {
+            assignedIssues: {
+              nodes: [
+                {
+                  id: 'issue-1',
+                  identifier: 'ENG-100',
+                  title: 'In progress task',
+                  state: { name: 'In Progress', type: 'started' },
+                  priority: 3,
+                  url: 'https://linear.app/issue/ENG-100',
+                },
+                {
+                  id: 'issue-2',
+                  identifier: 'ENG-101',
+                  title: 'Low priority unstarted',
+                  state: { name: 'Todo', type: 'unstarted' },
+                  priority: 4,
+                  url: 'https://linear.app/issue/ENG-101',
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchUserAssignedIssues('token', 'user-1');
+
+      // Only started issue should be in issues
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].identifier).toBe('ENG-100');
+
+      // But allActiveIdentifiers should include both (pre-filter)
+      expect(result.allActiveIdentifiers).toEqual(['ENG-100', 'ENG-101']);
+    });
+
+    it('returns empty when no issues match filter', async () => {
+      const mockResponse = {
+        data: {
+          user: {
+            assignedIssues: {
+              nodes: [
+                {
+                  id: 'issue-1',
+                  identifier: 'ENG-300',
+                  title: 'Low priority backlog',
+                  state: { name: 'Backlog', type: 'backlog' },
+                  priority: 4,
+                  url: 'https://linear.app/issue/ENG-300',
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchUserAssignedIssues('token', 'user-1');
+
+      expect(result.issues).toHaveLength(0);
     });
   });
 
@@ -310,11 +478,38 @@ describe('linear client', () => {
       expect(result.issues[3].identifier).toBe('ENG-123'); // priority 4, unstarted
     });
 
-    it('returns empty array when no active cycle exists', async () => {
+    it('returns allActiveIdentifiers for cycle path (pre-filter)', async () => {
       const mockResponse = {
         data: {
           team: {
-            activeCycle: null,
+            activeCycle: {
+              id: 'cycle-1',
+              name: 'Sprint 42',
+              startsAt: '2025-01-13T00:00:00Z',
+              endsAt: '2025-01-27T00:00:00Z',
+              issues: {
+                nodes: [
+                  {
+                    id: 'issue-1',
+                    identifier: 'ENG-123',
+                    title: 'Active issue',
+                    state: { name: 'In Progress', type: 'started' },
+                    priority: 1,
+                    url: 'https://linear.app/issue/ENG-123',
+                    assignee: { id: 'user-1' },
+                  },
+                  {
+                    id: 'issue-2',
+                    identifier: 'ENG-124',
+                    title: 'Backlog item',
+                    state: { name: 'Backlog', type: 'backlog' },
+                    priority: 4,
+                    url: 'https://linear.app/issue/ENG-124',
+                    assignee: { id: 'user-1' },
+                  },
+                ],
+              },
+            },
           },
         },
       };
@@ -323,6 +518,156 @@ describe('linear client', () => {
         ok: true,
         json: async () => mockResponse,
       });
+
+      const result = await fetchUserLinearData('token', 'team-1', 'user-1');
+
+      // allActiveIdentifiers should include all non-completed user issues
+      expect(result.allActiveIdentifiers).toEqual(['ENG-123', 'ENG-124']);
+      // But issues list may be filtered differently
+      expect(result.issues.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('returns allActiveIdentifiers for fallback path (pre-filter)', async () => {
+      const cycleResponse = {
+        data: { team: { activeCycle: null } },
+      };
+      const teamIssuesResponse = {
+        data: {
+          team: {
+            issues: {
+              nodes: [
+                {
+                  id: 'issue-1',
+                  identifier: 'ENG-500',
+                  title: 'Started task',
+                  state: { name: 'In Progress', type: 'started' },
+                  priority: 3,
+                  url: 'https://linear.app/issue/ENG-500',
+                  assignee: { id: 'user-1' },
+                },
+                {
+                  id: 'issue-2',
+                  identifier: 'ENG-501',
+                  title: 'Low priority unstarted',
+                  state: { name: 'Todo', type: 'unstarted' },
+                  priority: 3,
+                  url: 'https://linear.app/issue/ENG-501',
+                  assignee: { id: 'user-1' },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => cycleResponse })
+        .mockResolvedValueOnce({ ok: true, json: async () => teamIssuesResponse });
+
+      const result = await fetchUserLinearData('token', 'team-1', 'user-1');
+
+      // Only started issue in issues list
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].identifier).toBe('ENG-500');
+
+      // But allActiveIdentifiers includes both
+      expect(result.allActiveIdentifiers).toEqual(['ENG-500', 'ENG-501']);
+    });
+
+    it('falls back to team issues query when no active cycle, filtering to started + urgent', async () => {
+      // First call: cycle query returns no active cycle
+      const cycleResponse = {
+        data: {
+          team: {
+            activeCycle: null,
+          },
+        },
+      };
+
+      // Second call: team issues fallback
+      const teamIssuesResponse = {
+        data: {
+          team: {
+            issues: {
+              nodes: [
+                {
+                  id: 'issue-1',
+                  identifier: 'ENG-500',
+                  title: 'Started task',
+                  state: { name: 'In Progress', type: 'started' },
+                  priority: 3,
+                  url: 'https://linear.app/issue/ENG-500',
+                  assignee: { id: 'user-1' },
+                },
+                {
+                  id: 'issue-2',
+                  identifier: 'ENG-501',
+                  title: 'Urgent backlog',
+                  state: { name: 'Backlog', type: 'backlog' },
+                  priority: 1,
+                  url: 'https://linear.app/issue/ENG-501',
+                  assignee: { id: 'user-1' },
+                },
+                {
+                  id: 'issue-3',
+                  identifier: 'ENG-502',
+                  title: 'Low priority unstarted',
+                  state: { name: 'Todo', type: 'unstarted' },
+                  priority: 3,
+                  url: 'https://linear.app/issue/ENG-502',
+                  assignee: { id: 'user-1' },
+                },
+                {
+                  id: 'issue-4',
+                  identifier: 'ENG-503',
+                  title: 'Other user started',
+                  state: { name: 'In Progress', type: 'started' },
+                  priority: 2,
+                  url: 'https://linear.app/issue/ENG-503',
+                  assignee: { id: 'user-2' },
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => cycleResponse })
+        .mockResolvedValueOnce({ ok: true, json: async () => teamIssuesResponse });
+
+      const result = await fetchUserLinearData('token', 'team-1', 'user-1');
+
+      // Only user-1's started (ENG-500) and urgent (ENG-501) issues
+      expect(result.issues).toHaveLength(2);
+      const identifiers = result.issues.map((i) => i.identifier);
+      expect(identifiers).toContain('ENG-500');
+      expect(identifiers).toContain('ENG-501');
+      expect(identifiers).not.toContain('ENG-502'); // not started, not urgent
+      expect(identifiers).not.toContain('ENG-503'); // different user
+
+      // Verify two API calls were made
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns empty when no active cycle and fallback also has no team', async () => {
+      const cycleResponse = {
+        data: {
+          team: {
+            activeCycle: null,
+          },
+        },
+      };
+
+      const teamIssuesResponse = {
+        data: {
+          team: null,
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => cycleResponse })
+        .mockResolvedValueOnce({ ok: true, json: async () => teamIssuesResponse });
 
       const result = await fetchUserLinearData('token', 'team-1', 'user-1');
 

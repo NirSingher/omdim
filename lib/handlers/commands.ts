@@ -851,7 +851,7 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
 
     // Fetch Linear issues and GitHub PRs in parallel
     const interactionCtx = { db: ctx.db, slackToken: ctx.slackToken, env: ctx.env || {} };
-    const [linearIssues, githubResult] = await Promise.all([
+    const [linearResult, githubResult] = await Promise.all([
       fetchLinearIssuesForUser(daily, ctx.userId, interactionCtx),
       fetchGitHubPRsForUser(daily, ctx.userId, interactionCtx),
     ]);
@@ -865,7 +865,7 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       targetDate,
       mode,
       prefill,
-      linearIssues,
+      linearResult.issues,
       githubResult.prData,
       githubResult.reviewerMap
     );

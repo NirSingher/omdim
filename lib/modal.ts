@@ -112,7 +112,9 @@ export function buildStandupModal(
   prefill?: SubmissionPrefill,
   linearIssues?: LinearIssue[],
   prData?: UserPRData,
-  reviewerMap?: Map<string, string>
+  reviewerMap?: Map<string, string>,
+  doneIdentifiers?: Set<string>,
+  autoCompletedIds?: Set<string>
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -128,6 +130,15 @@ export function buildStandupModal(
       yesterdayIntegrationIds.add(match[1]);
     }
   }
+  // Also suppress Linear checkboxes for recently done items
+  if (doneIdentifiers?.size) {
+    if (linearIssues) {
+      linearIssues = linearIssues.filter(
+        issue => !doneIdentifiers.has(issue.identifier)
+      );
+    }
+  }
+
   if (yesterdayIntegrationIds.size > 0) {
     if (linearIssues) {
       linearIssues = linearIssues.filter(
@@ -199,6 +210,9 @@ export function buildStandupModal(
     // Add a dropdown for each yesterday's plan item
     yesterdayPlans.forEach((plan, index) => {
       const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
+      const linearId = plan.match(/^\[([^\]]+)\]\s/)?.[1];
+      const isAutoCompleted = linearId && autoCompletedIds?.has(linearId);
+
       blocks.push({
         type: 'section',
         block_id: `yesterday_item_${index}`,
@@ -210,7 +224,11 @@ export function buildStandupModal(
           type: 'static_select',
           action_id: `item_status_${index}`,
           options: YESTERDAY_ITEM_OPTIONS,
-          initial_option: isInProgress ? YESTERDAY_ITEM_OPTIONS[1] : YESTERDAY_ITEM_OPTIONS[0],
+          initial_option: isAutoCompleted
+            ? YESTERDAY_ITEM_OPTIONS[2]   // Done
+            : isInProgress
+            ? YESTERDAY_ITEM_OPTIONS[1]   // In progress
+            : YESTERDAY_ITEM_OPTIONS[0],  // Carry over
         },
       });
     });

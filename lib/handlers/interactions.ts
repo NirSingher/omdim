@@ -23,10 +23,11 @@ import {
   setGitHubUsername,
   setLinearUserId,
   getUsersWithGitHubLinks,
+  getRecentlyDoneLinearItems,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
-import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue } from '../linear';
+import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData } from '../linear';
 import { postStandupToChannel } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
@@ -77,21 +78,40 @@ export interface InteractionPayload {
 // Helpers
 // ============================================================================
 
+/** Timeout for integration API calls — must finish well within Slack's 3-second limit */
+const INTEGRATION_TIMEOUT_MS = 2000;
+
+/** Race a promise against a timeout. Rejects on timeout so callers' catch blocks handle it. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
 /**
  * Fetch Linear issues for a user if Linear integration is enabled for the daily
  */
+interface LinearFetchResult {
+  issues: LinearIssue[];
+  allActiveIdentifiers: string[];
+}
+
 export async function fetchLinearIssuesForUser(
   daily: ReturnType<typeof getDaily>,
   userId: string,
   ctx: InteractionContext
-): Promise<LinearIssue[]> {
-  if (!daily) return [];
+): Promise<LinearFetchResult> {
+  const empty: LinearFetchResult = { issues: [], allActiveIdentifiers: [] };
+  if (!daily) return empty;
 
   const linearConfig = getLinearConfig(daily);
-  if (!linearConfig || !ctx.env) return [];
+  if (!linearConfig || !ctx.env) return empty;
 
   const linearToken = ctx.env[linearConfig.tokenEnvVar];
-  if (!linearToken) return [];
+  if (!linearToken) return empty;
 
   // Get Linear user ID: config mapping takes precedence over DB
   let linearUserId = getLinearUserIdFromConfig(daily, userId);
@@ -99,7 +119,7 @@ export async function fetchLinearIssuesForUser(
     linearUserId = await getLinearUserId(ctx.db, userId);
   }
 
-  if (!linearUserId) return [];
+  if (!linearUserId) return empty;
 
   // Get per-user team ID (user mapping overrides daily default)
   const teamId = getLinearTeamIdForUser(daily, userId);
@@ -107,14 +127,20 @@ export async function fetchLinearIssuesForUser(
   try {
     // If no team_id configured, use cross-team user query
     if (!teamId) {
-      const data = await fetchUserAssignedIssues(linearToken, linearUserId);
-      return data.issues;
+      const data = await withTimeout(
+        fetchUserAssignedIssues(linearToken, linearUserId),
+        INTEGRATION_TIMEOUT_MS, 'Linear API'
+      );
+      return { issues: data.issues, allActiveIdentifiers: data.allActiveIdentifiers || [] };
     }
-    const data = await fetchUserLinearData(linearToken, teamId, linearUserId);
-    return data.issues;
+    const data = await withTimeout(
+      fetchUserLinearData(linearToken, teamId, linearUserId),
+      INTEGRATION_TIMEOUT_MS, 'Linear API'
+    );
+    return { issues: data.issues, allActiveIdentifiers: data.allActiveIdentifiers || [] };
   } catch (error) {
     console.error('Failed to fetch Linear data:', error);
-    return [];
+    return empty;
   }
 }
 
@@ -170,10 +196,13 @@ export async function fetchGitHubPRsForUser(
   if (!githubUsername) return {};
 
   try {
-    const [prData, reviewerMap] = await Promise.all([
-      fetchUserPRData(githubToken, githubUsername, githubConfig.org),
-      buildGitHubUserMap(daily, ctx.db),
-    ]);
+    const [prData, reviewerMap] = await withTimeout(
+      Promise.all([
+        fetchUserPRData(githubToken, githubUsername, githubConfig.org),
+        buildGitHubUserMap(daily, ctx.db),
+      ]),
+      INTEGRATION_TIMEOUT_MS, 'GitHub API'
+    );
     return { prData, reviewerMap };
   } catch (error) {
     console.error('Failed to fetch GitHub PR data:', error);
@@ -255,13 +284,47 @@ export async function handleOpenStandup(
   }
 
   // Fetch Linear issues and GitHub PRs in parallel
-  const [linearIssues, githubResult] = await Promise.all([
+  const [linearResult, githubResult] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
   ]);
 
+  // Compute done suppression and auto-completed sets
+  let doneIdentifiers: Set<string> | undefined;
+  let autoCompletedIds: Set<string> | undefined;
+
+  if (linearResult.allActiveIdentifiers.length > 0 || yesterdayData) {
+    try {
+      // Get recently done Linear identifiers from DB (7-day window)
+      const recentlyDoneItems = await getRecentlyDoneLinearItems(ctx.db, userId, dailyName);
+      const doneIds = new Set(
+        recentlyDoneItems.map(text => text.match(/^\[([^\]]+)\]/)?.[1]).filter((id): id is string => !!id)
+      );
+      if (doneIds.size > 0) {
+        doneIdentifiers = doneIds;
+      }
+
+      // Detect auto-completed: yesterday Linear items no longer active on Linear
+      if (yesterdayData && linearResult.allActiveIdentifiers.length > 0) {
+        const activeSet = new Set(linearResult.allActiveIdentifiers);
+        const autoDone = new Set<string>();
+        for (const plan of yesterdayData.plans) {
+          const match = plan.match(/^\[([^\]]+)\]\s/);
+          if (match && !activeSet.has(match[1]) && !doneIds.has(match[1])) {
+            autoDone.add(match[1]);
+          }
+        }
+        if (autoDone.size > 0) {
+          autoCompletedIds = autoDone;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to compute done/auto-completed sets:', error);
+    }
+  }
+
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearIssues, githubResult.prData, githubResult.reviewerMap);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -675,10 +738,42 @@ export async function handleHomeStartDaily(
   }
 
   // Fetch Linear issues and GitHub PRs in parallel
-  const [linearIssues, githubResult] = await Promise.all([
+  const [linearResult, githubResult] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
   ]);
+
+  // Compute done suppression and auto-completed sets
+  let doneIdentifiers: Set<string> | undefined;
+  let autoCompletedIds: Set<string> | undefined;
+
+  if (linearResult.allActiveIdentifiers.length > 0 || yesterdayData) {
+    try {
+      const recentlyDoneItems = await getRecentlyDoneLinearItems(ctx.db, userId, dailyName);
+      const doneIds = new Set(
+        recentlyDoneItems.map(text => text.match(/^\[([^\]]+)\]/)?.[1]).filter((id): id is string => !!id)
+      );
+      if (doneIds.size > 0) {
+        doneIdentifiers = doneIds;
+      }
+
+      if (yesterdayData && linearResult.allActiveIdentifiers.length > 0) {
+        const activeSet = new Set(linearResult.allActiveIdentifiers);
+        const autoDone = new Set<string>();
+        for (const plan of yesterdayData.plans) {
+          const match = plan.match(/^\[([^\]]+)\]\s/);
+          if (match && !activeSet.has(match[1]) && !doneIds.has(match[1])) {
+            autoDone.add(match[1]);
+          }
+        }
+        if (autoDone.size > 0) {
+          autoCompletedIds = autoDone;
+        }
+      }
+    } catch (error) {
+      console.error('Failed to compute done/auto-completed sets:', error);
+    }
+  }
 
   // Build and open modal
   const modal = buildStandupModal(
@@ -689,9 +784,11 @@ export async function handleHomeStartDaily(
     targetDate,
     mode,
     prefill,
-    linearIssues,
+    linearResult.issues,
     githubResult.prData,
-    githubResult.reviewerMap
+    githubResult.reviewerMap,
+    doneIdentifiers,
+    autoCompletedIds
   );
 
   return openModal(ctx.slackToken, triggerId, modal);
