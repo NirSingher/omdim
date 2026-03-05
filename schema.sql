@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS slack_users (
   tz_offset INTEGER NOT NULL DEFAULT 0,
   github_username TEXT,  -- Optional: linked GitHub username for PR integration
   linear_user_id TEXT,   -- Optional: linked Linear user ID for ticket integration
+  dm_standup BOOLEAN DEFAULT TRUE, -- Whether to send DM copy of standup posts
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS reminder_log (
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;
 -- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS yesterday_in_progress JSONB;
+-- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS dm_standup BOOLEAN DEFAULT TRUE;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (

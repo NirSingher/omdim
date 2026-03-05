@@ -3,7 +3,7 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId } from '../db';
+import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference } from '../db';
 import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -42,6 +42,7 @@ interface DailyStatus {
 export interface LinkedAccounts {
   github: string | null;  // username or null
   linear: string | null;  // user ID or null
+  dmStandup: boolean;     // whether DM standup copies are enabled
 }
 
 /**
@@ -207,6 +208,31 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
       });
     }
 
+    // DM preferences
+    blocks.push({
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: '⚙️ Preferences',
+        emoji: true,
+      },
+    });
+
+    const dmStatus = linkedAccounts.dmStandup ? '✅ Enabled' : '❌ Disabled';
+    const dmButtonText = linkedAccounts.dmStandup ? 'Disable' : 'Enable';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*DM standup copy*\n${dmStatus} — get a private copy of your standup when it posts to the channel`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: dmButtonText, emoji: true },
+        action_id: 'home_toggle_dm_standup',
+      },
+    });
+
     blocks.push({ type: 'divider' });
   }
 
@@ -336,14 +362,16 @@ export async function handleAppHomeOpened(
       });
     }
 
-    // Fetch linked accounts
-    const [githubUsername, linearUserId] = await Promise.all([
+    // Fetch linked accounts and preferences
+    const [githubUsername, linearUserId, dmStandup] = await Promise.all([
       getGitHubUsername(ctx.db, userId),
       getLinearUserId(ctx.db, userId),
+      getDmStandupPreference(ctx.db, userId),
     ]);
     const linkedAccounts: LinkedAccounts = {
       github: githubUsername,
       linear: linearUserId,
+      dmStandup,
     };
 
     // Build and publish the home view

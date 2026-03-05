@@ -51,6 +51,7 @@ export interface SlackUser {
   tz: string | null;
   tz_offset: number;
   github_username: string | null;
+  dm_standup: boolean | null;
   updated_at: Date;
 }
 
@@ -200,6 +201,38 @@ export async function getUsersWithLinearLinks(
     slackUserId: r.slack_user_id,
     linearUserId: r.linear_user_id,
   }));
+}
+
+// ============================================================================
+// DM Standup Preference
+// ============================================================================
+
+/** Get whether user wants DM copies of standup posts (default: true) */
+export async function getDmStandupPreference(
+  db: DbClient,
+  slackUserId: string
+): Promise<boolean> {
+  const result = await db.query<{ dm_standup: boolean | null }>(
+    `SELECT dm_standup FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  // Default to true if no row or null
+  return result[0]?.dm_standup ?? true;
+}
+
+/** Set whether user wants DM copies of standup posts */
+export async function setDmStandupPreference(
+  db: DbClient,
+  slackUserId: string,
+  enabled: boolean
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, dm_standup, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       dm_standup = $3`,
+    [slackUserId, enabled, enabled]
+  );
 }
 
 // ============================================================================
