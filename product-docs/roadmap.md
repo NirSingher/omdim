@@ -52,6 +52,10 @@ See `requirements.md` and `architecture.md`
 - [ ] `/standup admin remove @user` - remove admin
 - [ ] `/standup admin list` - show all admins
 - [ ] Define super-admins in config (can manage other admins)
+- [ ] `/standup manager add <daily> @user` - admin assigns a daily manager
+- [ ] `/standup manager remove <daily> @user` - admin removes a daily manager
+- [ ] `/standup manager list <daily>` - show managers for a daily
+- [ ] Daily managers receive digest and report without being reporters
 
 ### Force Prompt Command (Partial)
 - [x] `/standup force-prompt <daily>` - dev mode command to force prompt yourself
@@ -66,6 +70,21 @@ See `requirements.md` and `architecture.md`
 - [ ] Use `:arrow_right:` for continued items
 - [ ] Use `:x:` for dropped items
 - [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
+
+### Schedule-Aware Prompting
+Respect off-days in the daily schedule — don't prompt on weekends or other non-working days.
+
+- [ ] Read `schedule` config per-daily to determine working days
+- [ ] Skip cron-triggered prompts on off-days (e.g., weekends)
+- [ ] OOO and off-day logic combined: neither prompts nor counts as "missing"
+- [ ] `/standup force-prompt` still works on off-days (manual override)
+
+### Send Daily Back to Submitter
+After submitting a standup, DM the user their own formatted standup for reference.
+
+- [ ] On submission, format the user's standup as a clean DM
+- [ ] Include status icons (done/carry/drop/in-progress) and integration items
+- [ ] Configurable per-daily: `send_receipt: true|false` (default true)
 
 ### "All Dailies" Support ✅
 - [x] Support `all` as daily name in commands (e.g., `/standup digest all`)
@@ -122,6 +141,11 @@ dailies:
 - [x] Unmapped reviewer dropdowns in modal for self-service linking
 - [x] Stale review detection (>3 days) in manager digest
 - [x] Review load analytics (pending reviews per team member) in digest
+
+**PR Filtering**
+- [ ] Exclude PRs where user has commented and is awaiting author response
+- [ ] Only show review requests that actually need the user's action
+- [ ] Detect "ball in their court" vs "ball in your court" via comment recency
 
 **Work Alignment**
 - [ ] Compare "today's plans" keywords to commit messages/PR titles
@@ -186,10 +210,12 @@ dailies:
 ```
 
 ### Flexible Digest & Report Recipients
-Any Slack member can be configured to receive digest and/or report per daily — not just managers.
+Any Slack workspace member can be a **daily manager** — receiving digest and report without being a reporter themselves.
 
-- [ ] `digest_recipients` and `report_recipients` config arrays per daily
-- [ ] Each entry specifies a Slack user ID
+- [ ] `managers` list expanded: any Slack user, not just participants
+- [ ] Admin-assigned via `/standup manager add <daily> @user` (see Phase 1.5)
+- [ ] DB-stored manager list (supplements config `managers`)
+- [ ] `digest_recipients` and `report_recipients` config arrays per daily (optional override)
 - [ ] Falls back to `managers` list if recipients not configured
 - [ ] Self-subscribe command: `/standup subscribe <daily> digest|report`
 - [ ] Unsubscribe: `/standup unsubscribe <daily> digest|report`
@@ -197,9 +223,9 @@ Any Slack member can be configured to receive digest and/or report per daily —
 ```yaml
 dailies:
   - name: "engineering-daily"
-    managers: ["U123"]
-    digest_recipients: ["U123", "U456", "U789"]   # Broader than managers
-    report_recipients: ["U123"]                     # Narrower for full report
+    managers: ["U123"]                               # Get digest + report
+    digest_recipients: ["U123", "U456", "U789"]      # Optional override
+    report_recipients: ["U123"]                       # Optional override
 ```
 
 ---
@@ -225,20 +251,22 @@ When a Linear issue's status changes, reflect it in the user's standup items aut
 - [ ] Notify user in DM when auto-updates happen: "Linear updated: [issue] → Done"
 - [ ] Configurable: `auto_sync: true|false` per daily
 
-### Priority Misalignment Detection
-Flag in digest when someone is working on lower-priority items while higher-priority Linear items are available.
+### Priority Alignment Reporting
+Surface whether team members are working on the right things according to Linear priorities.
 
 - [ ] Pull priority/urgency from Linear for user's assigned issues
 - [ ] Compare active standup items against Linear priority ordering
-- [ ] Digest flag: "Working on P3 while P1 items are unstarted"
+- [ ] **Digest**: per-user alignment summary (on-track / off-track flag)
+- [ ] **Report**: priority alignment score per user with details
+- [ ] **Individual DM**: send alignment report to off-track individuals directly
 - [ ] Respect context — only flag when higher-priority items are unblocked and actionable
-- [ ] Configurable sensitivity: `off` / `flag_in_digest` / `dm_user`
+- [ ] Configurable sensitivity: `off` / `digest_only` / `digest_and_dm`
 
 ```yaml
 integrations:
   linear:
     enabled: true
-    priority_tracking: "flag_in_digest"   # off | flag_in_digest | dm_user
+    priority_tracking: "digest_and_dm"    # off | digest_only | digest_and_dm
     plan_alignment: "soft"                # off | soft | strict
     auto_sync: true
 ```
@@ -262,8 +290,8 @@ integrations:
 3. **Stats**: Store aggregated stats or compute on-demand?
 4. **In-progress threshold**: Is 3 days the right default, or should it be configurable per-daily?
 5. **Linear sync direction**: Webhook (real-time, needs public endpoint) vs polling (simpler, slight delay)?
-6. **Priority misalignment**: Should this block standup submission (strict mode) or purely advisory?
-7. **Self-subscribe**: Should non-managers be able to self-subscribe to digests, or admin-only?
+6. ~~**Priority misalignment**: Should this block standup submission (strict mode) or purely advisory?~~ → Advisory only (digest + DM to individual, decided)
+7. ~~**Self-subscribe**: Should non-managers be able to self-subscribe to digests, or admin-only?~~ → Admin assigns managers via `/standup manager add`; self-subscribe TBD
 
 ---
 
