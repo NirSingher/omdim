@@ -3,7 +3,7 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference } from '../db';
+import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference } from '../db';
 import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -35,6 +35,8 @@ interface DailyStatus {
   dailyName: string;
   todaySubmitted: boolean;
   tomorrowScheduled: boolean;
+  submission?: Submission; // Today's submission for stats
+  droppedCount?: number; // Items dropped from yesterday
   prData?: UserPRData; // GitHub PR data if integration enabled
   linearData?: UserLinearData; // Linear data if integration enabled
 }
@@ -90,8 +92,27 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
         ? (status.tomorrowScheduled ? 'Tomorrow scheduled' : 'Today done')
         : 'Not submitted';
 
-      // Build status line with optional PR and Linear info
+      // Build status line with optional submission stats, PR and Linear info
       let statusLine = `${statusEmoji} ${statusText}`;
+
+      // Submission stats: planned, carried over, dropped
+      if (status.submission) {
+        const plans = parseJsonArray(status.submission.today_plans);
+        const incomplete = parseJsonArray(status.submission.yesterday_incomplete);
+        const inProgress = parseJsonArray(status.submission.yesterday_in_progress);
+        const totalPlanned = plans.length + incomplete.length + inProgress.length;
+        const carriedOver = incomplete.length + inProgress.length;
+        const dropped = status.droppedCount || 0;
+
+        if (totalPlanned > 0 || dropped > 0) {
+          const parts: string[] = [];
+          if (totalPlanned > 0) parts.push(`${totalPlanned} planned`);
+          if (carriedOver > 0) parts.push(`${carriedOver} carried over`);
+          if (dropped > 0) parts.push(`${dropped} dropped`);
+          statusLine += `\n📋 ${parts.join(' · ')}`;
+        }
+      }
+
       if (status.prData) {
         const prParts: string[] = [];
         if (status.prData.draftPRs.length > 0) {
@@ -253,6 +274,17 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
   };
 }
 
+/** Parse JSONB arrays from database (handles both array and string formats) */
+function parseJsonArray(value: string[] | null): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    return JSON.parse(value as unknown as string);
+  } catch {
+    return [];
+  }
+}
+
 // ============================================================================
 // Event Handler
 // ============================================================================
@@ -353,10 +385,31 @@ export async function handleAppHomeOpened(
         }
       }
 
+      // Compute dropped count from previous submission
+      let droppedCount: number | undefined;
+      if (todaySubmission) {
+        const prevSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
+        if (prevSubmission) {
+          const prevPlans = new Set([
+            ...parseJsonArray(prevSubmission.today_plans),
+            ...parseJsonArray(prevSubmission.yesterday_incomplete),
+            ...parseJsonArray(prevSubmission.yesterday_in_progress),
+          ]);
+          const accountedFor = new Set([
+            ...parseJsonArray(todaySubmission.yesterday_completed),
+            ...parseJsonArray(todaySubmission.yesterday_incomplete),
+            ...parseJsonArray(todaySubmission.yesterday_in_progress),
+          ]);
+          droppedCount = [...prevPlans].filter(item => !accountedFor.has(item)).length;
+        }
+      }
+
       dailyStatuses.push({
         dailyName,
         todaySubmitted,
         tomorrowScheduled,
+        submission: todaySubmission || undefined,
+        droppedCount,
         prData,
         linearData,
       });
