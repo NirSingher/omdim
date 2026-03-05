@@ -12,6 +12,7 @@ import {
   fetchApprovedPRs,
   fetchAwaitingReviewPRs,
   fetchReviewRequests,
+  fetchPRsNeedingReReview,
   fetchUserPRData,
   extractPRSlug,
   formatPRRef,
@@ -325,9 +326,152 @@ describe('github client', () => {
     });
   });
 
+  describe('fetchPRsNeedingReReview', () => {
+    it('includes PRs updated after user last review', async () => {
+      // Search response: PRs user reviewed
+      const mockSearchResponse = {
+        total_count: 1,
+        items: [
+          {
+            number: 42,
+            title: 'Updated after review',
+            html_url: 'https://github.com/myorg/repo/pull/42',
+            user: { login: 'bob' },
+            created_at: '2025-01-10T10:00:00Z',
+            updated_at: '2025-01-18T10:00:00Z', // Updated Jan 18
+            draft: false,
+            requested_reviewers: [],
+          },
+        ],
+      };
+
+      // Reviews response: user's last review was Jan 15
+      const mockReviewsResponse = [
+        {
+          user: { login: 'alice' },
+          submitted_at: '2025-01-15T10:00:00Z',
+        },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => mockSearchResponse })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviewsResponse });
+
+      const result = await fetchPRsNeedingReReview('token', 'alice', 'myorg');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(42);
+      expect(result[0].author).toBe('bob');
+    });
+
+    it('excludes PRs not updated after user last review', async () => {
+      const mockSearchResponse = {
+        total_count: 1,
+        items: [
+          {
+            number: 43,
+            title: 'Not updated since review',
+            html_url: 'https://github.com/myorg/repo/pull/43',
+            user: { login: 'bob' },
+            created_at: '2025-01-10T10:00:00Z',
+            updated_at: '2025-01-14T10:00:00Z', // Updated Jan 14 (before review)
+            draft: false,
+            requested_reviewers: [],
+          },
+        ],
+      };
+
+      // User reviewed on Jan 15 (after the PR was last updated)
+      const mockReviewsResponse = [
+        {
+          user: { login: 'alice' },
+          submitted_at: '2025-01-15T10:00:00Z',
+        },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => mockSearchResponse })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviewsResponse });
+
+      const result = await fetchPRsNeedingReReview('token', 'alice', 'myorg');
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('uses latest review when user has multiple reviews', async () => {
+      const mockSearchResponse = {
+        total_count: 1,
+        items: [
+          {
+            number: 44,
+            title: 'Multiple reviews',
+            html_url: 'https://github.com/myorg/repo/pull/44',
+            user: { login: 'bob' },
+            created_at: '2025-01-10T10:00:00Z',
+            updated_at: '2025-01-17T10:00:00Z', // Updated Jan 17
+            draft: false,
+            requested_reviewers: [],
+          },
+        ],
+      };
+
+      // User reviewed twice — latest on Jan 18 (after update)
+      const mockReviewsResponse = [
+        {
+          user: { login: 'alice' },
+          submitted_at: '2025-01-12T10:00:00Z',
+        },
+        {
+          user: { login: 'alice' },
+          submitted_at: '2025-01-18T10:00:00Z',
+        },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => mockSearchResponse })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviewsResponse });
+
+      const result = await fetchPRsNeedingReReview('token', 'alice', 'myorg');
+
+      // Latest review (Jan 18) is after updated_at (Jan 17), so no re-review needed
+      expect(result).toHaveLength(0);
+    });
+
+    it('returns empty on search API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => 'Forbidden',
+      });
+
+      const result = await fetchPRsNeedingReReview('token', 'alice', 'myorg');
+
+      expect(result).toEqual([]);
+    });
+
+    it('constructs correct search query excluding author and review-requested', async () => {
+      const mockResponse = { total_count: 0, items: [] };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      await fetchPRsNeedingReReview('token', 'alice', 'myorg');
+
+      const fetchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const url = fetchCall[0] as string;
+
+      expect(url).toContain('reviewed-by%3Aalice');
+      expect(url).toContain('-review-requested%3Aalice');
+      expect(url).toContain('-author%3Aalice');
+      expect(url).toContain('org%3Amyorg');
+    });
+  });
+
   describe('fetchUserPRData', () => {
-    it('fetches all four PR categories in parallel', async () => {
-      // Mock responses for all four endpoints
+    it('fetches all five PR categories in parallel and merges re-review PRs', async () => {
+      // Mock responses for all five endpoints
       const mockDrafts = {
         total_count: 1,
         items: [
@@ -391,11 +535,14 @@ describe('github client', () => {
         ],
       };
 
+      const mockReReview = { total_count: 0, items: [] };
+
       (global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ok: true, json: async () => mockDrafts })
         .mockResolvedValueOnce({ ok: true, json: async () => mockApproved })
         .mockResolvedValueOnce({ ok: true, json: async () => mockAwaitingReview })
-        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews });
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews })
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReReview });
 
       const result = await fetchUserPRData('token', 'alice', 'myorg');
 
@@ -410,11 +557,82 @@ describe('github client', () => {
       expect(result.reviewRequests[0].number).toBe(789);
     });
 
+    it('deduplicates re-review PRs that overlap with review requests', async () => {
+      const emptyResponse = { total_count: 0, items: [] };
+
+      // reviewRequests returns PR #789
+      const mockReviews = {
+        total_count: 1,
+        items: [
+          {
+            number: 789,
+            title: 'Review request',
+            html_url: 'https://github.com/myorg/repo/pull/789',
+            user: { login: 'bob' },
+            created_at: '2025-01-15T10:00:00Z',
+            updated_at: '2025-01-16T14:30:00Z',
+            draft: false,
+          },
+        ],
+      };
+
+      // re-review also returns PR #789 (duplicate) and #790 (unique)
+      const mockReReviewSearch = {
+        total_count: 2,
+        items: [
+          {
+            number: 789,
+            title: 'Review request (duplicate)',
+            html_url: 'https://github.com/myorg/repo/pull/789',
+            user: { login: 'bob' },
+            created_at: '2025-01-15T10:00:00Z',
+            updated_at: '2025-01-18T10:00:00Z',
+            draft: false,
+            requested_reviewers: [],
+          },
+          {
+            number: 790,
+            title: 'Needs re-review',
+            html_url: 'https://github.com/myorg/repo2/pull/790',
+            user: { login: 'charlie' },
+            created_at: '2025-01-14T10:00:00Z',
+            updated_at: '2025-01-18T10:00:00Z',
+            draft: false,
+            requested_reviewers: [],
+          },
+        ],
+      };
+
+      const mockReviews789 = [
+        { user: { login: 'alice' }, submitted_at: '2025-01-16T10:00:00Z' },
+      ];
+      const mockReviews790 = [
+        { user: { login: 'alice' }, submitted_at: '2025-01-16T10:00:00Z' },
+      ];
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => emptyResponse }) // drafts
+        .mockResolvedValueOnce({ ok: true, json: async () => emptyResponse }) // approved
+        .mockResolvedValueOnce({ ok: true, json: async () => emptyResponse }) // awaiting
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews }) // review requests
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReReviewSearch }) // re-review search
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews789 }) // reviews for #789
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews790 }); // reviews for #790
+
+      const result = await fetchUserPRData('token', 'alice', 'myorg');
+
+      // #789 from reviewRequests + #790 from re-review (789 deduplicated)
+      expect(result.reviewRequests).toHaveLength(2);
+      expect(result.reviewRequests[0].number).toBe(789);
+      expect(result.reviewRequests[1].number).toBe(790);
+    });
+
     it('handles partial failures gracefully', async () => {
       const mockDrafts = { total_count: 0, items: [] };
 
       (global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ok: true, json: async () => mockDrafts })
+        .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' })
         .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' })
         .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' })
         .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Error' });
