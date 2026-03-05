@@ -212,12 +212,17 @@ export async function getDmStandupPreference(
   db: DbClient,
   slackUserId: string
 ): Promise<boolean> {
-  const result = await db.query<{ dm_standup: boolean | null }>(
-    `SELECT dm_standup FROM slack_users WHERE slack_user_id = $1`,
-    [slackUserId]
-  );
-  // Default to true if no row or null
-  return result[0]?.dm_standup ?? true;
+  try {
+    const result = await db.query<{ dm_standup: boolean | null }>(
+      `SELECT dm_standup FROM slack_users WHERE slack_user_id = $1`,
+      [slackUserId]
+    );
+    // Default to true if no row or null
+    return result[0]?.dm_standup ?? true;
+  } catch {
+    // Column may not exist yet (pre-migration) — default to true
+    return true;
+  }
 }
 
 /** Set whether user wants DM copies of standup posts */

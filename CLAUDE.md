@@ -3,7 +3,21 @@
 ## Project Overview
 Async daily standup Slack bot. Serverless on Cloudflare Workers with Neon Postgres.
 
+## Roadmap
+
+**`product-docs/roadmap.md` is the single source of truth for what to build.**
+
+### Before starting work
+- Read the roadmap to understand what's shipped, what's next, and what's planned.
+- If the user asks for work that isn't on the roadmap, flag it: _"This isn't on the roadmap. Want to add it, or should we pick from what's planned?"_
+- Don't silently start work on unplanned features.
+
+### After completing work
+- Update the roadmap to reflect what shipped. Move completed items to the **Shipped** section, check off line items, and remove them from **Up Next** / **Planned**.
+- If new work was added mid-session, make sure it's captured in the appropriate roadmap section.
+
 ## Key Docs
+- `product-docs/roadmap.md` - What's shipped, what's next, what's planned
 - `README.md` - Setup and usage guide
 - `CONTRIBUTING.md` - Git workflow and local development
 - `AGENTS.md` - AI agent instructions

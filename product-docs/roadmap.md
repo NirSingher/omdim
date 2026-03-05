@@ -1,23 +1,14 @@
 # Omdim Roadmap
 
-## Phase 1: Foundation
+## Shipped
 
-### MVP (Done)
+### MVP ✅
 See `requirements.md` and `architecture.md`
 
 ### Testing Infrastructure ✅
 - [x] Unit tests for core logic (modal building, formatting, date/timezone)
 - [x] Integration tests for Slack payload parsing
 - [x] Mock Slack API responses for handler testing
-- [ ] CI pipeline (GitHub Actions)
-
-### Stats & Analytics (Partially Done)
-- [x] Completion rates by user/team
-- [x] Average items per standup (planned vs completed)
-- [x] Blocker frequency
-- [x] Trend comparison to previous period (↑↓→ indicators)
-- [ ] Blocker resolution time tracking
-- [ ] Trend visualization (sparklines in Slack?)
 
 ### Automated Digests ✅
 - [x] Scheduled daily digest at 2pm UTC
@@ -29,16 +20,6 @@ See `requirements.md` and `architecture.md`
 - [x] `/standup report <daily> [day|week|month]` - full report with individual breakdowns
 - [x] Team rankings (moved to full report command)
 
----
-
-## Phase 1.5: Operational Improvements
-
-### Dynamic Configuration
-- [ ] Hot-reload config changes without redeploying
-- [ ] Pause/resume dailies via config flag (`enabled: false`)
-- [ ] Admin command to reload config: `/standup config reload`
-- [ ] Store config overrides in DB (takes precedence over YAML)
-
 ### Out of Office (OOO) ✅
 - [x] `/standup ooo tomorrow` - skip next prompt
 - [x] `/standup ooo 2024-12-25 to 2025-01-02` - date range
@@ -47,86 +28,11 @@ See `requirements.md` and `architecture.md`
 - [x] Show OOO status in `/standup list`
 - [x] Skip prompts and exclude from "missing" stats during OOO
 
-### Admin Management
-- [ ] `/standup admin add @user` - add admin (super-admin only)
-- [ ] `/standup admin remove @user` - remove admin
-- [ ] `/standup admin list` - show all admins
-- [ ] Define super-admins in config (can manage other admins)
-- [ ] `/standup manager add <daily> @user` - admin assigns a daily manager
-- [ ] `/standup manager remove <daily> @user` - admin removes a daily manager
-- [ ] `/standup manager list <daily>` - show managers for a daily
-- [ ] Daily managers receive digest and report without being reporters
-
-### Force Prompt Command (Partial)
-- [x] `/standup force-prompt <daily>` - dev mode command to force prompt yourself
-- [ ] `/standup prompt all <daily>` - admin command to prompt all participants
-- [ ] `/standup force-prompt all <daily>` - admin command to prompt all participants
-- [ ] Confirmation step before mass-prompting
-- [ ] Show summary: "Sent prompts to 7 users"
-
-### Visual Polish
-- [ ] Improve checkbox rendering in standup messages
-- [ ] Use `:white_check_mark:` / `:ballot_box_with_check:` for done items
-- [ ] Use `:arrow_right:` for continued items
-- [ ] Use `:x:` for dropped items
-- [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
-
-### Schedule-Aware Prompting
-Respect off-days in the daily schedule — don't prompt on weekends or other non-working days.
-
-- [ ] Read `schedule` config per-daily to determine working days
-- [ ] Skip cron-triggered prompts on off-days (e.g., weekends)
-- [ ] OOO and off-day logic combined: neither prompts nor counts as "missing"
-- [ ] `/standup force-prompt` still works on off-days (manual override)
-
-### Send Daily Back to Submitter
-After submitting a standup, DM the user their own formatted standup for reference.
-
-- [ ] On submission, format the user's standup as a clean DM
-- [ ] Include status icons (done/carry/drop/in-progress) and integration items
-- [ ] Configurable per-daily: `send_receipt: true|false` (default true)
-
 ### "All Dailies" Support ✅
 - [x] Support `all` as daily name in commands (e.g., `/standup digest all`)
 - [x] Runs command for each defined daily sequentially
 - [x] Combines output into single response where appropriate
 - [x] Works with: `prompt`, `digest`, `report`, `list`
-
----
-
-## Phase 2: Performance & Insights
-
-### Cache Slack Data
-- [ ] Cache user profiles (display name, timezone) in DB
-- [ ] Refresh on user update events or daily
-- [ ] Reduces Slack API calls per prompt cycle
-
-### Rate Limiting
-- [ ] Limit slash commands per user (e.g., 10/min)
-- [ ] Prevent abuse of digest generation
-- [ ] Return friendly error on limit hit
-
-### Alerts & Thresholds (Partially Done)
-Configurable alerts when patterns emerge:
-
-| Alert | Trigger | Action | Status |
-|-------|---------|--------|--------|
-| Carry-over streak | Same item carried 3+ days | Shown in digest | ✅ Done |
-| High drop rate | >30% drops | Flagged in digest | ✅ Done |
-| Unplanned overload | >70% unplanned work | Team-level flag | Pending |
-| Missing standups | Not submitted today | Shown in daily digest | ✅ Done |
-
-```yaml
-dailies:
-  - name: "engineering"
-    managers: ["U123", "U456"]    # Multiple managers
-    weekly_digest_day: "fri"      # sun-sat
-    bottleneck_threshold: 3       # Days before flagging
-```
-
----
-
-## Phase 3: Integrations
 
 ### GitHub Integration ✅
 
@@ -141,164 +47,182 @@ dailies:
 - [x] Unmapped reviewer dropdowns in modal for self-service linking
 - [x] Stale review detection (>3 days) in manager digest
 - [x] Review load analytics (pending reviews per team member) in digest
-
-**PR Filtering**
-- [ ] Exclude PRs where user has commented and is awaiting author response
-- [ ] Only show review requests that actually need the user's action
-- [ ] Detect "ball in their court" vs "ball in your court" via comment recency
-
-**Work Alignment**
-- [ ] Compare "today's plans" keywords to commit messages/PR titles
-- [ ] Surface misalignment: "You said X but worked on Y"
-- [ ] Auto-populate yesterday's work from commits
-
-```yaml
-integrations:
-  github:
-    enabled: true
-    org: "your-org"
-    user_mapping:
-      - slack_user_id: "U123"
-        external_username: "github-user"
-```
+- [x] PR re-review detection after updates since last review
 
 ### Linear Integration ✅
-
 - [x] Fetch assigned issues from current cycle (active + upcoming)
 - [x] Linear ticket checkboxes in standup modal (pre-checked)
 - [x] Link Linear user to Slack user (config `user_mapping` + self-service `/link linear`)
 - [x] App Home linked accounts section with link/unlink buttons
+- [x] Auto-detect completed Linear tickets
+
+### Send Daily Back to Submitter ✅
+- [x] DM copy of standup post to submitter after submission
+- [x] Per-user opt-out toggle via App Home
+
+### App Home Enhancements ✅
+- [x] Linked accounts section with link/unlink buttons
+- [x] Daily status with PR and Linear ticket summaries
+- [x] Enriched stats: planned, carried over, and dropped counts
+
+### Stats & Analytics (Partially Done)
+- [x] Completion rates by user/team
+- [x] Average items per standup (planned vs completed)
+- [x] Blocker frequency
+- [x] Trend comparison to previous period (↑↓→ indicators)
+
+### Alerts & Thresholds (Partially Done)
+
+| Alert | Trigger | Action | Status |
+|-------|---------|--------|--------|
+| Carry-over streak | Same item carried 3+ days | Shown in digest | ✅ Done |
+| High drop rate | >30% drops | Flagged in digest | ✅ Done |
+| Missing standups | Not submitted today | Shown in daily digest | ✅ Done |
+
+### In-Progress Status (Partial)
+- [x] "In Progress" status option for yesterday's items in standup modal
+- [x] In-progress items persisted in DB
+
+---
+
+## Up Next
+
+### Schedule-Aware Prompting
+Respect off-days in the daily schedule — don't prompt on weekends or other non-working days.
+
+- [ ] Read `schedule` config per-daily to determine working days
+- [ ] Skip cron-triggered prompts on off-days (e.g., weekends)
+- [ ] OOO and off-day logic combined: neither prompts nor counts as "missing"
+- [ ] `/standup force-prompt` still works on off-days (manual override)
+
+### Visual Polish
+- [ ] Use `:white_check_mark:` / `:ballot_box_with_check:` for done items
+- [ ] Use `:arrow_right:` for continued items
+- [ ] Use `:x:` for dropped items
+- [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
+
+### CI Pipeline
+- [ ] GitHub Actions for automated test runs
+
+---
+
+## Planned
+
+### In-Progress Item Tracking (Full)
+Build on the existing in-progress status to add smart carry-over and attention flagging.
+
+- [ ] In-progress items auto-carry to today (no re-prompting needed)
+- [ ] Track consecutive in-progress days per item in DB
+- [ ] Items in-progress for 3+ days flagged as "needs attention" in digest and report
+- [ ] Visual indicator in standup post (e.g., 🔄 Day 3)
+
+### Dynamic Configuration
+- [ ] Hot-reload config changes without redeploying
+- [ ] Pause/resume dailies via config flag (`enabled: false`)
+- [ ] Admin command to reload config: `/standup config reload`
+- [ ] Store config overrides in DB (takes precedence over YAML)
+
+### Force Prompt Command (Full)
+- [x] `/standup force-prompt <daily>` - force prompt yourself
+- [ ] `/standup prompt all <daily>` - admin command to prompt all participants
+- [ ] Confirmation step before mass-prompting
+- [ ] Show summary: "Sent prompts to 7 users"
+
+### Admin Management
+- [ ] `/standup admin add @user` - add admin (super-admin only)
+- [ ] `/standup admin remove @user` - remove admin
+- [ ] `/standup admin list` - show all admins
+- [ ] Define super-admins in config (can manage other admins)
+- [ ] `/standup manager add <daily> @user` - admin assigns a daily manager
+- [ ] `/standup manager remove <daily> @user` - admin removes a daily manager
+- [ ] `/standup manager list <daily>` - show managers for a daily
+- [ ] Daily managers receive digest and report without being reporters
+
+### Remaining Stats & Analytics
+- [ ] Blocker resolution time tracking
+- [ ] Trend visualization (sparklines in Slack?)
+- [ ] Unplanned overload alert (>70% unplanned work)
+
+### GitHub PR Filtering
+- [ ] Exclude PRs where user has commented and is awaiting author response
+- [ ] Only show review requests that actually need the user's action
+- [ ] Detect "ball in their court" vs "ball in your court" via comment recency
+
+### Linear Enhancements
 - [ ] Mark issues as "in progress" when added to standup
 - [ ] Link blockers to Linear issues
 
 ---
 
-## Phase 4: Status Tracking & Smart Digests
+## Later
 
-### In-Progress Item Tracking (Partial)
-Items gain a 4th status: **In Progress** (alongside Done, Carry Over, Drop).
-
-- [x] Add "In Progress" status option to yesterday's items in standup modal
-- [ ] In-progress items auto-carry to today under the same status (no re-prompting needed)
-- [ ] Track consecutive in-progress days per item in DB
-- [ ] Items in-progress for 3+ days flagged as "needs attention" in digest and report
-- [ ] Visual indicator in standup post (e.g., 🔄 Day 3)
-
-### App Home: Today's Tasks Management
-View and manage today's standup items directly from the App Home tab — without reopening the modal.
-
-- [ ] Show today's planned items as an editable list in App Home
-- [ ] Quick-add new items inline
-- [ ] Mark items done / in-progress / drop from App Home
-- [ ] Carry over items to tomorrow
-- [ ] Show integration context (linked PR status, Linear ticket state) alongside each item
-- [ ] Real-time sync: changes in App Home reflect in the standup post (and vice versa)
+### Performance & Scaling
+- [ ] Cache user profiles (display name, timezone) in DB
+- [ ] Rate limit slash commands per user (e.g., 10/min)
 
 ### Configurable Digest & Report Cadence
-Digest and full report schedules are set per-daily in config (replacing the hardcoded 2pm UTC / weekly pattern).
-
 - [ ] `digest_schedule` config: cron-like or named cadence (e.g., `daily@14:00`, `every_other_day`)
 - [ ] `report_schedule` config: cadence for full report (e.g., `weekly@fri`, `biweekly@fri`)
 - [ ] Both respect the daily's timezone/schedule context
 - [ ] Backward compatible: defaults to current behavior if not set
 
-```yaml
-dailies:
-  - name: "engineering-daily"
-    digest_schedule: "daily@14:00"     # When to send digest
-    report_schedule: "weekly@fri"      # When to send full report
-```
-
 ### Flexible Digest & Report Recipients
-Any Slack workspace member can be a **daily manager** — receiving digest and report without being a reporter themselves.
-
 - [ ] `managers` list expanded: any Slack user, not just participants
-- [ ] Admin-assigned via `/standup manager add <daily> @user` (see Phase 1.5)
+- [ ] Admin-assigned via `/standup manager add <daily> @user`
 - [ ] DB-stored manager list (supplements config `managers`)
 - [ ] `digest_recipients` and `report_recipients` config arrays per daily (optional override)
-- [ ] Falls back to `managers` list if recipients not configured
 - [ ] Self-subscribe command: `/standup subscribe <daily> digest|report`
-- [ ] Unsubscribe: `/standup unsubscribe <daily> digest|report`
 
-```yaml
-dailies:
-  - name: "engineering-daily"
-    managers: ["U123"]                               # Get digest + report
-    digest_recipients: ["U123", "U456", "U789"]      # Optional override
-    report_recipients: ["U123"]                       # Optional override
-```
+### App Home: Today's Tasks Management
+View and manage today's standup items directly from the App Home tab.
 
----
+- [ ] Show today's planned items as an editable list in App Home
+- [ ] Quick-add new items inline
+- [ ] Mark items done / in-progress / drop from App Home
+- [ ] Show integration context (linked PR status, Linear ticket state) alongside each item
+- [ ] Real-time sync: changes in App Home reflect in the standup post (and vice versa)
 
-## Phase 5: Linear Intelligence
+### GitHub Work Alignment
+- [ ] Compare "today's plans" keywords to commit messages/PR titles
+- [ ] Surface misalignment: "You said X but worked on Y"
+- [ ] Auto-populate yesterday's work from commits
 
-> Builds on Phase 3 Linear Integration. Requires Linear sync to be active.
+### Linear Intelligence
 
-### Cross-Reference Plans vs Linear
-Compare what people commit to in standups with what's actually assigned in Linear.
-
-- [ ] On standup submission, match plan items to assigned Linear issues (fuzzy title match + issue ID detection)
+**Cross-Reference Plans vs Linear**
+- [ ] Match plan items to assigned Linear issues (fuzzy title match + issue ID)
 - [ ] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
-- [ ] Weekly report section: plan-to-Linear alignment score per user
-- [ ] Configurable strictness: `off` / `soft` (info only) / `strict` (prompt user to reconcile)
+- [ ] Weekly report: plan-to-Linear alignment score per user
+- [ ] Configurable strictness: `off` / `soft` / `strict`
 
-### Auto-Update Items from Linear Status
-When a Linear issue's status changes, reflect it in the user's standup items automatically.
-
+**Auto-Update Items from Linear Status**
 - [ ] Webhook or poll for Linear status changes on linked issues
-- [ ] If Linear issue moves to "Done" → auto-mark standup item as Done
-- [ ] If Linear issue moves to "In Progress" → auto-mark standup item as In Progress
-- [ ] Notify user in DM when auto-updates happen: "Linear updated: [issue] → Done"
-- [ ] Configurable: `auto_sync: true|false` per daily
+- [ ] Auto-mark standup items Done/In Progress based on Linear state
+- [ ] Notify user in DM when auto-updates happen
 
-### Priority Alignment Reporting
-Surface whether team members are working on the right things according to Linear priorities.
-
-- [ ] Pull priority/urgency from Linear for user's assigned issues
+**Priority Alignment Reporting**
 - [ ] Compare active standup items against Linear priority ordering
-- [ ] **Digest**: per-user alignment summary (on-track / off-track flag)
-- [ ] **Report**: priority alignment score per user with details
-- [ ] **Individual DM**: send alignment report to off-track individuals directly
-- [ ] Respect context — only flag when higher-priority items are unblocked and actionable
-- [ ] Configurable sensitivity: `off` / `digest_only` / `digest_and_dm`
-
-```yaml
-integrations:
-  linear:
-    enabled: true
-    priority_tracking: "digest_and_dm"    # off | digest_only | digest_and_dm
-    plan_alignment: "soft"                # off | soft | strict
-    auto_sync: true
-```
+- [ ] Digest: per-user alignment summary (on-track / off-track)
+- [ ] Individual DM: alignment report to off-track individuals
 
 ---
 
 ## Future Considerations
 
 - Analytics dashboard (web UI with Slack OAuth)
-- ~~Slack app home tab~~ ✅ (linked accounts, start daily button)
 - Manager dashboard
 - AI-generated standup summaries
 - Mobile-friendly standup submission
+- Drizzle ORM for type-safe queries and migrations
 
 ---
 
 ## Open Questions
 
 1. **Alerts**: DM only or also post to a manager channel?
-2. ~~**GitHub**: OAuth flow or static token per workspace?~~ → Static token (decided)
-3. **Stats**: Store aggregated stats or compute on-demand?
-4. **In-progress threshold**: Is 3 days the right default, or should it be configurable per-daily?
-5. **Linear sync direction**: Webhook (real-time, needs public endpoint) vs polling (simpler, slight delay)?
-6. ~~**Priority misalignment**: Should this block standup submission (strict mode) or purely advisory?~~ → Advisory only (digest + DM to individual, decided)
-7. ~~**Self-subscribe**: Should non-managers be able to self-subscribe to digests, or admin-only?~~ → Admin assigns managers via `/standup manager add`; self-subscribe TBD
-
----
-
-## Backlog
-
-### Developer Experience
-- [ ] Integrate Drizzle ORM for type-safe queries and migrations
-- [ ] CI pipeline (GitHub Actions)
+2. **Stats**: Store aggregated stats or compute on-demand?
+3. **In-progress threshold**: Is 3 days the right default, or should it be configurable per-daily?
+4. ~~**Linear sync direction**: Webhook vs polling?~~ → TBD when we get there
+5. ~~**Priority misalignment**: Block submission or advisory?~~ → Advisory only (decided)
 
 🗺️

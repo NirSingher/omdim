@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **DM copy of standup posts** — submitters receive a private DM copy after submission. Opt-out via App Home toggle
+- **PR re-review detection** — flags PRs updated since the last review so reviewers know to look again
+- **Auto-detect completed Linear tickets** — done tickets are suppressed from the standup modal automatically
+- **Enriched App Home stats** — planned, carried over, and dropped item counts shown per daily
+- **PR reviewer tagging** — standup posts mention reviewers by `@name` when Slack-GitHub mappings exist
+
+### Changed
+- In-progress status now persists across sessions (stored in DB)
+- Integration items (PRs, Linear tickets) are no longer auto-selected on re-prompt
+
+### Fixed
+- Duplicate integration items when yesterday's plans already included them
+- Redundant PR re-fetching at post time — respects checkbox selections from the modal
+
 ## [1.2.0] - 2026-02-12
 
 ### Added
