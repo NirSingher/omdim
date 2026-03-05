@@ -41,6 +41,12 @@ interface GitHubSearchItem {
   updated_at: string;
   draft: boolean;
   requested_reviewers?: GitHubUser[];
+  repository_url?: string; // e.g., "https://api.github.com/repos/org/repo"
+}
+
+interface GitHubReview {
+  user: GitHubUser;
+  submitted_at: string;
 }
 
 interface GitHubSearchResponse {
@@ -242,6 +248,105 @@ export async function fetchAwaitingReviewPRs(
 }
 
 /**
+ * Fetch PRs where the user previously reviewed but new updates were pushed since.
+ * These PRs no longer have the user in review-requested (author didn't re-request),
+ * but the PR was updated after the user's last review — likely needs re-review.
+ */
+export async function fetchPRsNeedingReReview(
+  token: string,
+  username: string,
+  org: string
+): Promise<GitHubPR[]> {
+  // Find PRs user reviewed but is NOT currently requested on
+  const query = `is:pr is:open reviewed-by:${username} org:${org} -review-requested:${username} -author:${username}`;
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=10`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'omdim-bot',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`GitHub API error for re-review PRs: ${response.status} ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json() as GitHubSearchResponse;
+
+    if (data.items.length === 0) return [];
+
+    // For each PR, check if it was updated after the user's last review
+    const prChecks = data.items.map(async (item): Promise<GitHubPR | null> => {
+      // Extract owner/repo from repository_url or html_url
+      const repoMatch = item.html_url.match(/github\.com\/([^/]+)\/([^/]+)\/pull/);
+      if (!repoMatch) return null;
+
+      const [, owner, repo] = repoMatch;
+
+      try {
+        const reviewsResponse = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/pulls/${item.number}/reviews`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'omdim-bot',
+            },
+          }
+        );
+
+        if (!reviewsResponse.ok) return null;
+
+        const reviews = await reviewsResponse.json() as GitHubReview[];
+
+        // Find the user's latest review
+        const userReviews = reviews.filter(
+          (r) => r.user.login.toLowerCase() === username.toLowerCase()
+        );
+
+        if (userReviews.length === 0) return null;
+
+        const latestReview = userReviews[userReviews.length - 1];
+        const reviewDate = new Date(latestReview.submitted_at);
+        const updatedDate = new Date(item.updated_at);
+
+        // PR was updated after user's last review — needs re-review
+        if (updatedDate > reviewDate) {
+          return {
+            number: item.number,
+            title: item.title,
+            url: item.html_url,
+            author: item.user.login,
+            reviewsNeeded: 0,
+            requestedReviewers: item.requested_reviewers?.map(r => r.login) || [],
+            createdAt: item.created_at,
+            updatedAt: item.updated_at,
+            draft: item.draft,
+          };
+        }
+
+        return null;
+      } catch {
+        return null;
+      }
+    });
+
+    const results = await Promise.all(prChecks);
+    return results.filter((pr): pr is GitHubPR => pr !== null);
+  } catch (error) {
+    console.error('Failed to fetch PRs needing re-review:', error);
+    return [];
+  }
+}
+
+/**
  * Fetch all PR data for a user in an org
  * Combines draft PRs, approved PRs, awaiting review PRs, and review requests
  */
@@ -250,15 +355,25 @@ export async function fetchUserPRData(
   username: string,
   org: string
 ): Promise<UserPRData> {
-  // Fetch all four in parallel
-  const [draftPRs, readyToMerge, awaitingReview, reviewRequests] = await Promise.all([
+  // Fetch all five in parallel
+  const [draftPRs, readyToMerge, awaitingReview, reviewRequests, reReviewPRs] = await Promise.all([
     fetchDraftPRs(token, username, org),
     fetchApprovedPRs(token, username, org),
     fetchAwaitingReviewPRs(token, username, org),
     fetchReviewRequests(token, username, org),
+    fetchPRsNeedingReReview(token, username, org),
   ]);
 
-  return { draftPRs, readyToMerge, awaitingReview, reviewRequests };
+  // Merge re-review PRs into reviewRequests, deduplicating by PR number
+  const existingNumbers = new Set(reviewRequests.map((pr) => pr.number));
+  const uniqueReReviewPRs = reReviewPRs.filter((pr) => !existingNumbers.has(pr.number));
+
+  return {
+    draftPRs,
+    readyToMerge,
+    awaitingReview,
+    reviewRequests: [...reviewRequests, ...uniqueReReviewPRs],
+  };
 }
 
 // ============================================================================
