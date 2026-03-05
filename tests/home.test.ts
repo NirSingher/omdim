@@ -12,6 +12,7 @@ vi.mock('../lib/db', () => ({
   getLinearUserId: vi.fn(() => Promise.resolve(null)),
   setGitHubUsername: vi.fn(),
   setLinearUserId: vi.fn(),
+  getDmStandupPreference: vi.fn(() => Promise.resolve(true)),
 }));
 
 // Mock the config module
@@ -53,7 +54,7 @@ import { publishHomeView } from '../lib/slack';
 
 describe('buildHomeView - linked accounts section', () => {
   it('shows Link buttons when accounts are not linked', () => {
-    const linkedAccounts: LinkedAccounts = { github: null, linear: null };
+    const linkedAccounts: LinkedAccounts = { github: null, linear: null, dmStandup: true };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     // Find linked accounts header
@@ -80,7 +81,7 @@ describe('buildHomeView - linked accounts section', () => {
   });
 
   it('shows Unlink buttons when accounts are linked', () => {
-    const linkedAccounts: LinkedAccounts = { github: 'octocat', linear: 'lin-user-123' };
+    const linkedAccounts: LinkedAccounts = { github: 'octocat', linear: 'lin-user-123', dmStandup: true };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     // Find GitHub linked section
@@ -101,7 +102,7 @@ describe('buildHomeView - linked accounts section', () => {
   });
 
   it('shows mixed state (one linked, one not)', () => {
-    const linkedAccounts: LinkedAccounts = { github: 'myuser', linear: null };
+    const linkedAccounts: LinkedAccounts = { github: 'myuser', linear: null, dmStandup: true };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     const githubSection = view.blocks.find(

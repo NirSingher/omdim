@@ -24,11 +24,13 @@ import {
   setLinearUserId,
   getUsersWithGitHubLinks,
   getRecentlyDoneLinearItems,
+  getDmStandupPreference,
+  setDmStandupPreference,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
 import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData } from '../linear';
-import { postStandupToChannel } from '../format';
+import { postStandupToChannel, sendStandupDM } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
 import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
@@ -601,6 +603,28 @@ export async function handleStandupSubmission(
       if (messageTs && submission.id) {
         await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
       }
+
+      // Send DM copy if user preference allows
+      try {
+        const dmEnabled = await getDmStandupPreference(ctx.db, userId);
+        if (dmEnabled) {
+          await sendStandupDM(ctx.slackToken, userId, dailyName, daily.channel, {
+            yesterdayCompleted,
+            yesterdayIncomplete,
+            yesterdayInProgress,
+            yesterdayDropped,
+            unplanned,
+            todayPlans,
+            blockers,
+            customAnswers,
+            questions: daily.questions,
+            fieldOrder: daily.field_order,
+            inProgressCarryCounts,
+          });
+        }
+      } catch (error) {
+        console.error('Failed to send standup DM copy:', error);
+      }
     }
   };
 
@@ -948,6 +972,31 @@ export async function handleLinearLinkSubmission(
 }
 
 // ============================================================================
+// Button Handler: Toggle DM Standup
+// ============================================================================
+
+/**
+ * Handle DM standup toggle button from App Home
+ * Flips the user's dm_standup preference and refreshes the home view
+ */
+export async function handleToggleDmStandup(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+
+  try {
+    const current = await getDmStandupPreference(ctx.db, userId);
+    await setDmStandupPreference(ctx.db, userId, !current);
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to toggle DM standup preference:', error);
+    return false;
+  }
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -988,6 +1037,7 @@ export async function handleInteraction(
     if (actionId === 'home_link_linear') return handleLinkLinear(payload, ctx);
     if (actionId === 'home_unlink_github') return handleUnlinkGitHub(payload, ctx);
     if (actionId === 'home_unlink_linear') return handleUnlinkLinear(payload, ctx);
+    if (actionId === 'home_toggle_dm_standup') return handleToggleDmStandup(payload, ctx);
   }
 
   // Handle modal submission

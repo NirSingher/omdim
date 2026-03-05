@@ -5,10 +5,10 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent } from './db';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent, getDmStandupPreference } from './db';
 import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getReminderMinutesBefore } from './config';
 import { getUserInfo, postMessage } from './slack';
-import { postStandupToChannel } from './format';
+import { postStandupToChannel, sendStandupDM } from './format';
 import { fetchUserPRData, UserPRData } from './github';
 
 // ============================================================================
@@ -635,6 +635,30 @@ async function processScheduledSubmission(
 
   // Mark as posted with the message timestamp
   await markSubmissionPosted(db, submission.id, messageTs);
+
+  // Send DM copy if user preference allows
+  try {
+    const dmEnabled = await getDmStandupPreference(db, userId);
+    if (dmEnabled) {
+      const yesterdayInProgressParsed = parseJsonbArray(submission.yesterday_in_progress);
+      await sendStandupDM(slackToken, userId, dailyName, daily.channel, {
+        yesterdayCompleted: parseJsonbArray(submission.yesterday_completed),
+        yesterdayIncomplete: parseJsonbArray(submission.yesterday_incomplete),
+        yesterdayInProgress: yesterdayInProgressParsed,
+        yesterdayDropped: [],
+        unplanned: parseJsonbArray(submission.unplanned),
+        todayPlans: parseJsonbArray(submission.today_plans),
+        blockers: submission.blockers || '',
+        customAnswers: submission.custom_answers || {},
+        questions: daily.questions,
+        fieldOrder: daily.field_order,
+        prData,
+        reviewerSlackMap,
+      });
+    }
+  } catch (error) {
+    console.error('Failed to send standup DM copy for scheduled post:', error);
+  }
 
   // Track work items for analytics (same as regular submissions)
   try {

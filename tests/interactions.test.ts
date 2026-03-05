@@ -25,6 +25,8 @@ vi.mock('../lib/db', () => ({
   getUserDailies: vi.fn(() => Promise.resolve([])),
   getUsersWithGitHubLinks: vi.fn(() => Promise.resolve([])),
   getRecentlyDoneLinearItems: vi.fn(() => Promise.resolve([])),
+  getDmStandupPreference: vi.fn(() => Promise.resolve(true)),
+  setDmStandupPreference: vi.fn(),
 }));
 
 // Mock the config module
@@ -63,6 +65,7 @@ vi.mock('../lib/prompt', () => ({
 // Mock the format module
 vi.mock('../lib/format', () => ({
   postStandupToChannel: vi.fn(),
+  sendStandupDM: vi.fn(),
 }));
 
 // Mock the home module (imported by interactions for refreshHome)

@@ -6,7 +6,7 @@
  */
 
 import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats } from './db';
-import { postMessage, sendDM as slackSendDM } from './slack';
+import { postMessage, sendDM as slackSendDM, sendDMWithBlocks } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 import { TeamLinearData, CycleProgress } from './linear';
 
@@ -28,7 +28,7 @@ interface FieldOrder {
   blockers?: number;
 }
 
-interface StandupData {
+export interface StandupData {
   yesterdayCompleted: string[];
   yesterdayIncomplete: string[];
   yesterdayInProgress?: string[];
@@ -224,6 +224,28 @@ export async function postStandupToChannel(
   const blocks = formatStandupBlocks(userId, dailyName, data);
   const fallbackText = `${dailyName} standup from <@${userId}>`;
   return postMessage(slackToken, channel, fallbackText, blocks);
+}
+
+/**
+ * Send a DM copy of a standup post to the submitter
+ * Uses the same blocks as the channel post but replaces the header
+ */
+export async function sendStandupDM(
+  slackToken: string,
+  userId: string,
+  dailyName: string,
+  channel: string,
+  data: StandupData
+): Promise<void> {
+  const blocks = formatStandupBlocks(userId, dailyName, data);
+
+  // Replace header block text with DM-specific message
+  if (blocks.length > 0 && blocks[0].text) {
+    blocks[0].text.text = `Your *${dailyName}* standup was posted to <#${channel}>`;
+  }
+
+  const fallbackText = `Your ${dailyName} standup was posted to the channel`;
+  await sendDMWithBlocks(slackToken, userId, fallbackText, blocks);
 }
 
 // ============================================================================
