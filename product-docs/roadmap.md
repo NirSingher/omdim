@@ -125,6 +125,14 @@ Respect off-days in the daily schedule — don't prompt on weekends or other non
 - [ ] Use `:x:` for dropped items
 - [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
 
+### Plan Size Warning
+Warn participants when they're planning more items than recommended. Configurable globally and per-daily.
+
+- [ ] Global `max_plan_items` config (default: 5)
+- [ ] Per-daily override: `max_plan_items` in daily config
+- [ ] Show warning in modal when plan exceeds threshold
+- [ ] Set to `0` to disable the warning
+
 ### CI Pipeline
 - [ ] GitHub Actions for automated test runs
 
