@@ -178,7 +178,6 @@ Build on the existing in-progress status to add smart carry-over and attention f
 - [ ] `/standup manager remove <daily> @user` - admin removes a daily manager
 - [ ] `/standup manager list <daily>` - show managers for a daily
 - [ ] Daily managers receive digest and report without being reporters
-- [ ] Per-daily `max_planned_per_day` config (soft limit; warn users in modal when exceeded)
 
 ### Remaining Stats & Analytics
 - [ ] Blocker resolution time tracking
