@@ -89,6 +89,8 @@ const ConfigSchema = z.object({
   admins: z.array(z.string()).min(1, 'Must have at least one admin'),
   // Global digest time (UTC) - defaults to 14:00
   digest_time: z.string().regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format').optional(),
+  // Plan-size soft warning threshold. 0 disables the warning. Defaults to 5.
+  max_plan_items: z.number().int().min(0).optional(),
 });
 
 // ============================================================================
@@ -254,6 +256,12 @@ export function getReminderMinutesBefore(daily: Daily): number {
 /** Get the digest time (UTC, HH:MM format, defaults to 14:00) */
 export function getDigestTime(): string {
   return loadConfig().digest_time || '14:00';
+}
+
+/** Plan-size soft-warning threshold (0 = disabled, default 5). */
+export function getMaxPlanItems(): number {
+  const value = loadConfig().max_plan_items;
+  return value ?? 5;
 }
 
 // Clear cache (useful for testing or hot reload)

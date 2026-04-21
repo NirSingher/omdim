@@ -3,7 +3,7 @@
  * Builds the modal view structure - actual opening is done via lib/slack.ts
  */
 
-import { Question, FieldOrder } from './config';
+import { Question, FieldOrder, getMaxPlanItems } from './config';
 import { UserPRData, GitHubPR } from './github';
 import { LinearIssue } from './linear';
 
@@ -184,6 +184,29 @@ export function buildStandupModal(
   });
 
   blocks.push({ type: 'divider' });
+
+  // Plan-size soft warning: count items that will become today's plans at open time.
+  // Sources: yesterday's carry-over/in-progress items (everything except auto-completed),
+  // pre-checked integration items (currently none), and prefill today-plans (edit mode).
+  // Free-text input in the plans textarea can't be observed here — the post-submit DM
+  // covers that path.
+  const maxPlanItems = getMaxPlanItems();
+  if (maxPlanItems > 0) {
+    const carryForwardCount = yesterdayPlans.length - (autoCompletedIds?.size || 0);
+    const prefillCount = prefill?.todayPlans?.length || 0;
+    const openTimeCount = carryForwardCount + prefillCount;
+    if (openTimeCount >= maxPlanItems) {
+      const dayWord = mode === 'tomorrow' ? 'for tomorrow' : 'today';
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `⚠️ You're planning ${openTimeCount} items ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`,
+        },
+      });
+      blocks.push({ type: 'divider' });
+    }
+  }
 
   // First-time user welcome message
   if (isFirstDay) {

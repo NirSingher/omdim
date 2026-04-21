@@ -83,6 +83,13 @@ See `requirements.md` and `architecture.md`
 - [x] "In Progress" status option for yesterday's items in standup modal
 - [x] In-progress items persisted in DB
 
+### Plan Size Warning (First Version) ✅
+- [x] Global `max_plan_items` config (default: 5, set to 0 to disable)
+- [x] Soft warning banner shown inside the standup modal when carry-over + in-progress + prefill today plans meet the threshold
+- [x] Post-submit DM when the submitted plan count meets the threshold
+- [x] Static warning copy; non-blocking; not dismissible
+- [x] Counts all plan items regardless of source (manual, PR, Linear)
+
 ---
 
 ## Up Next
@@ -125,13 +132,13 @@ Respect off-days in the daily schedule — don't prompt on weekends or other non
 - [ ] Use `:x:` for dropped items
 - [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
 
-### Plan Size Warning
-Warn participants when they're planning more items than recommended. Configurable globally and per-daily.
+### Plan Size Warning (Follow-on)
+First Version shipped (see Shipped > Plan Size Warning). Remaining scope:
 
-- [ ] Global `max_plan_items` config (default: 5)
 - [ ] Per-daily override: `max_plan_items` in daily config
-- [ ] Show warning in modal when plan exceeds threshold
-- [ ] Set to `0` to disable the warning
+- [ ] Live validation (warning updates as the user types/adds items)
+- [ ] Digest/report surfacing for users who routinely over-plan
+- [ ] Distinguish net-new vs carried-over items in the count
 
 ### CI Pipeline
 - [ ] GitHub Actions for automated test runs

@@ -9,6 +9,7 @@ vi.mock('../lib/config', () => ({
   getSchedule: vi.fn(),
   getDaily: vi.fn(),
   loadConfig: vi.fn(),
+  getMaxPlanItems: vi.fn(() => 5),
 }));
 
 // Mock slack module
@@ -698,6 +699,131 @@ describe('modal builder', () => {
       const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
 
       expect(linearBlock).toBeUndefined();
+    });
+  });
+
+  describe('plan-size warning banner', () => {
+    const findWarning = (blocks: { type: string; text?: { text?: string } }[]) =>
+      blocks.find(b => b.type === 'section' && b.text?.text?.includes('Teams usually stay under'));
+
+    it('shows warning when carry-over count meets threshold', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B', 'C', 'D', 'E'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      const warning = findWarning(modal.blocks);
+      expect(warning).toBeDefined();
+      expect(warning?.text?.text).toContain("planning 5 items today");
+      expect(warning?.text?.text).toContain("under 5");
+    });
+
+    it('does not show warning when count is under threshold', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      expect(findWarning(modal.blocks)).toBeUndefined();
+    });
+
+    it('does not show warning when max_plan_items is 0 (disabled)', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(0);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      expect(findWarning(modal.blocks)).toBeUndefined();
+    });
+
+    it('excludes auto-completed items from the count', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['[LIN-1] A', '[LIN-2] B', 'C', 'D', 'E'],
+        completed: [],
+        incomplete: [],
+      };
+      // LIN-1 and LIN-2 are auto-completed → effective count = 3
+      const modal = buildStandupModal(
+        'daily-il',
+        yesterday,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new Set(['LIN-1', 'LIN-2'])
+      );
+
+      expect(findWarning(modal.blocks)).toBeUndefined();
+    });
+
+    it('uses "for tomorrow" wording in tomorrow mode', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(3);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B', 'C'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal(
+        'daily-il',
+        yesterday,
+        [],
+        undefined,
+        undefined,
+        'tomorrow'
+      );
+
+      const warning = findWarning(modal.blocks);
+      expect(warning).toBeDefined();
+      expect(warning?.text?.text).toContain('for tomorrow');
+    });
+
+    it('includes prefill today_plans in the count', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal(
+        'daily-il',
+        yesterday,
+        [],
+        undefined,
+        undefined,
+        'tomorrow',
+        { todayPlans: ['X', 'Y', 'Z'] }
+      );
+
+      const warning = findWarning(modal.blocks);
+      expect(warning).toBeDefined();
+      expect(warning?.text?.text).toContain('5 items');
     });
   });
 });

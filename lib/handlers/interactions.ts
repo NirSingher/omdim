@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -509,6 +509,23 @@ export async function handleStandupSubmission(
     });
 
     console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, shouldQueue, todayPlans: todayPlans.length });
+
+    // Plan-size soft warning: send a DM if the submitted plan count exceeds the threshold.
+    // Counts everything that lands in today's plans: typed items + checked integrations
+    // (already merged into todayPlans) + yesterday's carry-over + in-progress.
+    const maxPlanItems = getMaxPlanItems();
+    if (maxPlanItems > 0) {
+      const submittedPlanCount = todayPlans.length + yesterdayIncomplete.length + yesterdayInProgress.length;
+      if (submittedPlanCount >= maxPlanItems) {
+        const dayWord = isTomorrowMode ? 'for tomorrow' : 'today';
+        const warningMsg = `⚠️ You're planning ${submittedPlanCount} items ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`;
+        try {
+          await sendDM(ctx.slackToken, userId, warningMsg);
+        } catch (error) {
+          console.error('Failed to send plan-size warning DM:', error);
+        }
+      }
+    }
 
     // Queued mode: send confirmation DM, skip channel post and work item tracking
     if (shouldQueue) {

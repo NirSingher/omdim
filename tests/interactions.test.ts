@@ -43,6 +43,7 @@ vi.mock('../lib/config', () => ({
   getLinearConfig: vi.fn(() => null), // No Linear integration by default
   getLinearUserIdFromConfig: vi.fn(() => null),
   getLinearTeamIdForUser: vi.fn(() => null),
+  getMaxPlanItems: vi.fn(() => 0), // Disabled by default in tests
 }));
 
 // Mock the slack module
@@ -75,7 +76,8 @@ vi.mock('../lib/handlers/home', () => ({
 
 import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
 import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts } from '../lib/db';
-import { openModal } from '../lib/slack';
+import { openModal, sendDM } from '../lib/slack';
+import { getMaxPlanItems } from '../lib/config';
 
 describe('interaction handlers', () => {
   beforeEach(() => {
@@ -514,6 +516,167 @@ describe('interaction handlers', () => {
       const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
       expect(saveCall.yesterdayInProgress).toEqual(['Task A']);
       expect(saveCall.yesterdayIncomplete).toEqual(['Task B']);
+    });
+  });
+
+  describe('handleStandupSubmission - plan-size warning DM', () => {
+    const makePayload = (opts: {
+      yesterdayPlans?: string[];
+      yesterdaySelections?: Record<number, string>;
+      todayPlans?: string;
+      mode?: 'today' | 'tomorrow';
+    }): InteractionPayload => {
+      const { yesterdayPlans = [], yesterdaySelections = {}, todayPlans = '', mode = 'today' } = opts;
+      const values: Record<string, Record<string, { value?: string; selected_option?: { value: string } }>> = {};
+
+      yesterdayPlans.forEach((_, index) => {
+        const status = yesterdaySelections[index] || 'continue';
+        values[`yesterday_item_${index}`] = {
+          [`item_status_${index}`]: { selected_option: { value: status } },
+        };
+      });
+
+      if (todayPlans) {
+        values.today_plans = { plans_input: { value: todayPlans } };
+      }
+
+      return {
+        type: 'view_submission',
+        trigger_id: 'trigger123',
+        user: { id: 'U12345' },
+        view: {
+          callback_id: 'standup_submission',
+          private_metadata: JSON.stringify({ dailyName: 'daily-il', yesterdayPlans, mode }),
+          state: { values },
+        },
+      };
+    };
+
+    beforeEach(() => {
+      vi.mocked(saveSubmission).mockResolvedValue({ id: 1 } as any);
+    });
+
+    it('sends DM when submitted plan count meets threshold', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      // 2 carry-over + 3 new = 5 (meets threshold of 5)
+      const payload = makePayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'continue', 1: 'continue' },
+        todayPlans: 'X\nY\nZ',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      expect(sendDM).toHaveBeenCalledWith(
+        'xoxb-test',
+        'U12345',
+        expect.stringContaining('planning 5 items today')
+      );
+      expect(sendDM).toHaveBeenCalledWith(
+        'xoxb-test',
+        'U12345',
+        expect.stringContaining('under 5')
+      );
+    });
+
+    it('does not send DM when submitted count is below threshold', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      // 1 carry-over + 2 new = 3 (under 5)
+      const payload = makePayload({
+        yesterdayPlans: ['Task A'],
+        yesterdaySelections: { 0: 'continue' },
+        todayPlans: 'X\nY',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      expect(sendDM).not.toHaveBeenCalled();
+    });
+
+    it('does not send DM when max_plan_items is 0 (disabled)', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(0);
+
+      const payload = makePayload({
+        yesterdayPlans: ['A', 'B', 'C', 'D', 'E'],
+        yesterdaySelections: { 0: 'continue', 1: 'continue', 2: 'continue', 3: 'continue', 4: 'continue' },
+        todayPlans: 'X\nY\nZ',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      expect(sendDM).not.toHaveBeenCalled();
+    });
+
+    it('counts in-progress items toward the total', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(3);
+
+      // 1 in-progress + 1 carry-over + 1 new = 3 (meets threshold)
+      const payload = makePayload({
+        yesterdayPlans: ['Task A', 'Task B'],
+        yesterdaySelections: { 0: 'in_progress', 1: 'continue' },
+        todayPlans: 'X',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      expect(sendDM).toHaveBeenCalledWith(
+        'xoxb-test',
+        'U12345',
+        expect.stringContaining('planning 3 items today')
+      );
+    });
+
+    it('excludes done and dropped items from the count', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(3);
+
+      // 2 done + 1 dropped + 2 new = 2 toward plans (under 3)
+      const payload = makePayload({
+        yesterdayPlans: ['A', 'B', 'C'],
+        yesterdaySelections: { 0: 'done', 1: 'done', 2: 'drop' },
+        todayPlans: 'X\nY',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      expect(sendDM).not.toHaveBeenCalled();
+    });
+
+    it('uses "for tomorrow" wording in tomorrow mode', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(3);
+
+      const payload = makePayload({
+        yesterdayPlans: [],
+        todayPlans: 'X\nY\nZ',
+        mode: 'tomorrow',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      expect(sendDM).toHaveBeenCalledWith(
+        'xoxb-test',
+        'U12345',
+        expect.stringContaining('for tomorrow'),
+      );
+    });
+
+    it('still sends warning DM when in queued (tomorrow) mode', async () => {
+      vi.mocked(getMaxPlanItems).mockReturnValue(3);
+
+      const payload = makePayload({
+        yesterdayPlans: [],
+        todayPlans: 'X\nY\nZ',
+        mode: 'tomorrow',
+      });
+
+      await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+      // Warning DM + scheduling confirmation DM → sendDM called at least once with the warning
+      const warningCalls = vi.mocked(sendDM).mock.calls.filter(call =>
+        typeof call[2] === 'string' && call[2].includes('Teams usually stay under')
+      );
+      expect(warningCalls).toHaveLength(1);
     });
   });
 
