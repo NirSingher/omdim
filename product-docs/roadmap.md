@@ -87,6 +87,30 @@ See `requirements.md` and `architecture.md`
 
 ## Up Next
 
+### Standup Modal Reorganization
+Current modal is cluttered and mixes authored PRs with review requests without clear context.
+
+- [ ] Split "Yesterday" PRs into distinct groups: "My PRs" vs "PRs I reviewed"
+- [ ] Clearer section headers and visual separation between PR / Linear / manual items
+- [ ] Inline source hint per item (e.g., "from PR #123", "from LIN-456")
+- [ ] Reduce cognitive load — consider collapsible sections
+
+### Readable Standup Post
+Give each line in the posted standup more context and make integration items actionable.
+
+- [ ] Show source per line (e.g., "✅ Fix auth bug — _from PR #123_")
+- [ ] Clickable items: PR/Linear items link to source URL
+- [ ] Consistent source icons (GitHub vs Linear vs manual)
+- [ ] Reader can tell at a glance where each item came from
+
+### Report OOO to Daily
+Surface OOO status in the daily channel so the team sees who's out without checking `/standup list`.
+
+- [ ] Post OOO notice to daily channel when a user's OOO period begins
+- [ ] Include OOO users in the daily digest (e.g., "Out today: @alice, @bob")
+- [ ] Show return date alongside name
+- [ ] Optional per-daily toggle in config
+
 ### Schedule-Aware Prompting
 Respect off-days in the daily schedule — don't prompt on weekends or other non-working days.
 
@@ -107,6 +131,15 @@ Respect off-days in the daily schedule — don't prompt on weekends or other non
 ---
 
 ## Planned
+
+### User Settings Pane
+Per-user self-service configuration in App Home (consolidates existing toggles + new controls).
+
+- [ ] Max items shown per list (PRs, Linear tickets) — in modal and standup post
+- [ ] OOO management UI (set/clear from App Home, currently command-only)
+- [ ] Per-Linear-team filter: which teams' cycles to include
+- [ ] Stale PR threshold override (default 3 days)
+- [ ] Consolidate existing DM-copy opt-out toggle into Settings section
 
 ### In-Progress Item Tracking (Full)
 Build on the existing in-progress status to add smart carry-over and attention flagging.
@@ -137,6 +170,7 @@ Build on the existing in-progress status to add smart carry-over and attention f
 - [ ] `/standup manager remove <daily> @user` - admin removes a daily manager
 - [ ] `/standup manager list <daily>` - show managers for a daily
 - [ ] Daily managers receive digest and report without being reporters
+- [ ] Per-daily `max_planned_per_day` config (soft limit; warn users in modal when exceeded)
 
 ### Remaining Stats & Analytics
 - [ ] Blocker resolution time tracking
