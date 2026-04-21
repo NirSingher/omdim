@@ -530,36 +530,33 @@ async function processScheduledSubmission(
     return 'error';
   }
 
-  // Get schedule config
+  // Get schedule config. Anchor date/time decisions to the daily's schedule
+  // timezone (same frame used when the submission was written in
+  // interactions.ts). Using the user's personal Slack tz here causes scheduled
+  // posts to silently skip forever when the user travels across a day boundary
+  // relative to the schedule's timezone.
   const schedule = daily.schedule ? getSchedule(daily.schedule) : null;
   const scheduledTime = schedule?.default_time || '10:00';
+  const scheduleTz = schedule?.timezone || 'UTC';
 
-  // Get user timezone (from cache or Slack API)
-  const userInfo = await getCachedUserTimezone(db, slackToken, userId);
-  if (!userInfo) {
-    console.warn(`Could not get timezone for user ${userId}`);
-    return 'error';
-  }
+  // Current date/time in the schedule's timezone
+  const scheduleNow = getDateInTimezone(scheduleTz);
+  const todayStr = formatDate(scheduleNow);
 
-  // Calculate user's current date/time
-  const userDate = getUserDate(userInfo.tz_offset);
-  const userTodayStr = formatDate(userDate);
-
-  // Check if submission date matches user's "today"
-  if (submissionDate !== userTodayStr) {
-    // Not time yet (submission is for a future date in user's timezone)
-    // Or past date (shouldn't happen, but skip if so)
+  // Check if submission date matches "today" in the schedule's timezone
+  if (submissionDate !== todayStr) {
+    // Future date (not time yet) or stale past date — skip
     return 'skipped';
   }
 
   // Check if scheduled time has passed
-  if (!hasScheduledTimePassed(scheduledTime, userDate)) {
+  if (!hasScheduledTimePassed(scheduledTime, scheduleNow)) {
     console.log(`Skipping ${userId} submission ${submission.id}: scheduled time ${scheduledTime} hasn't passed yet`);
     return 'skipped';
   }
 
   // Check if user is OOO
-  const oooStatus = await getActiveOOO(db, userId, dailyName, userTodayStr);
+  const oooStatus = await getActiveOOO(db, userId, dailyName, todayStr);
   if (oooStatus) {
     console.log(`Skipping ${userId} submission ${submission.id}: user is OOO until ${oooStatus.end_date}`);
     // Mark as posted so we don't keep checking (OOO = cancelled)
