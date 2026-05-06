@@ -702,6 +702,66 @@ describe('modal builder', () => {
     });
   });
 
+  describe('yesterday items grouping by source', () => {
+    it('groups items by source when mixed (manual, PR, Linear)', () => {
+      const yesterday: YesterdayData = {
+        plans: [
+          'Manual task',
+          '[repo#42] Fix typo',
+          '[ENG-123] Auth refactor',
+          'Another manual task',
+        ],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // Should have group header context blocks when mixed
+      const contextBlocks = modal.blocks.filter(
+        (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('items')
+      );
+      expect(contextBlocks.length).toBe(3); // Manual, PR, Linear
+
+      // Verify headers exist
+      const headers = contextBlocks.map((b: any) => b.elements[0].text);
+      expect(headers).toContain('*✍️ Manual items*');
+      expect(headers).toContain('*📦 PR items*');
+      expect(headers).toContain('*🎫 Linear items*');
+    });
+
+    it('does not show group headers when all items are from one source', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Task A', 'Task B', 'Task C'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // Should NOT have source group headers
+      const groupHeaders = modal.blocks.filter(
+        (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('items*')
+      );
+      expect(groupHeaders).toHaveLength(0);
+    });
+
+    it('preserves dropdown indices across groups', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Manual task', '[repo#42] PR task', '[ENG-123] Linear task'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // All three items should have their original indices
+      expect(modal.blocks.find(b => b.block_id === 'yesterday_item_0')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'yesterday_item_1')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'yesterday_item_2')).toBeDefined();
+    });
+  });
+
   describe('plan-size warning banner', () => {
     const findWarning = (blocks: { type: string; text?: { text?: string } }[]) =>
       blocks.find(b => b.type === 'section' && b.text?.text?.includes('Teams usually stay under'));

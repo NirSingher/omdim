@@ -97,17 +97,15 @@ See `requirements.md` and `architecture.md`
 - [x] App Home refreshes after submission so user sees plan immediately
 - [x] Source context per item (PR link, Linear ticket identifier) shown inline
 
+### Standup Modal Reorganization ✅
+- [x] Yesterday items grouped by source: manual → PR → Linear (with section headers when mixed)
+- [x] Clearer section headers: "✍️ Manual items", "📦 PR items", "🎫 Linear items"
+- [x] Context hints on PR and My PR sections explaining what each shows
+- [x] Reduced cognitive load through visual separation between source types
+
 ---
 
 ## Up Next
-
-### Standup Modal Reorganization
-Current modal is cluttered and mixes authored PRs with review requests without clear context.
-
-- [ ] Split "Yesterday" PRs into distinct groups: "My PRs" vs "PRs I reviewed"
-- [ ] Clearer section headers and visual separation between PR / Linear / manual items
-- [ ] Inline source hint per item (e.g., "from PR #123", "from LIN-456")
-- [ ] Reduce cognitive load — consider collapsible sections
 
 ### Readable Standup Post
 Give each line in the posted standup more context and make integration items actionable.

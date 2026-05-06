@@ -221,6 +221,7 @@ export function buildStandupModal(
   }
 
   // Yesterday section: plans + unplanned (grouped as "what happened")
+  // Items are grouped by source: manual first, then PR items, then Linear items
   if (!isFirstDay && yesterdayPlans.length > 0) {
     blocks.push({
       type: 'section',
@@ -230,8 +231,28 @@ export function buildStandupModal(
       },
     });
 
-    // Add a dropdown for each yesterday's plan item
+    // Classify items by source for grouped display
+    const manualItems: Array<{ plan: string; index: number }> = [];
+    const prItems: Array<{ plan: string; index: number }> = [];
+    const linearItems: Array<{ plan: string; index: number }> = [];
+
     yesterdayPlans.forEach((plan, index) => {
+      const idMatch = plan.match(/^\[([^\]]+)\]\s/);
+      if (idMatch) {
+        if (idMatch[1].includes('#')) {
+          prItems.push({ plan, index });
+        } else {
+          linearItems.push({ plan, index });
+        }
+      } else {
+        manualItems.push({ plan, index });
+      }
+    });
+
+    // Render grouped items with section labels when there are mixed sources
+    const hasMixedSources = [manualItems, prItems, linearItems].filter(g => g.length > 0).length > 1;
+
+    const renderYesterdayItem = (plan: string, index: number) => {
       const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
       const linearId = plan.match(/^\[([^\]]+)\]\s/)?.[1];
       const isAutoCompleted = linearId && autoCompletedIds?.has(linearId);
@@ -254,7 +275,46 @@ export function buildStandupModal(
             : YESTERDAY_ITEM_OPTIONS[0],  // Carry over
         },
       });
-    });
+    };
+
+    // Manual items first
+    if (manualItems.length > 0) {
+      if (hasMixedSources) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*✍️ Manual items*' }],
+        });
+      }
+      for (const { plan, index } of manualItems) {
+        renderYesterdayItem(plan, index);
+      }
+    }
+
+    // PR items
+    if (prItems.length > 0) {
+      if (hasMixedSources) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*📦 PR items*' }],
+        });
+      }
+      for (const { plan, index } of prItems) {
+        renderYesterdayItem(plan, index);
+      }
+    }
+
+    // Linear items
+    if (linearItems.length > 0) {
+      if (hasMixedSources) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*🎫 Linear items*' }],
+        });
+      }
+      for (const { plan, index } of linearItems) {
+        renderYesterdayItem(plan, index);
+      }
+    }
 
     // Unplanned completions - grouped with yesterday (both are "what happened")
     const unplannedYesterdayElement: Record<string, unknown> = {
@@ -425,7 +485,10 @@ export function buildStandupModal(
 
       case 'review_requests':
         if (prData) {
-          // PRs where others are requesting my review
+          blocks.push({
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '_PRs from teammates that need your review_' }],
+          });
           const reviewPRs = prData.reviewRequests.slice(0, 10);
           const reviewOptions = reviewPRs.map((pr) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
@@ -472,6 +535,10 @@ export function buildStandupModal(
 
       case 'my_prs':
         if (prData) {
+          blocks.push({
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '_Your authored PRs — select to track in your standup_' }],
+          });
           // PRs I authored: awaiting review, ready to merge, draft
           const myPRsCategorized: Array<{ pr: GitHubPR; category: string; descSuffix?: string }> = [];
           for (const pr of prData.awaitingReview) {
