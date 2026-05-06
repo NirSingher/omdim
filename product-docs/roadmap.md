@@ -140,16 +140,16 @@ See `requirements.md` and `architecture.md`
 
 ---
 
+### Team Summary Post ✅
+- [x] Post channel-level summary at digest time
+- [x] One line per person: name + top 1–2 plan items
+- [x] Blockers called out in a separate section
+- [x] Each line links to the person's full standup post (↗)
+- [x] Opt-in per-daily via `team_summary: true` config
+
+---
+
 ## Up Next
-
-### Team Summary Post
-Post a single consolidated summary to the daily channel with the key items from each team member's standup.
-
-- [ ] After all standups are in (or at digest time), post a channel-level summary
-- [ ] One line per person: name + top 1–2 items (highest-signal plans or blockers)
-- [ ] Blockers called out in a separate section so they're impossible to miss
-- [ ] Linkable: each person's line links to their full standup post in the thread
-- [ ] Configurable per-daily: opt-in via config toggle
 
 ### CI Pipeline
 - [ ] GitHub Actions for automated test runs

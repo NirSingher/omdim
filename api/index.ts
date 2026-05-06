@@ -12,7 +12,7 @@ import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserD
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
-import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo } from '../lib/format';
+import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo, formatTeamSummary } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -499,6 +499,27 @@ async function runDigestCronUnified(env: Env): Promise<{
           await postMessage(env.SLACK_BOT_TOKEN, daily.channel, oooText);
         } catch (err) {
           console.error(`Failed to post OOO notice to channel for "${daily.name}":`, err);
+        }
+      }
+
+      // Post team summary to channel (opt-in per-daily, workdays only)
+      if (isWorkdayToday && daily.team_summary) {
+        try {
+          const todaySubs = await getSubmissionsInRange(db, daily.name, todayStr, todayStr);
+          if (todaySubs.length > 0) {
+            const githubCfg = getGitHubConfig(daily);
+            const summaryText = formatTeamSummary({
+              dailyName: daily.name,
+              channel: daily.channel,
+              submissions: todaySubs,
+              githubOrg: githubCfg?.org,
+            });
+            if (summaryText) {
+              await postMessage(env.SLACK_BOT_TOKEN, daily.channel, summaryText);
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to post team summary for "${daily.name}":`, err);
         }
       }
 

@@ -19,6 +19,7 @@ import {
   formatPRDigestSection,
   formatLinearDigestSection,
   formatMemberPRSummary,
+  formatTeamSummary,
 } from '../lib/format';
 import type { TeamPRData } from '../lib/github';
 import type { TeamLinearData, CycleProgress } from '../lib/linear';
@@ -1570,6 +1571,62 @@ describe('format utilities', () => {
       const result = formatMemberPRSummary(prData);
 
       expect(result).toBe('3 draft');
+    });
+  });
+
+  describe('formatTeamSummary', () => {
+    it('shows one line per person with top plan items', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['Ship auth', 'Fix tests'], blockers: null, slack_message_ts: null } as any,
+          { slack_user_id: 'U222', today_plans: ['Review PR'], blockers: null, slack_message_ts: null } as any,
+        ],
+      });
+
+      expect(result).toContain('daily-il — Team Summary');
+      expect(result).toContain('<@U111>');
+      expect(result).toContain('Ship auth');
+      expect(result).toContain('Fix tests');
+      expect(result).toContain('<@U222>');
+      expect(result).toContain('Review PR');
+    });
+
+    it('shows blockers in a separate section', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['Ship auth'], blockers: 'Waiting on API key', slack_message_ts: null } as any,
+        ],
+      });
+
+      expect(result).toContain('Blockers');
+      expect(result).toContain('<@U111>: Waiting on API key');
+    });
+
+    it('includes message permalink when slack_message_ts is present', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['Ship auth'], blockers: null, slack_message_ts: '1234567890.123456' } as any,
+        ],
+      });
+
+      expect(result).toContain('slack.com/archives/C123/p1234567890123456');
+      expect(result).toContain('↗');
+    });
+
+    it('returns empty string when no submissions', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [],
+      });
+
+      expect(result).toBe('');
     });
   });
 });

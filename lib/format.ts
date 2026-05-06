@@ -1161,6 +1161,63 @@ export function formatLinearDigestSection(
 }
 
 // ============================================================================
+// Team Summary Post
+// ============================================================================
+
+export interface TeamSummaryOptions {
+  dailyName: string;
+  channel: string;
+  submissions: Submission[];
+  githubOrg?: string;
+}
+
+export function formatTeamSummary(options: TeamSummaryOptions): string {
+  const { dailyName, channel, submissions, githubOrg } = options;
+  if (submissions.length === 0) return '';
+
+  const lines: string[] = [];
+  lines.push(`📋 *${dailyName} — Team Summary*`);
+  lines.push('');
+
+  const blockers: Array<{ userId: string; text: string }> = [];
+
+  for (const sub of submissions) {
+    const topItems: string[] = [];
+
+    // Pick top 1-2 highest-signal items: blockers first, then today's plans
+    const plans = sub.today_plans || [];
+    for (const item of plans.slice(0, 2)) {
+      topItems.push(enrichItemSource(item, githubOrg));
+    }
+
+    // Build line with message link if available
+    const messageLink = sub.slack_message_ts
+      ? ` <https://slack.com/archives/${channel}/p${sub.slack_message_ts.replace('.', '')}|↗>`
+      : '';
+
+    const summary = topItems.length > 0 ? topItems.join(' · ') : '_no plans_';
+    lines.push(`<@${sub.slack_user_id}>${messageLink}: ${summary}`);
+
+    // Collect blockers
+    if (sub.blockers && sub.blockers.trim()) {
+      for (const line of sub.blockers.split('\n').filter(l => l.trim())) {
+        blockers.push({ userId: sub.slack_user_id, text: line.trim() });
+      }
+    }
+  }
+
+  if (blockers.length > 0) {
+    lines.push('');
+    lines.push('🚧 *Blockers*');
+    for (const b of blockers) {
+      lines.push(`<@${b.userId}>: ${b.text}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 

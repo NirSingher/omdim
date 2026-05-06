@@ -83,6 +83,8 @@ const DailySchema = z.object({
   reminder_minutes_before: z.number().min(0).optional(),
   // Per-daily plan-size warning threshold (overrides global max_plan_items)
   max_plan_items: z.number().int().min(0).optional(),
+  // Post a consolidated team summary to the daily channel at digest time
+  team_summary: z.boolean().optional(),
 });
 
 const ConfigSchema = z.object({
