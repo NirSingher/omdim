@@ -8,7 +8,7 @@ import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, po
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
-import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate } from '../lib/prompt';
+import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
@@ -463,10 +463,14 @@ async function runDigestCronUnified(env: Env): Promise<{
     }
 
     try {
-      // Always send daily digest
-      const dailyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'daily');
-      dailySent += dailyResult.sent;
-      errors += dailyResult.errors;
+      // Only send daily digest on workdays (check in schedule timezone)
+      const localNow = schedule.timezone ? getDateInTimezone(schedule.timezone) : new Date();
+      const isWorkdayToday = isWorkday(schedule.days, localNow);
+      if (isWorkdayToday) {
+        const dailyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'daily');
+        dailySent += dailyResult.sent;
+        errors += dailyResult.errors;
+      }
 
       // Check if today is the weekly digest day for this daily
       const weeklyDay = getWeeklyDigestDay(daily);
@@ -476,9 +480,9 @@ async function runDigestCronUnified(env: Env): Promise<{
         errors += weeklyResult.errors;
       }
 
-      // Post OOO notice to daily channel for users whose OOO starts today
+      // Post OOO notice to daily channel for users whose OOO starts today (workdays only)
       const todayStr = formatDate(new Date());
-      const oooStarting = await getOOOStartingOnDate(db, daily.name, todayStr);
+      const oooStarting = isWorkdayToday ? await getOOOStartingOnDate(db, daily.name, todayStr) : [];
       if (oooStarting.length > 0) {
         const formatShortDate = (d: string) => {
           const date = new Date(d + 'T00:00:00');

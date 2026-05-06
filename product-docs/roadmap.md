@@ -116,15 +116,16 @@ See `requirements.md` and `architecture.md`
 
 ---
 
+### Schedule-Aware Prompting ✅
+- [x] Read `schedule` config per-daily to determine working days
+- [x] Skip cron-triggered prompts on off-days (e.g., weekends)
+- [x] OOO and off-day logic combined: neither prompts nor counts as "missing"
+- [x] `/standup force-prompt` still works on off-days (manual override)
+- [x] Daily digest and OOO channel notices skip off-days (timezone-aware)
+
+---
+
 ## Up Next
-
-### Schedule-Aware Prompting
-Respect off-days in the daily schedule — don't prompt on weekends or other non-working days.
-
-- [ ] Read `schedule` config per-daily to determine working days
-- [ ] Skip cron-triggered prompts on off-days (e.g., weekends)
-- [ ] OOO and off-day logic combined: neither prompts nor counts as "missing"
-- [ ] `/standup force-prompt` still works on off-days (manual override)
 
 ### Visual Polish
 - [ ] Use `:white_check_mark:` / `:ballot_box_with_check:` for done items
