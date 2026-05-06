@@ -108,17 +108,15 @@ See `requirements.md` and `architecture.md`
 - [x] Source icons: 📦 for PRs, 🎫 for Linear tickets; manual items unchanged
 - [x] Reader can tell at a glance where each item came from
 
+### Report OOO to Daily ✅
+- [x] Post OOO notice to daily channel when a user's OOO period begins (at digest time)
+- [x] Include OOO users in the daily digest (e.g., "Out today: @alice, @bob")
+- [x] Show return date alongside name
+- [ ] Optional per-daily toggle in config (deferred to Dynamic Configuration)
+
 ---
 
 ## Up Next
-
-### Report OOO to Daily
-Surface OOO status in the daily channel so the team sees who's out without checking `/standup list`.
-
-- [ ] Post OOO notice to daily channel when a user's OOO period begins
-- [ ] Include OOO users in the daily digest (e.g., "Out today: @alice, @bob")
-- [ ] Show return date alongside name
-- [ ] Optional per-daily toggle in config
 
 ### Schedule-Aware Prompting
 Respect off-days in the daily schedule — don't prompt on weekends or other non-working days.

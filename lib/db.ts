@@ -1343,6 +1343,20 @@ export async function getActiveOOOForDaily(
   );
 }
 
+/** Get OOO records starting on a specific date for a daily (for channel notifications) */
+export async function getOOOStartingOnDate(
+  db: DbClient,
+  dailyName: string,
+  date: string
+): Promise<OOORecord[]> {
+  return db.query<OOORecord>(
+    `SELECT * FROM ooo
+     WHERE daily_name = $1
+       AND start_date = $2`,
+    [dailyName, date]
+  );
+}
+
 // ============================================================================
 // Reminder Log (dedup channel reminders)
 // ============================================================================

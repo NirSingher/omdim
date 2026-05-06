@@ -372,6 +372,11 @@ export interface IntegrationStatus {
   linear: boolean;
 }
 
+export interface OOOInfo {
+  slackUserId: string;
+  endDate: string;
+}
+
 export interface DigestOptions {
   dailyName: string;
   period: DigestPeriod;
@@ -381,6 +386,7 @@ export interface DigestOptions {
   stats: TeamMemberStats[];
   totalWorkdays: number;
   missingToday?: string[];
+  oooToday?: OOOInfo[]; // Users currently OOO
   bottlenecks?: BottleneckItem[];
   dropStats?: DropStats[];
   rankings?: TeamMemberRanking[];
@@ -475,6 +481,16 @@ export function formatManagerDigest(options: DigestOptions): string {
   if (period === 'daily' && missingToday && missingToday.length > 0) {
     lines.push('');
     lines.push(`*Not submitted:* ${missingToday.map(u => `<@${u}>`).join(' · ')}`);
+  }
+
+  // OOO users (for daily only)
+  if (period === 'daily' && options.oooToday && options.oooToday.length > 0) {
+    const formatShort = (d: string) => {
+      const date = new Date(d + 'T00:00:00');
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+    const oooList = options.oooToday.map(o => `<@${o.slackUserId}> (back ${formatShort(o.endDate)})`).join(' · ');
+    lines.push(`*🏖️ Out today:* ${oooList}`);
   }
 
   // Compact team section

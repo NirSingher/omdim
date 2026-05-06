@@ -1022,6 +1022,60 @@ describe('format utilities', () => {
 
       expect(result).not.toContain('Work Alignment');
     });
+
+    it('shows OOO users in daily digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 1,
+        oooToday: [
+          { slackUserId: 'U111', endDate: '2025-12-20' },
+          { slackUserId: 'U222', endDate: '2025-12-25' },
+        ],
+      });
+
+      expect(result).toContain('Out today');
+      expect(result).toContain('<@U111>');
+      expect(result).toContain('<@U222>');
+      expect(result).toContain('Dec 20');
+      expect(result).toContain('Dec 25');
+    });
+
+    it('does not show OOO section in weekly digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        oooToday: [
+          { slackUserId: 'U111', endDate: '2025-12-20' },
+        ],
+      });
+
+      expect(result).not.toContain('Out today');
+    });
+
+    it('does not show OOO section when no one is OOO', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 1,
+        oooToday: [],
+      });
+
+      expect(result).not.toContain('Out today');
+    });
   });
 
   describe('buildBottleneckBlocks', () => {

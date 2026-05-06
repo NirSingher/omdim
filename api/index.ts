@@ -4,15 +4,15 @@
  */
 
 import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser } from '../lib/config';
-import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks } from '../lib/db';
+import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
 import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
-import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics } from '../lib/format';
+import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -476,6 +476,28 @@ async function runDigestCronUnified(env: Env): Promise<{
         errors += weeklyResult.errors;
       }
 
+      // Post OOO notice to daily channel for users whose OOO starts today
+      const todayStr = formatDate(new Date());
+      const oooStarting = await getOOOStartingOnDate(db, daily.name, todayStr);
+      if (oooStarting.length > 0) {
+        const formatShortDate = (d: string) => {
+          const date = new Date(d + 'T00:00:00');
+          return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        };
+        const oooLines = oooStarting.map(r => {
+          const back = r.start_date === r.end_date
+            ? 'back tomorrow'
+            : `back ${formatShortDate(r.end_date)}`;
+          return `<@${r.slack_user_id}> (${back})`;
+        });
+        const oooText = `🏖️ *Out today:* ${oooLines.join(' · ')}`;
+        try {
+          await postMessage(env.SLACK_BOT_TOKEN, daily.channel, oooText);
+        } catch (err) {
+          console.error(`Failed to post OOO notice to channel for "${daily.name}":`, err);
+        }
+      }
+
       processedDailies.push(daily.name);
     } catch (err) {
       console.error(`Failed to process digests for "${daily.name}":`, err);
@@ -663,6 +685,15 @@ async function sendDigestToManagers(
     }
   }
 
+  // Fetch OOO data for daily digest
+  let oooToday: OOOInfo[] | undefined;
+  if (period === 'daily') {
+    const oooRecords = await getActiveOOOForDaily(db, daily.name, endDate);
+    if (oooRecords.length > 0) {
+      oooToday = oooRecords.map(r => ({ slackUserId: r.slack_user_id, endDate: r.end_date }));
+    }
+  }
+
   const digestText = formatManagerDigest({
     dailyName: daily.name,
     period,
@@ -672,6 +703,7 @@ async function sendDigestToManagers(
     stats,
     totalWorkdays,
     missingToday,
+    oooToday,
     bottlenecks,
     dropStats,
     rankings,
