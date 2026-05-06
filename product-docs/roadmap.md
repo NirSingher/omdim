@@ -161,17 +161,15 @@ See `requirements.md` and `architecture.md`
 - [x] Stale PR threshold override: `stale_pr_days` setting (default 3)
 - [x] Consolidated all settings under "⚙️ Settings" section in App Home
 
+### In-Progress Item Tracking (Full) ✅
+- [x] In-progress items auto-carry to today (no re-prompting needed)
+- [x] Track consecutive in-progress days per item in DB (`carry_count` increments daily)
+- [x] Items in-progress for 3+ days flagged as "needs attention" in digest (`🔄`) and report
+- [x] Visual indicator in standup post: `🔄 Day X` / `⚠️ Day X — needs attention`
+
 ---
 
 ## Planned
-
-### In-Progress Item Tracking (Full)
-Build on the existing in-progress status to add smart carry-over and attention flagging.
-
-- [ ] In-progress items auto-carry to today (no re-prompting needed)
-- [ ] Track consecutive in-progress days per item in DB
-- [ ] Items in-progress for 3+ days flagged as "needs attention" in digest and report
-- [ ] Visual indicator in standup post (e.g., 🔄 Day 3)
 
 ### Dynamic Configuration
 - [ ] Hot-reload config changes without redeploying

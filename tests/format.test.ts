@@ -20,6 +20,7 @@ import {
   formatLinearDigestSection,
   formatMemberPRSummary,
   formatTeamSummary,
+  formatFullReport,
 } from '../lib/format';
 import type { TeamPRData } from '../lib/github';
 import type { TeamLinearData, CycleProgress } from '../lib/linear';
@@ -117,7 +118,23 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(in progress)_');
+      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(Day 3 — needs attention)_');
+    });
+
+    it('shows 🔄 Day X for in-progress items with carry_count 1-2', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayInProgress: ['WIP task'],
+        unplanned: [],
+        todayPlans: [],
+        blockers: '',
+        customAnswers: {},
+        inProgressCarryCounts: { 'WIP task': 2 },
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(Day 2)_');
     });
 
     it('renders in-progress items before carried-over items', () => {
@@ -836,8 +853,8 @@ describe('format utilities', () => {
         stats: [],
         totalWorkdays: 5,
         bottlenecks: [
-          { id: 1, text: 'Fix auth timeout issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' },
-          { id: 2, text: 'Update API docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' },
+          { id: 1, text: 'Fix auth timeout issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry', status: 'carried' },
+          { id: 2, text: 'Update API docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry', status: 'carried' },
         ],
       });
 
@@ -1130,7 +1147,7 @@ describe('format utilities', () => {
 
     it('creates header section for bottleneck items', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1143,8 +1160,8 @@ describe('format utilities', () => {
 
     it('creates section for each bottleneck item with snooze button', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
-        { id: 2, text: 'Update docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
+        { id: 2, text: 'Update docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1156,7 +1173,7 @@ describe('format utilities', () => {
 
     it('includes item text and user mention in section', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1169,7 +1186,7 @@ describe('format utilities', () => {
 
     it('includes snooze button with correct action_id', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1182,7 +1199,7 @@ describe('format utilities', () => {
 
     it('includes item id and daily name in button value', () => {
       const bottlenecks = [
-        { id: 42, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 42, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1627,6 +1644,114 @@ describe('format utilities', () => {
       });
 
       expect(result).toBe('');
+    });
+  });
+
+  describe('in-progress needs-attention in digest', () => {
+    it('shows 🔄 for in-progress bottleneck items in digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Long-running refactor', slack_user_id: 'U111', carry_count: 4, days_pending: 5, type: 'carry', status: 'in_progress' },
+        ],
+      });
+
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('🔄 <@U111>');
+      expect(result).toContain('in progress Day 4');
+      expect(result).not.toContain('stuck');
+    });
+
+    it('shows 🔥 for carried bottleneck items and 🔄 for in-progress in same digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Stuck task', slack_user_id: 'U111', carry_count: 3, days_pending: 4, type: 'carry', status: 'carried' },
+          { id: 2, text: 'WIP task', slack_user_id: 'U222', carry_count: 5, days_pending: 6, type: 'carry', status: 'in_progress' },
+        ],
+      });
+
+      expect(result).toContain('🔥 <@U111>');
+      expect(result).toContain('stuck 4 days');
+      expect(result).toContain('🔄 <@U222>');
+      expect(result).toContain('in progress Day 5');
+    });
+  });
+
+  describe('formatFullReport - in-progress flagging', () => {
+    it('shows in-progress needs-attention section per user', () => {
+      const result = formatFullReport({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 4, total_completed: 10, total_planned: 12, total_blockers: 0, avg_items_per_day: 3 },
+        ],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Long-running migration', slack_user_id: 'U111', carry_count: 4, days_pending: 5, type: 'carry', status: 'in_progress' },
+        ],
+      });
+
+      expect(result).toContain('In progress — needs attention');
+      expect(result).toContain('🔄 "Long-running migration" (Day 4)');
+    });
+
+    it('separates in-progress and carried stuck items in report', () => {
+      const result = formatFullReport({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 4, total_completed: 10, total_planned: 12, total_blockers: 0, avg_items_per_day: 3 },
+        ],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'WIP refactor', slack_user_id: 'U111', carry_count: 4, days_pending: 5, type: 'carry', status: 'in_progress' },
+          { id: 2, text: 'Abandoned PR', slack_user_id: 'U111', carry_count: 3, days_pending: 4, type: 'carry', status: 'carried' },
+        ],
+      });
+
+      expect(result).toContain('In progress — needs attention');
+      expect(result).toContain('🔄 "WIP refactor" (Day 4)');
+      expect(result).toContain('Stuck items');
+      expect(result).toContain('🔥 "Abandoned PR" (4 days, carried 3x)');
+    });
+
+    it('does not show in-progress section when no in-progress bottlenecks', () => {
+      const result = formatFullReport({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 4, total_completed: 10, total_planned: 12, total_blockers: 0, avg_items_per_day: 3 },
+        ],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Old task', slack_user_id: 'U111', carry_count: 3, days_pending: 4, type: 'carry', status: 'carried' },
+        ],
+      });
+
+      expect(result).not.toContain('In progress — needs attention');
+      expect(result).toContain('Stuck items');
     });
   });
 });

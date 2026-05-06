@@ -135,8 +135,13 @@ export function formatStandupBlocks(
       // In-progress items first
       for (const item of data.yesterdayInProgress || []) {
         const carryCount = data.inProgressCarryCounts?.[item] || 0;
-        const emoji = carryCount >= 3 ? '⚠️' : '🔄';
-        todayItems.push(`${emoji} ${enrich(item)} _(in progress)_`);
+        if (carryCount >= 3) {
+          todayItems.push(`⚠️ ${enrich(item)} _(Day ${carryCount} — needs attention)_`);
+        } else if (carryCount >= 1) {
+          todayItems.push(`🔄 ${enrich(item)} _(Day ${carryCount})_`);
+        } else {
+          todayItems.push(`🔄 ${enrich(item)} _(in progress)_`);
+        }
       }
       for (const item of data.yesterdayIncomplete) {
         todayItems.push(`➡️ ${enrich(item)} _(carried over)_`);
@@ -447,10 +452,14 @@ export function formatManagerDigest(options: DigestOptions): string {
   // Collect all action items
   const actionItems: string[] = [];
 
-  // Stuck items (bottlenecks)
+  // Stuck items (bottlenecks) — distinguish in-progress from carried
   if (bottlenecks && bottlenecks.length > 0) {
     for (const item of bottlenecks.slice(0, 3)) {
-      actionItems.push(`🔥 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" stuck ${item.days_pending} days`);
+      if (item.status === 'in_progress') {
+        actionItems.push(`🔄 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" in progress Day ${item.carry_count}`);
+      } else {
+        actionItems.push(`🔥 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" stuck ${item.days_pending} days`);
+      }
     }
   }
 
@@ -720,16 +729,32 @@ export function formatFullReport(options: FullReportOptions): string {
       lines.push(`Blockers: 0 days`);
     }
 
-    // Stuck items
+    // Stuck items — separate in-progress from carried
     const userBottlenecks = bottleneckMap.get(userId);
     if (userBottlenecks && userBottlenecks.length > 0) {
-      lines.push('');
-      lines.push(`Stuck items:`);
-      for (const item of userBottlenecks.slice(0, 3)) {
-        lines.push(`  🔥 "${truncate(item.text, 40)}" (${item.days_pending} days, carried ${item.carry_count}x)`);
+      const inProgressItems = userBottlenecks.filter(b => b.status === 'in_progress');
+      const carriedItems = userBottlenecks.filter(b => b.status !== 'in_progress');
+
+      if (inProgressItems.length > 0) {
+        lines.push('');
+        lines.push(`In progress — needs attention:`);
+        for (const item of inProgressItems.slice(0, 3)) {
+          lines.push(`  🔄 "${truncate(item.text, 40)}" (Day ${item.carry_count})`);
+        }
+        if (inProgressItems.length > 3) {
+          lines.push(`  _...and ${inProgressItems.length - 3} more_`);
+        }
       }
-      if (userBottlenecks.length > 3) {
-        lines.push(`  _...and ${userBottlenecks.length - 3} more_`);
+
+      if (carriedItems.length > 0) {
+        lines.push('');
+        lines.push(`Stuck items:`);
+        for (const item of carriedItems.slice(0, 3)) {
+          lines.push(`  🔥 "${truncate(item.text, 40)}" (${item.days_pending} days, carried ${item.carry_count}x)`);
+        }
+        if (carriedItems.length > 3) {
+          lines.push(`  _...and ${carriedItems.length - 3} more_`);
+        }
       }
     }
 

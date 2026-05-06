@@ -998,6 +998,7 @@ export interface BottleneckItem {
   carry_count: number;
   days_pending: number;
   type: 'carry' | 'dropped';
+  status: 'pending' | 'carried' | 'in_progress';
 }
 
 /** Get bottleneck items (carried at/above threshold, not snoozed) */
@@ -1012,6 +1013,7 @@ export async function getBottleneckItems(
        text,
        slack_user_id,
        carry_count,
+       status,
        (CURRENT_DATE - created_date) as days_pending,
        'carry' as type
      FROM work_items
