@@ -31,12 +31,19 @@ export interface AppHomeOpenedEvent {
 // Home View Builder
 // ============================================================================
 
+interface PlanItem {
+  text: string;
+  status: 'done' | 'in_progress' | 'carried' | 'planned' | 'dropped';
+  source?: string; // e.g. "PR #123", "LIN-456"
+}
+
 interface DailyStatus {
   dailyName: string;
   todaySubmitted: boolean;
   tomorrowScheduled: boolean;
   submission?: Submission; // Today's submission for stats
   droppedCount?: number; // Items dropped from yesterday
+  planItems?: PlanItem[]; // Today's plan items with status
   prData?: UserPRData; // GitHub PR data if integration enabled
   linearData?: UserLinearData; // Linear data if integration enabled
 }
@@ -155,6 +162,37 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
           value: status.dailyName,
         },
       });
+
+      // Today's Plans section — always visible when submitted
+      if (status.planItems && status.planItems.length > 0) {
+        const planLines: string[] = [];
+        for (const item of status.planItems) {
+          const sourceTag = item.source ? ` · _${item.source}_` : '';
+          switch (item.status) {
+            case 'done':
+              planLines.push(`✅ ~${item.text}~${sourceTag}`);
+              break;
+            case 'in_progress':
+              planLines.push(`🔄 ${item.text}${sourceTag}`);
+              break;
+            case 'carried':
+              planLines.push(`➡️ ${item.text} _(carried)_${sourceTag}`);
+              break;
+            case 'dropped':
+              planLines.push(`❌ ~${item.text}~${sourceTag}`);
+              break;
+            default:
+              planLines.push(`⬜ ${item.text}${sourceTag}`);
+          }
+        }
+        blocks.push({
+          type: 'context',
+          elements: [{
+            type: 'mrkdwn',
+            text: planLines.join('\n'),
+          }],
+        });
+      }
     }
   }
 
@@ -245,7 +283,7 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*DM standup copy*\n${dmStatus} — get a private copy of your standup when it posts to the channel`,
+        text: `*DM standup copy*\n${dmStatus} — your plan is shown above; enable this for an extra DM copy`,
       },
       accessory: {
         type: 'button',
@@ -272,6 +310,12 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
     type: 'home',
     blocks,
   };
+}
+
+/** Extract source context from a plan item text (e.g., "[LIN-123] ..." → "LIN-123", "[repo#45] ..." → "repo#45") */
+function extractSource(text: string): string | undefined {
+  const match = text.match(/^\[([^\]]+)\]\s/);
+  return match ? match[1] : undefined;
 }
 
 /** Parse JSONB arrays from database (handles both array and string formats) */
@@ -385,10 +429,14 @@ export async function handleAppHomeOpened(
         }
       }
 
-      // Compute dropped count from previous submission
+      // Build plan items and compute dropped count from previous submission
       let droppedCount: number | undefined;
+      let planItems: PlanItem[] | undefined;
       if (todaySubmission) {
         const prevSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
+
+        // Build dropped set from previous submission
+        const droppedItems: string[] = [];
         if (prevSubmission) {
           const prevPlans = new Set([
             ...parseJsonArray(prevSubmission.today_plans),
@@ -400,7 +448,33 @@ export async function handleAppHomeOpened(
             ...parseJsonArray(todaySubmission.yesterday_incomplete),
             ...parseJsonArray(todaySubmission.yesterday_in_progress),
           ]);
-          droppedCount = [...prevPlans].filter(item => !accountedFor.has(item)).length;
+          for (const item of prevPlans) {
+            if (!accountedFor.has(item)) droppedItems.push(item);
+          }
+          droppedCount = droppedItems.length;
+        }
+
+        // Build plan items list: in-progress, carried, new plans, done yesterday, dropped
+        planItems = [];
+        const completed = parseJsonArray(todaySubmission.yesterday_completed);
+        const incomplete = parseJsonArray(todaySubmission.yesterday_incomplete);
+        const inProgress = parseJsonArray(todaySubmission.yesterday_in_progress);
+        const plans = parseJsonArray(todaySubmission.today_plans);
+
+        for (const item of inProgress) {
+          planItems.push({ text: item, status: 'in_progress', source: extractSource(item) });
+        }
+        for (const item of incomplete) {
+          planItems.push({ text: item, status: 'carried', source: extractSource(item) });
+        }
+        for (const item of plans) {
+          planItems.push({ text: item, status: 'planned', source: extractSource(item) });
+        }
+        for (const item of completed) {
+          planItems.push({ text: item, status: 'done', source: extractSource(item) });
+        }
+        for (const item of droppedItems) {
+          planItems.push({ text: item, status: 'dropped', source: extractSource(item) });
         }
       }
 
@@ -410,6 +484,7 @@ export async function handleAppHomeOpened(
         tomorrowScheduled,
         submission: todaySubmission || undefined,
         droppedCount,
+        planItems,
         prData,
         linearData,
       });

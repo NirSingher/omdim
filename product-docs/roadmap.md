@@ -90,6 +90,13 @@ See `requirements.md` and `architecture.md`
 - [x] Static warning copy; non-blocking; not dismissible
 - [x] Counts all plan items regardless of source (manual, PR, Linear)
 
+### App Home: Today's Plans ✅
+- [x] Show today's submitted plan items in the App Home tab (done / in-progress / planned / carried / dropped)
+- [x] DM copy defaults to off — App Home is the primary place to review your plan
+- [x] DM copy toggle still available in Preferences for users who prefer it
+- [x] App Home refreshes after submission so user sees plan immediately
+- [x] Source context per item (PR link, Linear ticket identifier) shown inline
+
 ---
 
 ## Up Next
@@ -139,6 +146,15 @@ First Version shipped (see Shipped > Plan Size Warning). Remaining scope:
 - [ ] Live validation (warning updates as the user types/adds items)
 - [ ] Digest/report surfacing for users who routinely over-plan
 - [ ] Distinguish net-new vs carried-over items in the count
+
+### Team Summary Post
+Post a single consolidated summary to the daily channel with the key items from each team member's standup.
+
+- [ ] After all standups are in (or at digest time), post a channel-level summary
+- [ ] One line per person: name + top 1–2 items (highest-signal plans or blockers)
+- [ ] Blockers called out in a separate section so they're impossible to miss
+- [ ] Linkable: each person's line links to their full standup post in the thread
+- [ ] Configurable per-daily: opt-in via config toggle
 
 ### CI Pipeline
 - [ ] GitHub Actions for automated test runs

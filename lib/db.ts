@@ -207,7 +207,7 @@ export async function getUsersWithLinearLinks(
 // DM Standup Preference
 // ============================================================================
 
-/** Get whether user wants DM copies of standup posts (default: true) */
+/** Get whether user wants DM copies of standup posts (default: false — App Home shows plans) */
 export async function getDmStandupPreference(
   db: DbClient,
   slackUserId: string
@@ -217,11 +217,10 @@ export async function getDmStandupPreference(
       `SELECT dm_standup FROM slack_users WHERE slack_user_id = $1`,
       [slackUserId]
     );
-    // Default to true if no row or null
-    return result[0]?.dm_standup ?? true;
+    // Default to false — App Home is the primary place to review your plan
+    return result[0]?.dm_standup ?? false;
   } catch {
-    // Column may not exist yet (pre-migration) — default to true
-    return true;
+    return false;
   }
 }
 

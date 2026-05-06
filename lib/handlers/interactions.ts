@@ -643,6 +643,13 @@ export async function handleStandupSubmission(
         console.error('Failed to send standup DM copy:', error);
       }
     }
+
+    // Refresh App Home so user sees their plan immediately
+    try {
+      await refreshHome(userId, ctx);
+    } catch (error) {
+      console.error('Failed to refresh App Home after submission:', error);
+    }
   };
 
   // Use waitUntil for background processing if available (Cloudflare Workers),

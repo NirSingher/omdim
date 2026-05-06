@@ -8,11 +8,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/db', () => ({
   getUserDailies: vi.fn(() => Promise.resolve([])),
   getSubmissionForDate: vi.fn(() => Promise.resolve(null)),
+  getPreviousSubmission: vi.fn(() => Promise.resolve(null)),
   getGitHubUsername: vi.fn(() => Promise.resolve(null)),
   getLinearUserId: vi.fn(() => Promise.resolve(null)),
   setGitHubUsername: vi.fn(),
   setLinearUserId: vi.fn(),
-  getDmStandupPreference: vi.fn(() => Promise.resolve(true)),
+  getDmStandupPreference: vi.fn(() => Promise.resolve(false)),
 }));
 
 // Mock the config module
@@ -49,7 +50,7 @@ vi.mock('../lib/linear', () => ({
 }));
 
 import { buildHomeView, LinkedAccounts, handleAppHomeOpened, HomeContext, AppHomeOpenedEvent } from '../lib/handlers/home';
-import { getGitHubUsername, getLinearUserId } from '../lib/db';
+import { getGitHubUsername, getLinearUserId, getUserDailies, getSubmissionForDate, getPreviousSubmission } from '../lib/db';
 import { publishHomeView } from '../lib/slack';
 
 describe('buildHomeView - linked accounts section', () => {
@@ -128,6 +129,75 @@ describe('buildHomeView - linked accounts section', () => {
   });
 });
 
+describe('buildHomeView - Today\'s Plans section', () => {
+  it('shows plan items grouped by status', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { text: 'Fix auth bug', status: 'done' as const },
+        { text: 'Refactor DB layer', status: 'in_progress' as const },
+        { text: 'Deploy to staging', status: 'planned' as const },
+        { text: 'Old task', status: 'carried' as const },
+        { text: 'Abandoned idea', status: 'dropped' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    // Find context block with plan items
+    const planBlock = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('Fix auth bug')
+    );
+    expect(planBlock).toBeDefined();
+
+    const text = (planBlock as any).elements[0].text;
+    expect(text).toContain('✅ ~Fix auth bug~');
+    expect(text).toContain('🔄 Refactor DB layer');
+    expect(text).toContain('⬜ Deploy to staging');
+    expect(text).toContain('➡️ Old task _(carried)_');
+    expect(text).toContain('❌ ~Abandoned idea~');
+  });
+
+  it('shows source tags for integration items', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { text: '[LIN-123] Fix auth', status: 'planned' as const, source: 'LIN-123' },
+        { text: '[repo#45] Add tests', status: 'done' as const, source: 'repo#45' },
+        { text: 'Manual task', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const planBlock = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('LIN-123')
+    );
+    expect(planBlock).toBeDefined();
+    const text = (planBlock as any).elements[0].text;
+    expect(text).toContain('· _LIN-123_');
+    expect(text).toContain('· _repo#45_');
+    expect(text).not.toContain('Manual task · _');
+  });
+
+  it('does not show plan section when no submission', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: false,
+      tomorrowScheduled: false,
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    // No context block with plan items
+    const planBlocks = view.blocks.filter(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('⬜')
+    );
+    expect(planBlocks).toHaveLength(0);
+  });
+});
+
 describe('handleAppHomeOpened - fetches linked accounts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -155,5 +225,57 @@ describe('handleAppHomeOpened - fetches linked accounts', () => {
       (b: any) => b.type === 'section' && b.text?.text?.includes('@octocat')
     );
     expect(githubSection).toBeDefined();
+  });
+});
+
+describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('builds plan items from today\'s submission', async () => {
+    // User is part of a daily
+    vi.mocked(getUserDailies).mockResolvedValueOnce([
+      { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },
+    ]);
+    // Today's submission exists
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
+      id: 1,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-test',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: ['Done task'],
+      yesterday_incomplete: ['Carried task'],
+      yesterday_in_progress: ['WIP task'],
+      unplanned: null,
+      today_plans: ['New plan'],
+      blockers: null,
+      custom_answers: null,
+      slack_message_ts: null,
+      posted: true,
+    });
+    // No previous submission (so no dropped items)
+    vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    vi.mocked(publishHomeView).mockResolvedValueOnce(true);
+
+    const event: AppHomeOpenedEvent = { type: 'app_home_opened', user: 'U12345', tab: 'home' };
+    const ctx: HomeContext = { db: {} as any, slackToken: 'xoxb-test' };
+
+    await handleAppHomeOpened(event, ctx);
+
+    const publishCall = vi.mocked(publishHomeView).mock.calls[0];
+    const view = publishCall[2] as { blocks: Array<Record<string, unknown>> };
+
+    // Find the context block with plan items
+    const planBlock = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('New plan')
+    );
+    expect(planBlock).toBeDefined();
+    const text = (planBlock as any).elements[0].text;
+    expect(text).toContain('🔄 WIP task');
+    expect(text).toContain('➡️ Carried task');
+    expect(text).toContain('⬜ New plan');
+    expect(text).toContain('✅ ~Done task~');
   });
 });
