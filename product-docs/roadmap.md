@@ -103,17 +103,14 @@ See `requirements.md` and `architecture.md`
 - [x] Context hints on PR and My PR sections explaining what each shows
 - [x] Reduced cognitive load through visual separation between source types
 
+### Readable Standup Post ✅
+- [x] Integration items enriched with clickable links: PR items link to GitHub, Linear items to Linear
+- [x] Source icons: 📦 for PRs, 🎫 for Linear tickets; manual items unchanged
+- [x] Reader can tell at a glance where each item came from
+
 ---
 
 ## Up Next
-
-### Readable Standup Post
-Give each line in the posted standup more context and make integration items actionable.
-
-- [ ] Show source per line (e.g., "✅ Fix auth bug — _from PR #123_")
-- [ ] Clickable items: PR/Linear items link to source URL
-- [ ] Consistent source icons (GitHub vs Linear vs manual)
-- [ ] Reader can tell at a glance where each item came from
 
 ### Report OOO to Daily
 Surface OOO status in the daily channel so the team sees who's out without checking `/standup list`.

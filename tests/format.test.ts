@@ -402,6 +402,54 @@ describe('format utilities', () => {
       expect(footer.type).toBe('context');
       expect(footer.elements?.[0]?.text).toContain('daily-il standup');
     });
+
+    it('enriches PR items with clickable GitHub links', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['[my-repo#42] Fix typo'],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['[other-repo#99] Add feature'],
+        blockers: '',
+        customAnswers: {},
+        githubOrg: 'thenvoi',
+      });
+
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
+      expect(yesterdayBlock?.text?.text).toContain('<https://github.com/thenvoi/my-repo/pull/42|📦 my-repo#42>');
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('<https://github.com/thenvoi/other-repo/pull/99|📦 other-repo#99>');
+    });
+
+    it('enriches Linear items with clickable Linear links', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['[ENG-123] Fix auth bug'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('<https://linear.app/issue/ENG-123|🎫 ENG-123>');
+      expect(todayBlock?.text?.text).toContain('Fix auth bug');
+    });
+
+    it('leaves manual items unchanged (no enrichment)', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Ship the feature'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('⬜ Ship the feature');
+      expect(todayBlock?.text?.text).not.toContain('<http');
+    });
   });
 
   describe('formatDailyDigest', () => {

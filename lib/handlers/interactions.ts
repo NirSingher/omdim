@@ -596,24 +596,28 @@ export async function handleStandupSubmission(
     // are already included in todayPlans — re-fetching would show ALL PRs
     // regardless of what the user selected.
     if (daily?.channel) {
+      const githubConfig = getGitHubConfig(daily);
+      const standupData = {
+        yesterdayCompleted,
+        yesterdayIncomplete,
+        yesterdayInProgress,
+        yesterdayDropped,
+        unplanned,
+        todayPlans,
+        blockers,
+        customAnswers,
+        questions: daily.questions,
+        fieldOrder: daily.field_order,
+        inProgressCarryCounts,
+        githubOrg: githubConfig?.org,
+      };
+
       const messageTs = await postStandupToChannel(
         ctx.slackToken,
         daily.channel,
         userId,
         dailyName,
-        {
-          yesterdayCompleted,
-          yesterdayIncomplete,
-          yesterdayInProgress,
-          yesterdayDropped,
-          unplanned,
-          todayPlans,
-          blockers,
-          customAnswers,
-          questions: daily.questions,
-          fieldOrder: daily.field_order,
-          inProgressCarryCounts,
-        }
+        standupData
       );
 
       // Store message timestamp for future reference
@@ -625,19 +629,7 @@ export async function handleStandupSubmission(
       try {
         const dmEnabled = await getDmStandupPreference(ctx.db, userId);
         if (dmEnabled) {
-          await sendStandupDM(ctx.slackToken, userId, dailyName, daily.channel, {
-            yesterdayCompleted,
-            yesterdayIncomplete,
-            yesterdayInProgress,
-            yesterdayDropped,
-            unplanned,
-            todayPlans,
-            blockers,
-            customAnswers,
-            questions: daily.questions,
-            fieldOrder: daily.field_order,
-            inProgressCarryCounts,
-          });
+          await sendStandupDM(ctx.slackToken, userId, dailyName, daily.channel, standupData);
         }
       } catch (error) {
         console.error('Failed to send standup DM copy:', error);

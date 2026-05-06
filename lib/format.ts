@@ -42,6 +42,7 @@ export interface StandupData {
   prData?: UserPRData; // GitHub PR data for integration
   reviewerSlackMap?: Map<string, string>; // GitHub login → Slack user ID
   inProgressCarryCounts?: Record<string, number>; // carry counts for attention warnings
+  githubOrg?: string; // GitHub org for building clickable PR links
 }
 
 // Default field order values
@@ -102,19 +103,21 @@ export function formatStandupBlocks(
 
   const sections: OrderedSection[] = [];
 
+  const enrich = (text: string) => enrichItemSource(text, data.githubOrg);
+
   // Yesterday section - completed, unplanned, and dropped items
   sections.push({
     order: yesterdayOrder,
     render: () => {
       const yesterdayItems: string[] = [];
       for (const item of data.yesterdayCompleted) {
-        yesterdayItems.push(`☑️ ${item}`);
+        yesterdayItems.push(`☑️ ${enrich(item)}`);
       }
       for (const item of data.unplanned) {
         yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
       }
       for (const item of data.yesterdayDropped || []) {
-        yesterdayItems.push(`❌ ${item} _(dropped)_`);
+        yesterdayItems.push(`❌ ${enrich(item)} _(dropped)_`);
       }
       if (yesterdayItems.length === 0) return null;
       return {
@@ -133,17 +136,17 @@ export function formatStandupBlocks(
       for (const item of data.yesterdayInProgress || []) {
         const carryCount = data.inProgressCarryCounts?.[item] || 0;
         const emoji = carryCount >= 3 ? '⚠️' : '🔄';
-        todayItems.push(`${emoji} ${item} _(in progress)_`);
+        todayItems.push(`${emoji} ${enrich(item)} _(in progress)_`);
       }
       for (const item of data.yesterdayIncomplete) {
-        todayItems.push(`⬜ ${item} _(carried over)_`);
+        todayItems.push(`⬜ ${enrich(item)} _(carried over)_`);
       }
       const carryForwardCount = (data.yesterdayInProgress || []).length + data.yesterdayIncomplete.length;
       if (carryForwardCount > 0 && data.todayPlans.length > 0) {
         todayItems.push('───');
       }
       for (const item of data.todayPlans) {
-        todayItems.push(`⬜ ${item}`);
+        todayItems.push(`⬜ ${enrich(item)}`);
       }
       if (todayItems.length === 0) return null;
       return {
@@ -1122,6 +1125,28 @@ export function formatLinearDigestSection(
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * Enrich a plan item with a clickable source link when it has an [identifier] prefix.
+ * - `[repo#42] title` → `<https://github.com/…|📦 repo#42> title`
+ * - `[ENG-123] title` → `<https://linear.app/issue/ENG-123|🎫 ENG-123> title`
+ * - no prefix → returned as-is
+ */
+function enrichItemSource(text: string, githubOrg?: string): string {
+  const match = text.match(/^\[([^\]]+)\]\s+(.*)/);
+  if (!match) return text;
+  const [, id, title] = match;
+  if (id.includes('#')) {
+    // GitHub PR: "repo#42"
+    const [repo, num] = id.split('#');
+    const url = githubOrg
+      ? `https://github.com/${githubOrg}/${repo}/pull/${num}`
+      : `#`;
+    return `<${url}|📦 ${id}> ${title}`;
+  }
+  // Linear ticket: "ENG-123"
+  return `<https://linear.app/issue/${id}|🎫 ${id}> ${title}`;
+}
 
 /** Parse JSONB arrays from database (handles both array and string formats) */
 function parseJsonArray(value: string[] | null): string[] {

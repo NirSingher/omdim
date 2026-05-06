@@ -622,6 +622,7 @@ async function processScheduledSubmission(
       fieldOrder: daily.field_order,
       prData,
       reviewerSlackMap,
+      githubOrg: githubConfig?.org,
     }
   );
 
@@ -651,6 +652,7 @@ async function processScheduledSubmission(
         fieldOrder: daily.field_order,
         prData,
         reviewerSlackMap,
+        githubOrg: githubConfig?.org,
       });
     }
   } catch (error) {
