@@ -240,6 +240,55 @@ export async function setDmStandupPreference(
 }
 
 // ============================================================================
+// User Settings
+// ============================================================================
+
+export interface UserSettings {
+  dmStandup: boolean;
+  maxItems: number | null;
+  stalePrDays: number | null;
+  linearTeamFilter: string[] | null;
+}
+
+export async function getUserSettings(
+  db: DbClient,
+  slackUserId: string
+): Promise<UserSettings> {
+  const result = await db.query<{
+    dm_standup: boolean | null;
+    max_items: number | null;
+    stale_pr_days: number | null;
+    linear_team_filter: string | null;
+  }>(
+    `SELECT dm_standup, max_items, stale_pr_days, linear_team_filter
+     FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  const row = result[0];
+  return {
+    dmStandup: row?.dm_standup ?? false,
+    maxItems: row?.max_items ?? null,
+    stalePrDays: row?.stale_pr_days ?? null,
+    linearTeamFilter: row?.linear_team_filter ? row.linear_team_filter.split(',').map(s => s.trim()) : null,
+  };
+}
+
+export async function updateUserSetting(
+  db: DbClient,
+  slackUserId: string,
+  key: 'max_items' | 'stale_pr_days' | 'linear_team_filter',
+  value: number | string | null
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, ${key}, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       ${key} = $3`,
+    [slackUserId, value, value]
+  );
+}
+
+// ============================================================================
 // Work Items (for analytics)
 // ============================================================================
 

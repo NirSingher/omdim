@@ -3,7 +3,7 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference } from '../db';
+import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference, getUserSettings, getActiveOOO } from '../db';
 import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -49,9 +49,13 @@ interface DailyStatus {
 }
 
 export interface LinkedAccounts {
-  github: string | null;  // username or null
-  linear: string | null;  // user ID or null
-  dmStandup: boolean;     // whether DM standup copies are enabled
+  github: string | null;
+  linear: string | null;
+  dmStandup: boolean;
+  maxItems: number | null;
+  stalePrDays: number | null;
+  linearTeamFilter: string[] | null;
+  oooStatus?: { startDate: string; endDate: string } | null;
 }
 
 /**
@@ -267,17 +271,55 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
       });
     }
 
-    // DM preferences
+    // Settings section
     blocks.push({
       type: 'header',
       text: {
         type: 'plain_text',
-        text: '⚙️ Preferences',
+        text: '⚙️ Settings',
         emoji: true,
       },
     });
 
-    const dmStatus = linkedAccounts.dmStandup ? '✅ Enabled' : '❌ Disabled';
+    // OOO management
+    if (linkedAccounts.oooStatus) {
+      const formatShort = (d: string) => {
+        const date = new Date(d + 'T00:00:00');
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      };
+      const rangeText = linkedAccounts.oooStatus.startDate === linkedAccounts.oooStatus.endDate
+        ? formatShort(linkedAccounts.oooStatus.startDate)
+        : `${formatShort(linkedAccounts.oooStatus.startDate)} – ${formatShort(linkedAccounts.oooStatus.endDate)}`;
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Out of Office*\n🏖️ ${rangeText}`,
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Clear OOO', emoji: true },
+          action_id: 'home_clear_ooo',
+          style: 'danger',
+        },
+      });
+    } else {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Out of Office*\nNot set',
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Set OOO', emoji: true },
+          action_id: 'home_set_ooo',
+        },
+      });
+    }
+
+    // DM standup copy
+    const dmStatus = linkedAccounts.dmStandup ? '✅ On' : '❌ Off';
     const dmButtonText = linkedAccounts.dmStandup ? 'Disable' : 'Enable';
     blocks.push({
       type: 'section',
@@ -289,6 +331,53 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
         type: 'button',
         text: { type: 'plain_text', text: dmButtonText, emoji: true },
         action_id: 'home_toggle_dm_standup',
+      },
+    });
+
+    // Max items per list
+    const maxItemsLabel = linkedAccounts.maxItems ? `${linkedAccounts.maxItems} items` : 'No limit';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Max items per list*\n${maxItemsLabel} — PRs and Linear tickets shown in modal and post`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Change', emoji: true },
+        action_id: 'home_set_max_items',
+      },
+    });
+
+    // Stale PR threshold
+    const stalePrLabel = linkedAccounts.stalePrDays ? `${linkedAccounts.stalePrDays} days` : '3 days (default)';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Stale PR threshold*\n${stalePrLabel} — reviews older than this are flagged`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Change', emoji: true },
+        action_id: 'home_set_stale_pr_days',
+      },
+    });
+
+    // Linear team filter
+    const linearFilterLabel = linkedAccounts.linearTeamFilter
+      ? linkedAccounts.linearTeamFilter.join(', ')
+      : 'All teams';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Linear teams*\n${linearFilterLabel} — which teams' cycles to include`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Change', emoji: true },
+        action_id: 'home_set_linear_teams',
       },
     });
 
@@ -490,16 +579,30 @@ export async function handleAppHomeOpened(
       });
     }
 
-    // Fetch linked accounts and preferences
-    const [githubUsername, linearUserId, dmStandup] = await Promise.all([
+    // Fetch linked accounts, preferences, and OOO status
+    const [githubUsername, linearUserId, settings] = await Promise.all([
       getGitHubUsername(ctx.db, userId),
       getLinearUserId(ctx.db, userId),
-      getDmStandupPreference(ctx.db, userId),
+      getUserSettings(ctx.db, userId),
     ]);
+
+    // Check OOO for the first daily (shows earliest active OOO)
+    let oooStatus: { startDate: string; endDate: string } | null = null;
+    if (userDailies.length > 0) {
+      const ooo = await getActiveOOO(ctx.db, userId, userDailies[0].daily_name, todayStr);
+      if (ooo) {
+        oooStatus = { startDate: ooo.start_date, endDate: ooo.end_date };
+      }
+    }
+
     const linkedAccounts: LinkedAccounts = {
       github: githubUsername,
       linear: linearUserId,
-      dmStandup,
+      dmStandup: settings.dmStandup,
+      maxItems: settings.maxItems,
+      stalePrDays: settings.stalePrDays,
+      linearTeamFilter: settings.linearTeamFilter,
+      oooStatus,
     };
 
     // Build and publish the home view

@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS slack_users (
   github_username TEXT,  -- Optional: linked GitHub username for PR integration
   linear_user_id TEXT,   -- Optional: linked Linear user ID for ticket integration
   dm_standup BOOLEAN DEFAULT TRUE, -- Whether to send DM copy of standup posts
+  max_items INTEGER,               -- Max PRs/Linear tickets shown in modal & post (NULL = no limit)
+  stale_pr_days INTEGER,           -- Override stale PR threshold in days (NULL = use default 3)
+  linear_team_filter TEXT,         -- Comma-separated Linear team IDs to include (NULL = all)
   updated_at TIMESTAMP DEFAULT NOW()
 );
 

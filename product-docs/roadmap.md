@@ -154,16 +154,16 @@ See `requirements.md` and `architecture.md`
 
 ---
 
+### User Settings Pane ✅
+- [x] Max items shown per list (PRs, Linear tickets) — per-user `max_items` setting
+- [x] OOO management UI (set/clear from App Home via date picker modal)
+- [x] Per-Linear-team filter: `linear_team_filter` setting
+- [x] Stale PR threshold override: `stale_pr_days` setting (default 3)
+- [x] Consolidated all settings under "⚙️ Settings" section in App Home
+
+---
+
 ## Planned
-
-### User Settings Pane
-Per-user self-service configuration in App Home (consolidates existing toggles + new controls).
-
-- [ ] Max items shown per list (PRs, Linear tickets) — in modal and standup post
-- [ ] OOO management UI (set/clear from App Home, currently command-only)
-- [ ] Per-Linear-team filter: which teams' cycles to include
-- [ ] Stale PR threshold override (default 3 days)
-- [ ] Consolidate existing DM-copy opt-out toggle into Settings section
 
 ### In-Progress Item Tracking (Full)
 Build on the existing in-progress status to add smart carry-over and attention flagging.

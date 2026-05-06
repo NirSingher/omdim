@@ -26,6 +26,10 @@ import {
   getRecentlyDoneLinearItems,
   getDmStandupPreference,
   setDmStandupPreference,
+  updateUserSetting,
+  getUserDailies,
+  setOOO,
+  clearOOO,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
@@ -69,7 +73,8 @@ export interface InteractionPayload {
       values: Record<string, Record<string, {
         value?: string;
         selected_option?: { value: string };
-        selected_options?: Array<{ value: string }>;
+        selected_options?: Array<{ value: string; text?: { type: string; text: string } }>;
+        selected_date?: string;
         rich_text_value?: RichTextBlock;  // Slack uses rich_text_value, not rich_text
       }>>;
     };
@@ -1016,6 +1021,201 @@ export async function handleToggleDmStandup(
 }
 
 // ============================================================================
+// Settings Handlers
+// ============================================================================
+
+async function handleSetOOO(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'ooo_set_submission',
+    title: { type: 'plain_text', text: 'Set Out of Office' },
+    submit: { type: 'plain_text', text: 'Set OOO' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'ooo_start',
+        element: { type: 'datepicker', action_id: 'start_date' },
+        label: { type: 'plain_text', text: 'Start date' },
+      },
+      {
+        type: 'input',
+        block_id: 'ooo_end',
+        element: { type: 'datepicker', action_id: 'end_date' },
+        label: { type: 'plain_text', text: 'End date' },
+      },
+    ],
+  };
+
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleClearOOO(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+  try {
+    const dailies = await getUserDailies(ctx.db, userId);
+    for (const d of dailies) {
+      await clearOOO(ctx.db, userId, d.daily_name);
+    }
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to clear OOO:', error);
+    return false;
+  }
+}
+
+async function handleOOOSetSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+  const values = payload.view?.state?.values;
+  const startDate = values?.ooo_start?.start_date?.selected_date;
+  const endDate = values?.ooo_end?.end_date?.selected_date;
+
+  if (!startDate || !endDate) {
+    return { response_action: 'errors', errors: { ooo_start: 'Please select both dates' } };
+  }
+  if (endDate < startDate) {
+    return { response_action: 'errors', errors: { ooo_end: 'End date must be on or after start date' } };
+  }
+
+  try {
+    const dailies = await getUserDailies(ctx.db, userId);
+    for (const d of dailies) {
+      await setOOO(ctx.db, userId, d.daily_name, startDate, endDate);
+    }
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to set OOO:', error);
+    return false;
+  }
+}
+
+async function handleSetMaxItems(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'settings_max_items',
+    title: { type: 'plain_text', text: 'Max Items Per List' },
+    submit: { type: 'plain_text', text: 'Save' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'max_items',
+        element: {
+          type: 'static_select',
+          action_id: 'value',
+          placeholder: { type: 'plain_text', text: 'Select limit' },
+          options: [
+            { text: { type: 'plain_text', text: 'No limit' }, value: '0' },
+            { text: { type: 'plain_text', text: '3 items' }, value: '3' },
+            { text: { type: 'plain_text', text: '5 items' }, value: '5' },
+            { text: { type: 'plain_text', text: '10 items' }, value: '10' },
+          ],
+        },
+        label: { type: 'plain_text', text: 'Max PRs and Linear tickets shown' },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleSetStalePrDays(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'settings_stale_pr_days',
+    title: { type: 'plain_text', text: 'Stale PR Threshold' },
+    submit: { type: 'plain_text', text: 'Save' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'stale_pr_days',
+        element: {
+          type: 'static_select',
+          action_id: 'value',
+          placeholder: { type: 'plain_text', text: 'Select threshold' },
+          options: [
+            { text: { type: 'plain_text', text: '1 day' }, value: '1' },
+            { text: { type: 'plain_text', text: '2 days' }, value: '2' },
+            { text: { type: 'plain_text', text: '3 days (default)' }, value: '3' },
+            { text: { type: 'plain_text', text: '5 days' }, value: '5' },
+            { text: { type: 'plain_text', text: '7 days' }, value: '7' },
+          ],
+        },
+        label: { type: 'plain_text', text: 'Flag reviews older than' },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleSetLinearTeams(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'settings_linear_teams',
+    title: { type: 'plain_text', text: 'Linear Team Filter' },
+    submit: { type: 'plain_text', text: 'Save' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'linear_teams',
+        optional: true,
+        element: {
+          type: 'plain_text_input',
+          action_id: 'value',
+          placeholder: { type: 'plain_text', text: 'e.g. ENG,PLATFORM (leave empty for all)' },
+        },
+        label: { type: 'plain_text', text: 'Linear team IDs (comma-separated)' },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleSettingsSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext,
+  callbackId: string
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+  const values = payload.view?.state?.values;
+
+  try {
+    if (callbackId === 'settings_max_items') {
+      const val = parseInt(values?.max_items?.value?.selected_option?.value || '0', 10);
+      await updateUserSetting(ctx.db, userId, 'max_items', val === 0 ? null : val);
+    } else if (callbackId === 'settings_stale_pr_days') {
+      const val = parseInt(values?.stale_pr_days?.value?.selected_option?.value || '3', 10);
+      await updateUserSetting(ctx.db, userId, 'stale_pr_days', val === 3 ? null : val);
+    } else if (callbackId === 'settings_linear_teams') {
+      const val = values?.linear_teams?.value?.value?.trim() || '';
+      await updateUserSetting(ctx.db, userId, 'linear_team_filter', val || null);
+    }
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error(`Failed to save setting ${callbackId}:`, error);
+    return false;
+  }
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -1057,6 +1257,11 @@ export async function handleInteraction(
     if (actionId === 'home_unlink_github') return handleUnlinkGitHub(payload, ctx);
     if (actionId === 'home_unlink_linear') return handleUnlinkLinear(payload, ctx);
     if (actionId === 'home_toggle_dm_standup') return handleToggleDmStandup(payload, ctx);
+    if (actionId === 'home_set_ooo') return handleSetOOO(payload, ctx);
+    if (actionId === 'home_clear_ooo') return handleClearOOO(payload, ctx);
+    if (actionId === 'home_set_max_items') return handleSetMaxItems(payload, ctx);
+    if (actionId === 'home_set_stale_pr_days') return handleSetStalePrDays(payload, ctx);
+    if (actionId === 'home_set_linear_teams') return handleSetLinearTeams(payload, ctx);
   }
 
   // Handle modal submission
@@ -1070,6 +1275,19 @@ export async function handleInteraction(
   }
   if (payload.type === 'view_submission' && payload.view?.callback_id === 'linear_link_submission') {
     return handleLinearLinkSubmission(payload, ctx);
+  }
+
+  // Handle OOO set submission
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'ooo_set_submission') {
+    return handleOOOSetSubmission(payload, ctx);
+  }
+
+  // Handle settings modal submissions
+  if (payload.type === 'view_submission') {
+    const callbackId = payload.view?.callback_id || '';
+    if (callbackId.startsWith('settings_')) {
+      return handleSettingsSubmission(payload, ctx, callbackId);
+    }
   }
 
   // Unknown interaction type

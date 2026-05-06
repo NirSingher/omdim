@@ -14,6 +14,8 @@ vi.mock('../lib/db', () => ({
   setGitHubUsername: vi.fn(),
   setLinearUserId: vi.fn(),
   getDmStandupPreference: vi.fn(() => Promise.resolve(false)),
+  getUserSettings: vi.fn(() => Promise.resolve({ dmStandup: false, maxItems: null, stalePrDays: null, linearTeamFilter: null })),
+  getActiveOOO: vi.fn(() => Promise.resolve(null)),
 }));
 
 // Mock the config module
@@ -55,7 +57,7 @@ import { publishHomeView } from '../lib/slack';
 
 describe('buildHomeView - linked accounts section', () => {
   it('shows Link buttons when accounts are not linked', () => {
-    const linkedAccounts: LinkedAccounts = { github: null, linear: null, dmStandup: true };
+    const linkedAccounts: LinkedAccounts = { github: null, linear: null, dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     // Find linked accounts header
@@ -82,7 +84,7 @@ describe('buildHomeView - linked accounts section', () => {
   });
 
   it('shows Unlink buttons when accounts are linked', () => {
-    const linkedAccounts: LinkedAccounts = { github: 'octocat', linear: 'lin-user-123', dmStandup: true };
+    const linkedAccounts: LinkedAccounts = { github: 'octocat', linear: 'lin-user-123', dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     // Find GitHub linked section
@@ -103,7 +105,7 @@ describe('buildHomeView - linked accounts section', () => {
   });
 
   it('shows mixed state (one linked, one not)', () => {
-    const linkedAccounts: LinkedAccounts = { github: 'myuser', linear: null, dmStandup: true };
+    const linkedAccounts: LinkedAccounts = { github: 'myuser', linear: null, dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     const githubSection = view.blocks.find(
@@ -126,6 +128,82 @@ describe('buildHomeView - linked accounts section', () => {
       (b: any) => b.type === 'header' && b.text?.text === '🔗 Linked Accounts'
     );
     expect(header).toBeUndefined();
+  });
+});
+
+describe('buildHomeView - Settings section', () => {
+  it('shows OOO status with clear button when OOO is active', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: null, stalePrDays: null, linearTeamFilter: null,
+      oooStatus: { startDate: '2025-12-22', endDate: '2025-12-25' },
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const oooBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Out of Office')
+    );
+    expect(oooBlock).toBeDefined();
+    expect((oooBlock as any).text.text).toContain('Dec 22');
+    expect((oooBlock as any).text.text).toContain('Dec 25');
+    expect((oooBlock as any).accessory.action_id).toBe('home_clear_ooo');
+  });
+
+  it('shows Set OOO button when not OOO', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: null, stalePrDays: null, linearTeamFilter: null,
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const oooBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Out of Office')
+    );
+    expect(oooBlock).toBeDefined();
+    expect((oooBlock as any).text.text).toContain('Not set');
+    expect((oooBlock as any).accessory.action_id).toBe('home_set_ooo');
+  });
+
+  it('shows max items setting with current value', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: 5, stalePrDays: null, linearTeamFilter: null,
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const maxItemsBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Max items')
+    );
+    expect(maxItemsBlock).toBeDefined();
+    expect((maxItemsBlock as any).text.text).toContain('5 items');
+  });
+
+  it('shows stale PR days with custom value', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: null, stalePrDays: 7, linearTeamFilter: null,
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const stalePrBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Stale PR')
+    );
+    expect(stalePrBlock).toBeDefined();
+    expect((stalePrBlock as any).text.text).toContain('7 days');
+  });
+
+  it('shows Linear team filter', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: null, stalePrDays: null, linearTeamFilter: ['ENG', 'PLATFORM'],
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const linearBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Linear teams')
+    );
+    expect(linearBlock).toBeDefined();
+    expect((linearBlock as any).text.text).toContain('ENG, PLATFORM');
   });
 });
 
