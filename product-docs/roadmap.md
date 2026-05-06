@@ -149,10 +149,8 @@ See `requirements.md` and `architecture.md`
 
 ---
 
-## Up Next
-
-### CI Pipeline
-- [ ] GitHub Actions for automated test runs
+### CI Pipeline ✅
+- [x] GitHub Actions workflow: type check + test on push/PR to main and dev
 
 ---
 
