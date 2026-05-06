@@ -111,10 +111,10 @@ export function formatStandupBlocks(
     render: () => {
       const yesterdayItems: string[] = [];
       for (const item of data.yesterdayCompleted) {
-        yesterdayItems.push(`☑️ ${enrich(item)}`);
+        yesterdayItems.push(`✅ ${enrich(item)}`);
       }
       for (const item of data.unplanned) {
-        yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
+        yesterdayItems.push(`⚡ ${item} _(unplanned)_`);
       }
       for (const item of data.yesterdayDropped || []) {
         yesterdayItems.push(`❌ ${enrich(item)} _(dropped)_`);
@@ -139,14 +139,14 @@ export function formatStandupBlocks(
         todayItems.push(`${emoji} ${enrich(item)} _(in progress)_`);
       }
       for (const item of data.yesterdayIncomplete) {
-        todayItems.push(`⬜ ${enrich(item)} _(carried over)_`);
+        todayItems.push(`➡️ ${enrich(item)} _(carried over)_`);
       }
       const carryForwardCount = (data.yesterdayInProgress || []).length + data.yesterdayIncomplete.length;
       if (carryForwardCount > 0 && data.todayPlans.length > 0) {
         todayItems.push('───');
       }
       for (const item of data.todayPlans) {
-        todayItems.push(`⬜ ${enrich(item)}`);
+        todayItems.push(`🎯 ${enrich(item)}`);
       }
       if (todayItems.length === 0) return null;
       return {

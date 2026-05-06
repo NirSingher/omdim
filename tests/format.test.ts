@@ -52,8 +52,8 @@ describe('format utilities', () => {
       });
 
       const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Finished task A');
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Completed task B');
+      expect(yesterdayBlock?.text?.text).toContain('✅ Finished task A');
+      expect(yesterdayBlock?.text?.text).toContain('✅ Completed task B');
     });
 
     it('marks unplanned items with unplanned label', () => {
@@ -67,7 +67,7 @@ describe('format utilities', () => {
       });
 
       const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Fixed urgent bug _(unplanned)_');
+      expect(yesterdayBlock?.text?.text).toContain('⚡ Fixed urgent bug _(unplanned)_');
     });
 
     it('marks dropped items with red X in yesterday section', () => {
@@ -82,7 +82,7 @@ describe('format utilities', () => {
       });
 
       const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Finished task');
+      expect(yesterdayBlock?.text?.text).toContain('✅ Finished task');
       expect(yesterdayBlock?.text?.text).toContain('❌ Cancelled task _(dropped)_');
       expect(yesterdayBlock?.text?.text).toContain('❌ No longer needed _(dropped)_');
     });
@@ -100,7 +100,7 @@ describe('format utilities', () => {
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
       expect(todayBlock?.text?.text).toContain('🔄 WIP task _(in progress)_');
-      expect(todayBlock?.text?.text).toContain('⬜ New task');
+      expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
     it('shows ⚠️ for in-progress items with carry_count >= 3', () => {
@@ -150,8 +150,8 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('⬜ Ongoing work _(carried over)_');
-      expect(todayBlock?.text?.text).toContain('⬜ New task');
+      expect(todayBlock?.text?.text).toContain('➡️ Ongoing work _(carried over)_');
+      expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
     it('adds separator between carried over and new items', () => {
@@ -447,7 +447,7 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('⬜ Ship the feature');
+      expect(todayBlock?.text?.text).toContain('🎯 Ship the feature');
       expect(todayBlock?.text?.text).not.toContain('<http');
     });
   });

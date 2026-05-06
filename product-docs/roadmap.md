@@ -125,13 +125,16 @@ See `requirements.md` and `architecture.md`
 
 ---
 
-## Up Next
+### Visual Polish ✅
+- [x] ✅ for completed items (was ☑️)
+- [x] ➡️ for carried-over items (was ⬜)
+- [x] ❌ for dropped items (unchanged)
+- [x] 🎯 for new plan items, ⚡ for unplanned items (was ☑️)
+- [x] Consistent emoji across standup post, App Home, and DM
 
-### Visual Polish
-- [ ] Use `:white_check_mark:` / `:ballot_box_with_check:` for done items
-- [ ] Use `:arrow_right:` for continued items
-- [ ] Use `:x:` for dropped items
-- [ ] Consider emoji prefixes for plan items (🎯 planned, ⚡ unplanned)
+---
+
+## Up Next
 
 ### Plan Size Warning (Follow-on)
 First Version shipped (see Shipped > Plan Size Warning). Remaining scope:

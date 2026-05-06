@@ -182,7 +182,7 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
               planLines.push(`❌ ~${item.text}~${sourceTag}`);
               break;
             default:
-              planLines.push(`⬜ ${item.text}${sourceTag}`);
+              planLines.push(`🎯 ${item.text}${sourceTag}`);
           }
         }
         blocks.push({

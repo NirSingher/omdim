@@ -154,7 +154,7 @@ describe('buildHomeView - Today\'s Plans section', () => {
     const text = (planBlock as any).elements[0].text;
     expect(text).toContain('✅ ~Fix auth bug~');
     expect(text).toContain('🔄 Refactor DB layer');
-    expect(text).toContain('⬜ Deploy to staging');
+    expect(text).toContain('🎯 Deploy to staging');
     expect(text).toContain('➡️ Old task _(carried)_');
     expect(text).toContain('❌ ~Abandoned idea~');
   });
@@ -192,7 +192,7 @@ describe('buildHomeView - Today\'s Plans section', () => {
 
     // No context block with plan items
     const planBlocks = view.blocks.filter(
-      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('⬜')
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('🎯')
     );
     expect(planBlocks).toHaveLength(0);
   });
@@ -275,7 +275,7 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
     const text = (planBlock as any).elements[0].text;
     expect(text).toContain('🔄 WIP task');
     expect(text).toContain('➡️ Carried task');
-    expect(text).toContain('⬜ New plan');
+    expect(text).toContain('🎯 New plan');
     expect(text).toContain('✅ ~Done task~');
   });
 });
