@@ -190,18 +190,19 @@ export function buildStandupModal(
   // pre-checked integration items (currently none), and prefill today-plans (edit mode).
   // Free-text input in the plans textarea can't be observed here — the post-submit DM
   // covers that path.
-  const maxPlanItems = getMaxPlanItems();
+  const maxPlanItems = getMaxPlanItems(dailyName);
   if (maxPlanItems > 0) {
     const carryForwardCount = yesterdayPlans.length - (autoCompletedIds?.size || 0);
     const prefillCount = prefill?.todayPlans?.length || 0;
     const openTimeCount = carryForwardCount + prefillCount;
     if (openTimeCount >= maxPlanItems) {
       const dayWord = mode === 'tomorrow' ? 'for tomorrow' : 'today';
+      const breakdown = carryForwardCount > 0 && prefillCount > 0 ? ` (${prefillCount} new + ${carryForwardCount} carried)` : '';
       blocks.push({
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `⚠️ You're planning ${openTimeCount} items ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`,
+          text: `⚠️ You're planning ${openTimeCount} items${breakdown} ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`,
         },
       });
       blocks.push({ type: 'divider' });

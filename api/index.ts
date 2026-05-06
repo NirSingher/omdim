@@ -3,7 +3,7 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser } from '../lib/config';
+import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
@@ -716,6 +716,7 @@ async function sendDigestToManagers(
     teamPRData,
     teamLinearData,
     cycleProgress,
+    maxPlanItems: getMaxPlanItems(daily.name),
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)

@@ -81,6 +81,8 @@ const DailySchema = z.object({
   integrations: IntegrationsSchema.optional(),
   // Reminder: how many minutes before daily to send channel reminder (0 = disabled, default 90)
   reminder_minutes_before: z.number().min(0).optional(),
+  // Per-daily plan-size warning threshold (overrides global max_plan_items)
+  max_plan_items: z.number().int().min(0).optional(),
 });
 
 const ConfigSchema = z.object({
@@ -258,10 +260,14 @@ export function getDigestTime(): string {
   return loadConfig().digest_time || '14:00';
 }
 
-/** Plan-size soft-warning threshold (0 = disabled, default 5). */
-export function getMaxPlanItems(): number {
-  const value = loadConfig().max_plan_items;
-  return value ?? 5;
+/** Plan-size soft-warning threshold (0 = disabled, default 5). Per-daily overrides global. */
+export function getMaxPlanItems(dailyName?: string): number {
+  const config = loadConfig();
+  if (dailyName) {
+    const daily = config.dailies.find(d => d.name === dailyName);
+    if (daily?.max_plan_items !== undefined) return daily.max_plan_items;
+  }
+  return config.max_plan_items ?? 5;
 }
 
 // Clear cache (useful for testing or hot reload)

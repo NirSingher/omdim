@@ -571,12 +571,12 @@ describe('interaction handlers', () => {
       expect(sendDM).toHaveBeenCalledWith(
         'xoxb-test',
         'U12345',
-        expect.stringContaining('planning 5 items today')
+        expect.stringContaining('planning 5 items')
       );
       expect(sendDM).toHaveBeenCalledWith(
         'xoxb-test',
         'U12345',
-        expect.stringContaining('under 5')
+        expect.stringContaining('3 new + 2 carried')
       );
     });
 
@@ -624,7 +624,12 @@ describe('interaction handlers', () => {
       expect(sendDM).toHaveBeenCalledWith(
         'xoxb-test',
         'U12345',
-        expect.stringContaining('planning 3 items today')
+        expect.stringContaining('planning 3 items')
+      );
+      expect(sendDM).toHaveBeenCalledWith(
+        'xoxb-test',
+        'U12345',
+        expect.stringContaining('1 new + 2 carried')
       );
     });
 

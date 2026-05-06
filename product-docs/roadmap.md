@@ -132,17 +132,15 @@ See `requirements.md` and `architecture.md`
 - [x] 🎯 for new plan items, ⚡ for unplanned items (was ☑️)
 - [x] Consistent emoji across standup post, App Home, and DM
 
+### Plan Size Warning (Follow-on) ✅
+- [x] Per-daily override: `max_plan_items` in daily config
+- [ ] Live validation (deferred — Slack modal limitations)
+- [x] Digest surfacing for users who routinely over-plan (avg plan count in team section)
+- [x] Distinguish net-new vs carried-over items in the count (breakdown in warning DM + modal)
+
 ---
 
 ## Up Next
-
-### Plan Size Warning (Follow-on)
-First Version shipped (see Shipped > Plan Size Warning). Remaining scope:
-
-- [ ] Per-daily override: `max_plan_items` in daily config
-- [ ] Live validation (warning updates as the user types/adds items)
-- [ ] Digest/report surfacing for users who routinely over-plan
-- [ ] Distinguish net-new vs carried-over items in the count
 
 ### Team Summary Post
 Post a single consolidated summary to the daily channel with the key items from each team member's standup.

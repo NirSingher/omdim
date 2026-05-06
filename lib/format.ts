@@ -395,6 +395,7 @@ export interface DigestOptions {
   teamPRData?: TeamPRData[]; // GitHub PR data for team
   teamLinearData?: TeamLinearData[]; // Linear data for team
   cycleProgress?: CycleProgress | null; // Linear cycle progress
+  maxPlanItems?: number; // Plan-size threshold for over-plan flagging
 }
 
 /**
@@ -505,6 +506,21 @@ export function formatManagerDigest(options: DigestOptions): string {
     }
   }
 
+  // Build over-plan lookup (average plan count per user across submissions)
+  const overPlanMap = new Map<string, number>();
+  if (options.maxPlanItems && options.maxPlanItems > 0) {
+    const planCounts = new Map<string, number[]>();
+    for (const sub of submissions) {
+      const plans = (sub.today_plans?.length || 0) + (sub.yesterday_incomplete?.length || 0) + (sub.yesterday_in_progress?.length || 0);
+      if (!planCounts.has(sub.slack_user_id)) planCounts.set(sub.slack_user_id, []);
+      planCounts.get(sub.slack_user_id)!.push(plans);
+    }
+    for (const [userId, counts] of planCounts) {
+      const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+      if (avg >= options.maxPlanItems) overPlanMap.set(userId, Math.round(avg));
+    }
+  }
+
   for (const member of stats) {
     const rate = totalWorkdays > 0
       ? Math.round((Number(member.submission_count) / totalWorkdays) * 100)
@@ -521,6 +537,12 @@ export function formatManagerDigest(options: DigestOptions): string {
     const dropRate = dropRateMap.get(member.slack_user_id);
     if (dropRate && dropRate > 30) {
       line += ` — ${dropRate}% drops`;
+    }
+
+    // Flag users who routinely over-plan
+    const avgPlan = overPlanMap.get(member.slack_user_id);
+    if (avgPlan) {
+      line += ` — avg ${avgPlan} plans`;
     }
 
     lines.push(line);

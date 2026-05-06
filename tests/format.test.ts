@@ -1076,6 +1076,49 @@ describe('format utilities', () => {
 
       expect(result).not.toContain('Out today');
     });
+
+    it('flags users who routinely over-plan when maxPlanItems is set', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['a', 'b', 'c', 'd', 'e', 'f'], yesterday_incomplete: [], yesterday_in_progress: [] } as any,
+          { slack_user_id: 'U222', today_plans: ['a', 'b'], yesterday_incomplete: [], yesterday_in_progress: [] } as any,
+        ],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 1, total_completed: 2, avg_items_per_day: '6' } as any,
+          { slack_user_id: 'U222', submission_count: 1, total_completed: 1, avg_items_per_day: '2' } as any,
+        ],
+        totalWorkdays: 1,
+        maxPlanItems: 5,
+      });
+
+      expect(result).toContain('avg 6 plans');
+      // U222 appears in team but without over-plan flag
+      expect(result).toContain('<@U222>');
+      const u222Line = result.split('\n').find((l: string) => l.includes('U222'));
+      expect(u222Line).not.toContain('avg');
+    });
+
+    it('does not flag over-plan when maxPlanItems is not set', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['a', 'b', 'c', 'd', 'e', 'f'], yesterday_incomplete: [], yesterday_in_progress: [] } as any,
+        ],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 1, total_completed: 2, avg_items_per_day: '6' } as any,
+        ],
+        totalWorkdays: 1,
+      });
+
+      expect(result).not.toContain('avg');
+    });
   });
 
   describe('buildBottleneckBlocks', () => {

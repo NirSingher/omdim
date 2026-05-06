@@ -513,12 +513,15 @@ export async function handleStandupSubmission(
     // Plan-size soft warning: send a DM if the submitted plan count exceeds the threshold.
     // Counts everything that lands in today's plans: typed items + checked integrations
     // (already merged into todayPlans) + yesterday's carry-over + in-progress.
-    const maxPlanItems = getMaxPlanItems();
+    const maxPlanItems = getMaxPlanItems(dailyName);
     if (maxPlanItems > 0) {
-      const submittedPlanCount = todayPlans.length + yesterdayIncomplete.length + yesterdayInProgress.length;
+      const newPlanCount = todayPlans.length;
+      const carriedCount = yesterdayIncomplete.length + yesterdayInProgress.length;
+      const submittedPlanCount = newPlanCount + carriedCount;
       if (submittedPlanCount >= maxPlanItems) {
         const dayWord = isTomorrowMode ? 'for tomorrow' : 'today';
-        const warningMsg = `⚠️ You're planning ${submittedPlanCount} items ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`;
+        const breakdown = carriedCount > 0 ? ` (${newPlanCount} new + ${carriedCount} carried)` : '';
+        const warningMsg = `⚠️ You're planning ${submittedPlanCount} items${breakdown} ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`;
         try {
           await sendDM(ctx.slackToken, userId, warningMsg);
         } catch (error) {
