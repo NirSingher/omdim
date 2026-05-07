@@ -3,11 +3,12 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled, getLinearIntelligenceConfig } from '../lib/config';
+import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled, getLinearIntelligenceConfig, getGitHubIntelligenceConfig } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate, getBlockerStreaks, getUnplannedOverload, getActiveWorkItems } from '../lib/db';
 import { computeLinearAlignment, AlignmentResult } from '../lib/linear-intelligence';
-import { fetchTeamPRData, TeamPRData } from '../lib/github';
+import { computeGitHubAlignment, GitHubAlignmentResult } from '../lib/github-intelligence';
+import { fetchTeamPRData, TeamPRData, fetchTeamMergedPRs } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
 import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
@@ -755,6 +756,45 @@ async function sendDigestToManagers(
     }
   }
 
+  // Compute GitHub intelligence alignment (Phase 4 & 5)
+  let githubAlignment: GitHubAlignmentResult[] | undefined;
+  const githubIntelConfig = getGitHubIntelligenceConfig(daily);
+  if (githubIntelConfig?.work_alignment && githubConfig) {
+    const githubToken = env[githubConfig.tokenEnvVar];
+    if (githubToken) {
+      try {
+        // Build combined user list (same logic as team PR data above)
+        const configMappings = getGitHubUserMappings(daily);
+        const participants = await getParticipants(db, daily.name);
+        const dbLinks = await getUsersWithGitHubLinks(db);
+        const dbLinksMap = new Map(dbLinks.map(l => [l.slackUserId, l.githubUsername]));
+        const configUserIds = new Set(configMappings.map(m => m.slackUserId));
+        const githubUsers: Array<{ slackUserId: string; githubUsername: string }> = [...configMappings];
+        for (const p of participants) {
+          if (!configUserIds.has(p.slack_user_id)) {
+            const githubUsername = dbLinksMap.get(p.slack_user_id);
+            if (githubUsername) {
+              githubUsers.push({ slackUserId: p.slack_user_id, githubUsername });
+            }
+          }
+        }
+
+        if (githubUsers.length > 0) {
+          const teamMergedPRs = await fetchTeamMergedPRs(githubToken, githubConfig.org, githubUsers, endDate);
+          githubAlignment = [];
+          for (const member of teamMergedPRs) {
+            const workItems = await getActiveWorkItems(db, member.slackUserId, daily.name, endDate);
+            const result = computeGitHubAlignment(member.slackUserId, workItems, member.mergedPRs);
+            githubAlignment.push(result);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to compute GitHub alignment for digest:', error);
+        githubAlignment = undefined;
+      }
+    }
+  }
+
   const digestText = formatManagerDigest({
     dailyName: daily.name,
     period,
@@ -777,6 +817,7 @@ async function sendDigestToManagers(
     blockerStreaks,
     unplannedOverloads,
     linearAlignment,
+    githubAlignment,
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)

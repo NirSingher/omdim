@@ -10,6 +10,7 @@ import { postMessage, sendDM as slackSendDM, sendDMWithBlocks } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 import { TeamLinearData, CycleProgress } from './linear';
 import { AlignmentResult } from './linear-intelligence';
+import { GitHubAlignmentResult } from './github-intelligence';
 
 // Re-export sendDM for backward compatibility
 export { sendDM as sendDM } from './slack';
@@ -405,6 +406,7 @@ export interface DigestOptions {
   blockerStreaks?: BlockerStreak[];
   unplannedOverloads?: UnplannedOverload[];
   linearAlignment?: AlignmentResult[]; // Phase 1 & 2: plan-vs-Linear alignment
+  githubAlignment?: GitHubAlignmentResult[]; // Phase 4 & 5: plan-vs-GitHub alignment
 }
 
 /**
@@ -604,6 +606,14 @@ export function formatManagerDigest(options: DigestOptions): string {
     const alignmentSection = formatLinearAlignmentSection(options.linearAlignment);
     if (alignmentSection) {
       lines.push(alignmentSection);
+    }
+  }
+
+  // GitHub intelligence: plan-vs-GitHub alignment (Phase 4 & 5)
+  if (options.githubAlignment && options.githubAlignment.length > 0) {
+    const githubAlignmentSection = formatGitHubAlignmentSection(options.githubAlignment);
+    if (githubAlignmentSection) {
+      lines.push(githubAlignmentSection);
     }
   }
 
@@ -1249,6 +1259,47 @@ function formatLinearAlignmentSection(alignment: AlignmentResult[]): string {
     } else {
       const gapText = parts.length > 0 ? parts.join(', ') : 'gaps found';
       lines.push(`  <@${result.slackUserId}>: ${gapText}${prioritySuffix}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
+// GitHub Intelligence Formatting (Phase 4 & 5)
+// ============================================================================
+
+/**
+ * Format plan-vs-GitHub alignment section for manager digest.
+ * Shows per-user cross-reference gaps between plans and merged PRs.
+ *
+ * Example output:
+ *   🔍 *Plan-GitHub Alignment*
+ *     <@U123>: 2 plans without matching PRs, 1 merged PR unplanned
+ *     <@U456>: ✅ aligned
+ */
+function formatGitHubAlignmentSection(alignment: GitHubAlignmentResult[]): string {
+  const lines: string[] = [];
+
+  lines.push('');
+  lines.push('🔍 *Plan-GitHub Alignment*');
+
+  for (const result of alignment) {
+    const parts: string[] = [];
+
+    if (result.plansWithoutWork.length > 0) {
+      parts.push(`${result.plansWithoutWork.length} plan${result.plansWithoutWork.length !== 1 ? 's' : ''} without matching PRs`);
+    }
+
+    if (result.workWithoutPlans.length > 0) {
+      parts.push(`${result.workWithoutPlans.length} merged PR${result.workWithoutPlans.length !== 1 ? 's' : ''} unplanned`);
+    }
+
+    if (parts.length === 0 && result.alignmentStatus === 'aligned') {
+      lines.push(`  <@${result.slackUserId}>: ✅ aligned`);
+    } else {
+      const gapText = parts.length > 0 ? parts.join(', ') : 'gaps found';
+      lines.push(`  <@${result.slackUserId}>: ${gapText}`);
     }
   }
 
