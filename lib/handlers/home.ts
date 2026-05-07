@@ -3,7 +3,7 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference, getUserSettings, getActiveOOO } from '../db';
+import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference, getUserSettings, getActiveOOO, getActiveWorkItems } from '../db';
 import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -32,6 +32,7 @@ export interface AppHomeOpenedEvent {
 // ============================================================================
 
 interface PlanItem {
+  id?: number;      // work_item.id — needed for overflow menus
   text: string;
   status: 'done' | 'in_progress' | 'carried' | 'planned' | 'dropped';
   source?: string; // e.g. "PR #123", "LIN-456"
@@ -169,31 +170,69 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
 
       // Today's Plans section — always visible when submitted
       if (status.planItems && status.planItems.length > 0) {
-        const planLines: string[] = [];
         for (const item of status.planItems) {
           const sourceTag = item.source ? ` · _${item.source}_` : '';
+          const isActive = item.status === 'planned' || item.status === 'in_progress' || item.status === 'carried';
+
+          let itemText: string;
           switch (item.status) {
             case 'done':
-              planLines.push(`✅ ~${item.text}~${sourceTag}`);
+              itemText = `✅ ~${item.text}~${sourceTag}`;
               break;
             case 'in_progress':
-              planLines.push(`🔄 ${item.text}${sourceTag}`);
+              itemText = `🔄 ${item.text}${sourceTag}`;
               break;
             case 'carried':
-              planLines.push(`➡️ ${item.text} _(carried)_${sourceTag}`);
+              itemText = `➡️ ${item.text} _(carried)_${sourceTag}`;
               break;
             case 'dropped':
-              planLines.push(`❌ ~${item.text}~${sourceTag}`);
+              itemText = `❌ ~${item.text}~${sourceTag}`;
               break;
             default:
-              planLines.push(`🎯 ${item.text}${sourceTag}`);
+              itemText = `🎯 ${item.text}${sourceTag}`;
+          }
+
+          if (isActive && item.id !== undefined) {
+            // Interactive section with overflow menu for status changes
+            blocks.push({
+              type: 'section',
+              text: { type: 'mrkdwn', text: itemText },
+              accessory: {
+                type: 'overflow',
+                action_id: 'task_action',
+                options: [
+                  {
+                    text: { type: 'plain_text', text: '✅ Done', emoji: true },
+                    value: JSON.stringify({ itemId: item.id, dailyName: status.dailyName, action: 'done' }),
+                  },
+                  {
+                    text: { type: 'plain_text', text: '🔄 In Progress', emoji: true },
+                    value: JSON.stringify({ itemId: item.id, dailyName: status.dailyName, action: 'in_progress' }),
+                  },
+                  {
+                    text: { type: 'plain_text', text: '❌ Drop', emoji: true },
+                    value: JSON.stringify({ itemId: item.id, dailyName: status.dailyName, action: 'drop' }),
+                  },
+                ],
+              },
+            });
+          } else {
+            // Terminal state (done/dropped) or legacy item without an id — plain section
+            blocks.push({
+              type: 'section',
+              text: { type: 'mrkdwn', text: itemText },
+            });
           }
         }
+
+        // "Add Item" button at the end of each daily's task list
         blocks.push({
-          type: 'context',
+          type: 'actions',
           elements: [{
-            type: 'mrkdwn',
-            text: planLines.join('\n'),
+            type: 'button',
+            text: { type: 'plain_text', text: '➕ Add Item', emoji: true },
+            action_id: 'task_add',
+            value: status.dailyName,
           }],
         });
       }
@@ -543,27 +582,46 @@ export async function handleAppHomeOpened(
           droppedCount = droppedItems.length;
         }
 
-        // Build plan items list: in-progress, carried, new plans, done yesterday, dropped
+        // Build plan items list from work_items (with IDs for interactivity),
+        // falling back to JSONB arrays for older submissions without work_item records.
         planItems = [];
-        const completed = parseJsonArray(todaySubmission.yesterday_completed);
-        const incomplete = parseJsonArray(todaySubmission.yesterday_incomplete);
-        const inProgress = parseJsonArray(todaySubmission.yesterday_in_progress);
-        const plans = parseJsonArray(todaySubmission.today_plans);
+        const workItems = await getActiveWorkItems(ctx.db, userId, dailyName, todayStr);
 
-        for (const item of inProgress) {
-          planItems.push({ text: item, status: 'in_progress', source: extractSource(item) });
-        }
-        for (const item of incomplete) {
-          planItems.push({ text: item, status: 'carried', source: extractSource(item) });
-        }
-        for (const item of plans) {
-          planItems.push({ text: item, status: 'planned', source: extractSource(item) });
-        }
-        for (const item of completed) {
-          planItems.push({ text: item, status: 'done', source: extractSource(item) });
-        }
-        for (const item of droppedItems) {
-          planItems.push({ text: item, status: 'dropped', source: extractSource(item) });
+        if (workItems.length > 0) {
+          // Primary path: map work_items rows (has IDs for overflow menus)
+          for (const wi of workItems) {
+            let mappedStatus: PlanItem['status'];
+            switch (wi.status) {
+              case 'done':       mappedStatus = 'done';        break;
+              case 'in_progress': mappedStatus = 'in_progress'; break;
+              case 'carried':    mappedStatus = 'carried';     break;
+              case 'dropped':    mappedStatus = 'dropped';     break;
+              default:           mappedStatus = 'planned';     break; // 'pending'
+            }
+            planItems.push({ id: wi.id, text: wi.text, status: mappedStatus, source: extractSource(wi.text) });
+          }
+        } else {
+          // Fallback: parse JSONB arrays (backwards compatibility for submissions without work_item records)
+          const completed = parseJsonArray(todaySubmission.yesterday_completed);
+          const incomplete = parseJsonArray(todaySubmission.yesterday_incomplete);
+          const inProgress = parseJsonArray(todaySubmission.yesterday_in_progress);
+          const plans = parseJsonArray(todaySubmission.today_plans);
+
+          for (const item of inProgress) {
+            planItems.push({ text: item, status: 'in_progress', source: extractSource(item) });
+          }
+          for (const item of incomplete) {
+            planItems.push({ text: item, status: 'carried', source: extractSource(item) });
+          }
+          for (const item of plans) {
+            planItems.push({ text: item, status: 'planned', source: extractSource(item) });
+          }
+          for (const item of completed) {
+            planItems.push({ text: item, status: 'done', source: extractSource(item) });
+          }
+          for (const item of droppedItems) {
+            planItems.push({ text: item, status: 'dropped', source: extractSource(item) });
+          }
         }
       }
 

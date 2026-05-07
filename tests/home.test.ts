@@ -16,6 +16,7 @@ vi.mock('../lib/db', () => ({
   getDmStandupPreference: vi.fn(() => Promise.resolve(false)),
   getUserSettings: vi.fn(() => Promise.resolve({ dmStandup: false, maxItems: null, stalePrDays: null, linearTeamFilter: null })),
   getActiveOOO: vi.fn(() => Promise.resolve(null)),
+  getActiveWorkItems: vi.fn(() => Promise.resolve([])),
 }));
 
 // Mock the config module
@@ -52,7 +53,7 @@ vi.mock('../lib/linear', () => ({
 }));
 
 import { buildHomeView, LinkedAccounts, handleAppHomeOpened, HomeContext, AppHomeOpenedEvent } from '../lib/handlers/home';
-import { getGitHubUsername, getLinearUserId, getUserDailies, getSubmissionForDate, getPreviousSubmission } from '../lib/db';
+import { getGitHubUsername, getLinearUserId, getUserDailies, getSubmissionForDate, getPreviousSubmission, getActiveWorkItems } from '../lib/db';
 import { publishHomeView } from '../lib/slack';
 
 describe('buildHomeView - linked accounts section', () => {
@@ -223,18 +224,36 @@ describe('buildHomeView - Today\'s Plans section', () => {
     }];
     const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
 
-    // Find context block with plan items
-    const planBlock = view.blocks.find(
-      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('Fix auth bug')
+    // Each plan item is now a section block with the text directly in the block
+    const doneBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Fix auth bug')
     );
-    expect(planBlock).toBeDefined();
+    expect(doneBlock).toBeDefined();
+    expect((doneBlock as any).text.text).toContain('✅ ~Fix auth bug~');
 
-    const text = (planBlock as any).elements[0].text;
-    expect(text).toContain('✅ ~Fix auth bug~');
-    expect(text).toContain('🔄 Refactor DB layer');
-    expect(text).toContain('🎯 Deploy to staging');
-    expect(text).toContain('➡️ Old task _(carried)_');
-    expect(text).toContain('❌ ~Abandoned idea~');
+    const inProgressBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Refactor DB layer')
+    );
+    expect(inProgressBlock).toBeDefined();
+    expect((inProgressBlock as any).text.text).toContain('🔄 Refactor DB layer');
+
+    const plannedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Deploy to staging')
+    );
+    expect(plannedBlock).toBeDefined();
+    expect((plannedBlock as any).text.text).toContain('🎯 Deploy to staging');
+
+    const carriedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Old task')
+    );
+    expect(carriedBlock).toBeDefined();
+    expect((carriedBlock as any).text.text).toContain('➡️ Old task _(carried)_');
+
+    const droppedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Abandoned idea')
+    );
+    expect(droppedBlock).toBeDefined();
+    expect((droppedBlock as any).text.text).toContain('❌ ~Abandoned idea~');
   });
 
   it('shows source tags for integration items', () => {
@@ -250,14 +269,24 @@ describe('buildHomeView - Today\'s Plans section', () => {
     }];
     const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
 
-    const planBlock = view.blocks.find(
-      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('LIN-123')
+    // Each item is now its own section block
+    const linBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('LIN-123')
     );
-    expect(planBlock).toBeDefined();
-    const text = (planBlock as any).elements[0].text;
-    expect(text).toContain('· _LIN-123_');
-    expect(text).toContain('· _repo#45_');
-    expect(text).not.toContain('Manual task · _');
+    expect(linBlock).toBeDefined();
+    expect((linBlock as any).text.text).toContain('· _LIN-123_');
+
+    const repoBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('repo#45')
+    );
+    expect(repoBlock).toBeDefined();
+    expect((repoBlock as any).text.text).toContain('· _repo#45_');
+
+    const manualBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Manual task')
+    );
+    expect(manualBlock).toBeDefined();
+    expect((manualBlock as any).text.text).not.toContain(' · _');
   });
 
   it('does not show plan section when no submission', () => {
@@ -332,9 +361,12 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
       custom_answers: null,
       slack_message_ts: null,
       posted: true,
+      items_normalized: true,
     });
     // No previous submission (so no dropped items)
     vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    // No work_items (triggers JSONB fallback path)
+    vi.mocked(getActiveWorkItems).mockResolvedValueOnce([]);
     vi.mocked(publishHomeView).mockResolvedValueOnce(true);
 
     const event: AppHomeOpenedEvent = { type: 'app_home_opened', user: 'U12345', tab: 'home' };
@@ -345,15 +377,29 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
     const publishCall = vi.mocked(publishHomeView).mock.calls[0];
     const view = publishCall[2] as { blocks: Array<Record<string, unknown>> };
 
-    // Find the context block with plan items
-    const planBlock = view.blocks.find(
-      (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('New plan')
+    // Items are now individual section blocks (JSONB fallback — no IDs, so no overflow menus)
+    const wipBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('WIP task')
     );
-    expect(planBlock).toBeDefined();
-    const text = (planBlock as any).elements[0].text;
-    expect(text).toContain('🔄 WIP task');
-    expect(text).toContain('➡️ Carried task');
-    expect(text).toContain('🎯 New plan');
-    expect(text).toContain('✅ ~Done task~');
+    expect(wipBlock).toBeDefined();
+    expect((wipBlock as any).text.text).toContain('🔄 WIP task');
+
+    const carriedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Carried task')
+    );
+    expect(carriedBlock).toBeDefined();
+    expect((carriedBlock as any).text.text).toContain('➡️ Carried task');
+
+    const newPlanBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('New plan')
+    );
+    expect(newPlanBlock).toBeDefined();
+    expect((newPlanBlock as any).text.text).toContain('🎯 New plan');
+
+    const doneBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Done task')
+    );
+    expect(doneBlock).toBeDefined();
+    expect((doneBlock as any).text.text).toContain('✅ ~Done task~');
   });
 });
