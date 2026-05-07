@@ -3,15 +3,17 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled } from '../lib/config';
+import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled, getLinearIntelligenceConfig } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate, getBlockerStreaks, getUnplannedOverload } from '../lib/db';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate, getBlockerStreaks, getUnplannedOverload, getActiveWorkItems } from '../lib/db';
+import { computeLinearAlignment, AlignmentResult } from '../lib/linear-intelligence';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
 import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
+import { handleLinearWebhook } from '../lib/handlers/webhooks';
 import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo, formatTeamSummary } from '../lib/format';
 
 // ============================================================================
@@ -26,6 +28,7 @@ export interface Env {
   DEV_MODE?: string;
   GITHUB_TOKEN?: string;
   LINEAR_API_KEY?: string;
+  LINEAR_WEBHOOK_SECRET?: string;
   // Allow additional env vars for custom token names per daily
   [key: string]: string | undefined;
 }
@@ -73,6 +76,13 @@ export default {
       // Cron: send manager digests
       if (path === '/api/cron/digest') {
         return handleDigestCron(url, env);
+      }
+
+      // Linear webhook: issue status changes → auto-update standup items
+      if (path === '/api/webhooks/linear' && request.method === 'POST') {
+        const db = getDb(env.DATABASE_URL);
+        await loadConfigOverrides(db);
+        return handleLinearWebhook(request, env, db, ctx);
       }
 
       return new Response('Not found', { status: 404 });
@@ -728,6 +738,23 @@ async function sendDigestToManagers(
     }
   }
 
+  // Compute Linear intelligence alignment (Phase 1 & 2)
+  let linearAlignment: AlignmentResult[] | undefined;
+  const linearIntelConfig = getLinearIntelligenceConfig(daily);
+  if (linearIntelConfig && teamLinearData && teamLinearData.length > 0) {
+    try {
+      linearAlignment = [];
+      for (const member of teamLinearData) {
+        const workItems = await getActiveWorkItems(db, member.slackUserId, daily.name, endDate);
+        const result = computeLinearAlignment(member.slackUserId, workItems, member.data.issues);
+        linearAlignment.push(result);
+      }
+    } catch (error) {
+      console.error('Failed to compute Linear alignment for digest:', error);
+      linearAlignment = undefined;
+    }
+  }
+
   const digestText = formatManagerDigest({
     dailyName: daily.name,
     period,
@@ -749,6 +776,7 @@ async function sendDigestToManagers(
     maxPlanItems: getMaxPlanItems(daily.name),
     blockerStreaks,
     unplannedOverloads,
+    linearAlignment,
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)

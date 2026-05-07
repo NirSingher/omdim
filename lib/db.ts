@@ -328,6 +328,41 @@ export interface SubmissionItem {
   position: number;
 }
 
+/** Get active Linear-sourced work items for a user/daily on a specific date */
+export async function getActiveLinearWorkItems(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3
+       AND source = 'linear_ticket'
+       AND status IN ('pending', 'carried', 'in_progress')
+     ORDER BY id ASC`,
+    [slackUserId, dailyName, date]
+  );
+}
+
+/**
+ * Get active work items across all users/dailies by source_ref (Linear identifier).
+ * Used by the webhook handler to find items that need auto-update.
+ */
+export async function getActiveWorkItemsBySourceRef(
+  db: DbClient,
+  sourceRef: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE source_ref = $1
+       AND source = 'linear_ticket'
+       AND status IN ('pending', 'carried', 'in_progress')
+     ORDER BY created_date DESC`,
+    [sourceRef]
+  );
+}
+
 /** Get active work items for a user/daily on a specific date, ordered by status priority */
 export async function getActiveWorkItems(
   db: DbClient,

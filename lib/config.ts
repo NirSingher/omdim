@@ -52,11 +52,19 @@ const GitHubIntegrationSchema = z.object({
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
 });
 
+const LinearIntelligenceSchema = z.object({
+  enabled: z.boolean().default(false),
+  cross_reference: z.boolean().default(true),
+  auto_update: z.boolean().default(true),
+  priority_alignment: z.boolean().default(true),
+}).optional();
+
 const LinearIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
   team_id: z.string().optional(),
   token: z.string().optional(), // Optional: env var name for token (defaults to LINEAR_API_KEY)
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
+  intelligence: LinearIntelligenceSchema,
 });
 
 const IntegrationsSchema = z.object({
@@ -422,6 +430,25 @@ export function getLinearUserIdFromConfig(daily: Daily, slackUserId: string): st
 
   const match = mapping.find((m) => m.slack_user_id === slackUserId);
   return match?.external_username || null;
+}
+
+export interface LinearIntelligenceConfig {
+  enabled: boolean;
+  cross_reference: boolean;
+  auto_update: boolean;
+  priority_alignment: boolean;
+}
+
+/** Get Linear intelligence config for a daily, returns null if not enabled */
+export function getLinearIntelligenceConfig(daily: Daily): LinearIntelligenceConfig | null {
+  const intel = daily.integrations?.linear?.intelligence;
+  if (!intel?.enabled) return null;
+  return {
+    enabled: true,
+    cross_reference: intel.cross_reference ?? true,
+    auto_update: intel.auto_update ?? true,
+    priority_alignment: intel.priority_alignment ?? true,
+  };
 }
 
 /** Get all Linear user mappings for a daily */

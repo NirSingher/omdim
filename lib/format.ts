@@ -9,6 +9,7 @@ import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropSt
 import { postMessage, sendDM as slackSendDM, sendDMWithBlocks } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 import { TeamLinearData, CycleProgress } from './linear';
+import { AlignmentResult } from './linear-intelligence';
 
 // Re-export sendDM for backward compatibility
 export { sendDM as sendDM } from './slack';
@@ -403,6 +404,7 @@ export interface DigestOptions {
   maxPlanItems?: number; // Plan-size threshold for over-plan flagging
   blockerStreaks?: BlockerStreak[];
   unplannedOverloads?: UnplannedOverload[];
+  linearAlignment?: AlignmentResult[]; // Phase 1 & 2: plan-vs-Linear alignment
 }
 
 /**
@@ -594,6 +596,14 @@ export function formatManagerDigest(options: DigestOptions): string {
     const linearSection = formatLinearDigestSection(options.teamLinearData || [], options.cycleProgress);
     if (linearSection) {
       lines.push(linearSection);
+    }
+  }
+
+  // Linear intelligence: plan-vs-Linear alignment (Phase 1 & 2)
+  if (options.linearAlignment && options.linearAlignment.length > 0) {
+    const alignmentSection = formatLinearAlignmentSection(options.linearAlignment);
+    if (alignmentSection) {
+      lines.push(alignmentSection);
     }
   }
 
@@ -1192,6 +1202,57 @@ export function formatMemberPRSummary(prData: UserPRData): string {
   }
 
   return parts.join(' · ');
+}
+
+// ============================================================================
+// Linear Intelligence Formatting (Phase 1 & 2)
+// ============================================================================
+
+/**
+ * Format plan-vs-Linear alignment section for manager digest.
+ * Shows per-user cross-reference gaps and priority alignment status.
+ *
+ * Example output:
+ *   🔍 *Plan-Linear Alignment*
+ *     <@U123>: 2 plans not in Linear, 1 ticket unplanned ⚠️ 1 urgent unplanned
+ *     <@U456>: ✅ aligned
+ */
+function formatLinearAlignmentSection(alignment: AlignmentResult[]): string {
+  const lines: string[] = [];
+
+  lines.push('');
+  lines.push('🔍 *Plan-Linear Alignment*');
+
+  for (const result of alignment) {
+    const parts: string[] = [];
+
+    if (result.plansNotInLinear.length > 0) {
+      parts.push(`${result.plansNotInLinear.length} plan${result.plansNotInLinear.length !== 1 ? 's' : ''} not in Linear`);
+    }
+
+    if (result.linearNotInPlans.length > 0) {
+      parts.push(`${result.linearNotInPlans.length} ticket${result.linearNotInPlans.length !== 1 ? 's' : ''} unplanned`);
+    }
+
+    let prioritySuffix = '';
+    if (result.priorityAlignment === 'off-track' && result.missedHighPriority.length > 0) {
+      const urgentCount = result.missedHighPriority.filter(i => i.priority === 1).length;
+      const highCount = result.missedHighPriority.filter(i => i.priority === 2).length;
+      const priorityParts: string[] = [];
+      if (urgentCount > 0) priorityParts.push(`${urgentCount} urgent`);
+      if (highCount > 0) priorityParts.push(`${highCount} high-priority`);
+      prioritySuffix = ` ⚠️ ${priorityParts.join(', ')} unplanned`;
+    }
+
+    if (parts.length === 0 && result.priorityAlignment === 'on-track') {
+      lines.push(`  <@${result.slackUserId}>: ✅ aligned`);
+    } else {
+      const gapText = parts.length > 0 ? parts.join(', ') : 'gaps found';
+      lines.push(`  <@${result.slackUserId}>: ${gapText}${prioritySuffix}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 // ============================================================================
