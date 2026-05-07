@@ -45,11 +45,18 @@ const IntegrationUserMappingSchema = z.object({
   team_id: z.string().optional(), // Per-user Linear team ID override
 });
 
+const GitHubIntelligenceSchema = z.object({
+  enabled: z.boolean().default(false),
+  work_alignment: z.boolean().default(true),
+  auto_populate: z.boolean().default(true),
+}).optional();
+
 const GitHubIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
   org: z.string().optional(),
   token: z.string().optional(), // Optional: env var name for token (defaults to GITHUB_TOKEN)
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
+  intelligence: GitHubIntelligenceSchema,
 });
 
 const LinearIntelligenceSchema = z.object({
@@ -448,6 +455,23 @@ export function getLinearIntelligenceConfig(daily: Daily): LinearIntelligenceCon
     cross_reference: intel.cross_reference ?? true,
     auto_update: intel.auto_update ?? true,
     priority_alignment: intel.priority_alignment ?? true,
+  };
+}
+
+export interface GitHubIntelligenceConfig {
+  enabled: boolean;
+  work_alignment: boolean;
+  auto_populate: boolean;
+}
+
+/** Get GitHub intelligence config for a daily, returns null if not enabled */
+export function getGitHubIntelligenceConfig(daily: Daily): GitHubIntelligenceConfig | null {
+  const intel = daily.integrations?.github?.intelligence;
+  if (!intel?.enabled) return null;
+  return {
+    enabled: true,
+    work_alignment: intel.work_alignment ?? true,
+    auto_populate: intel.auto_populate ?? true,
   };
 }
 
