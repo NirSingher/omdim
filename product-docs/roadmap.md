@@ -197,12 +197,15 @@ See `requirements.md` and `architecture.md`
 
 ---
 
-## Planned
+### Remaining Stats & Analytics ✅
+- [x] Blocker streak tracking: consecutive days with blockers per user, surfaced in digest (🚧) and full report
+- [x] Unplanned overload alert: flag users with >70% unplanned work (⚡) in digest and report
+- [x] Unplanned rate trend comparison in full report Period Trends section
+- ~~Trend visualization (sparklines in Slack?)~~ — Skipped: Slack Block Kit doesn't support sparklines; existing ↑↓→ indicators are sufficient
 
-### Remaining Stats & Analytics
-- [ ] Blocker resolution time tracking
-- [ ] Trend visualization (sparklines in Slack?)
-- [ ] Unplanned overload alert (>70% unplanned work)
+---
+
+## Planned
 
 ### GitHub PR Filtering
 - [ ] Exclude PRs where user has commented and is awaiting author response

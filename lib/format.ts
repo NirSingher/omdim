@@ -5,7 +5,7 @@
  * - Generates daily digests and weekly summaries
  */
 
-import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats } from './db';
+import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats, BlockerStreak, UnplannedOverload } from './db';
 import { postMessage, sendDM as slackSendDM, sendDMWithBlocks } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 import { TeamLinearData, CycleProgress } from './linear';
@@ -401,6 +401,8 @@ export interface DigestOptions {
   teamLinearData?: TeamLinearData[]; // Linear data for team
   cycleProgress?: CycleProgress | null; // Linear cycle progress
   maxPlanItems?: number; // Plan-size threshold for over-plan flagging
+  blockerStreaks?: BlockerStreak[];
+  unplannedOverloads?: UnplannedOverload[];
 }
 
 /**
@@ -459,6 +461,24 @@ export function formatManagerDigest(options: DigestOptions): string {
         actionItems.push(`🔄 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" in progress Day ${item.carry_count}`);
       } else {
         actionItems.push(`🔥 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" stuck ${item.days_pending} days`);
+      }
+    }
+  }
+
+  // Blocker streaks (users blocked 3+ consecutive days)
+  if (options.blockerStreaks) {
+    for (const streak of options.blockerStreaks) {
+      if (streak.current_streak >= 3 && actionItems.length < 6) {
+        actionItems.push(`🚧 <@${streak.slack_user_id}>: blocked ${streak.current_streak} consecutive days`);
+      }
+    }
+  }
+
+  // Unplanned overload (pre-filtered by caller to threshold)
+  if (options.unplannedOverloads) {
+    for (const overload of options.unplannedOverloads) {
+      if (actionItems.length < 6) {
+        actionItems.push(`⚡ <@${overload.slack_user_id}>: ${overload.unplanned_pct}% unplanned work (${overload.unplanned_count}/${overload.completed_count} items)`);
       }
     }
   }
@@ -616,6 +636,8 @@ export interface FullReportOptions {
   bottlenecks?: BottleneckItem[];
   dropStats?: DropStats[];
   trends?: TrendData;
+  blockerStreaks?: BlockerStreak[];
+  unplannedOverloads?: UnplannedOverload[];
 }
 
 /**
@@ -623,7 +645,7 @@ export interface FullReportOptions {
  * Used by /standup report command
  */
 export function formatFullReport(options: FullReportOptions): string {
-  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, bottlenecks, dropStats, trends } = options;
+  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, bottlenecks, dropStats, trends, blockerStreaks, unplannedOverloads } = options;
 
   // Format date range
   const formatShortDate = (d: string) => {
@@ -682,6 +704,21 @@ export function formatFullReport(options: FullReportOptions): string {
     completionMap.set(sub.slack_user_id, existing);
   }
 
+  // Build lookup maps for new data
+  const blockerStreakMap = new Map<string, BlockerStreak>();
+  if (blockerStreaks) {
+    for (const streak of blockerStreaks) {
+      blockerStreakMap.set(streak.slack_user_id, streak);
+    }
+  }
+
+  const unplannedOverloadMap = new Map<string, UnplannedOverload>();
+  if (unplannedOverloads) {
+    for (const overload of unplannedOverloads) {
+      unplannedOverloadMap.set(overload.slack_user_id, overload);
+    }
+  }
+
   // Individual member sections
   for (const member of stats) {
     const userId = member.slack_user_id;
@@ -729,6 +766,18 @@ export function formatFullReport(options: FullReportOptions): string {
       lines.push(`Blockers: 0 days`);
     }
 
+    // Blocker streak
+    const streak = blockerStreakMap.get(userId);
+    if (streak && streak.current_streak >= 3) {
+      lines.push(`🚧 Current blocker streak: ${streak.current_streak} days`);
+    }
+
+    // Unplanned overload
+    const overload = unplannedOverloadMap.get(userId);
+    if (overload) {
+      lines.push(`⚡ Unplanned work: ${overload.unplanned_pct}% (${overload.unplanned_count}/${overload.completed_count} items)`);
+    }
+
     // Stuck items — separate in-progress from carried
     const userBottlenecks = bottleneckMap.get(userId);
     if (userBottlenecks && userBottlenecks.length > 0) {
@@ -772,6 +821,10 @@ export function formatFullReport(options: FullReportOptions): string {
     lines.push(`Completion: ${completionTrend}`);
     const blockerTrend = formatTrendCompact(trends.current.blocker_rate, trends.previous.blocker_rate, false);
     lines.push(`Blockers: ${blockerTrend}`);
+    if (trends.current.unplanned_rate !== undefined) {
+      const unplannedTrend = formatTrendCompact(trends.current.unplanned_rate, trends.previous.unplanned_rate, false);
+      lines.push(`Unplanned work: ${unplannedTrend}`);
+    }
   }
 
   return lines.join('\n');

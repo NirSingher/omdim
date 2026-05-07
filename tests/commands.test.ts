@@ -39,6 +39,8 @@ vi.mock('../lib/db', () => ({
   getUserOOO: vi.fn(() => []),
   setConfigOverride: vi.fn(),
   deleteConfigOverride: vi.fn(),
+  getBlockerStreaks: vi.fn(() => []),
+  getUnplannedOverload: vi.fn(() => []),
 }));
 
 // Mock slack module

@@ -5,7 +5,7 @@
 
 import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate } from '../lib/db';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate, getBlockerStreaks, getUnplannedOverload } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
 import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
@@ -582,6 +582,8 @@ async function sendDigestToManagers(
   const threshold = getBottleneckThreshold(daily);
   const bottlenecks = await getBottleneckItems(db, daily.name, threshold);
   const dropStats = await getHighDropUsers(db, daily.name, startDate, endDate, 30);
+  const blockerStreaks = await getBlockerStreaks(db, daily.name, startDate, endDate);
+  const unplannedOverloads = await getUnplannedOverload(db, daily.name, startDate, endDate, 70);
 
   // Get rankings (only for weekly and 4-week)
   let rankings;
@@ -745,6 +747,8 @@ async function sendDigestToManagers(
     teamLinearData,
     cycleProgress,
     maxPlanItems: getMaxPlanItems(daily.name),
+    blockerStreaks,
+    unplannedOverloads,
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)

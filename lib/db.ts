@@ -1095,6 +1095,7 @@ export interface PeriodStats {
   participation_rate: number;   // % of possible submissions received
   completion_rate: number;      // % of items completed vs dropped/carried
   blocker_rate: number;         // % of submissions with blockers
+  unplanned_rate: number;       // % of completed items that were unplanned
   total_submissions: number;
   total_participants: number;
   total_items_completed: number;
@@ -1118,12 +1119,14 @@ export async function getPeriodStats(
     total_completed: number;
     total_planned: number;
     blocker_count: number;
+    total_unplanned: number;
   }>(
     `SELECT
        COUNT(s.id) as submission_count,
-       COALESCE(SUM(jsonb_array_length(s.yesterday_completed::jsonb) + jsonb_array_length(s.unplanned::jsonb)), 0) as total_completed,
-       COALESCE(SUM(jsonb_array_length(s.today_plans::jsonb)), 0) as total_planned,
-       SUM(CASE WHEN s.blockers IS NOT NULL AND s.blockers != '' THEN 1 ELSE 0 END) as blocker_count
+       COALESCE(SUM(jsonb_array_length(COALESCE(s.yesterday_completed, '[]')::jsonb) + jsonb_array_length(COALESCE(s.unplanned, '[]')::jsonb)), 0) as total_completed,
+       COALESCE(SUM(jsonb_array_length(COALESCE(s.today_plans, '[]')::jsonb)), 0) as total_planned,
+       SUM(CASE WHEN s.blockers IS NOT NULL AND s.blockers != '' THEN 1 ELSE 0 END) as blocker_count,
+       COALESCE(SUM(jsonb_array_length(COALESCE(s.unplanned, '[]')::jsonb)), 0) as total_unplanned
      FROM submissions s
      WHERE s.daily_name = $1 AND s.date >= $2 AND s.date <= $3`,
     [dailyName, startDate, endDate]
@@ -1152,6 +1155,7 @@ export async function getPeriodStats(
   const totalCompleted = Number(submissionResult[0]?.total_completed) || 0;
   const totalPlanned = Number(submissionResult[0]?.total_planned) || 0;
   const blockerCount = Number(submissionResult[0]?.blocker_count) || 0;
+  const totalUnplanned = Number(submissionResult[0]?.total_unplanned) || 0;
   const participantCount = Number(participantResult[0]?.count) || 0;
   const itemsDone = Number(itemResult[0]?.total_done) || 0;
   const itemsDropped = Number(itemResult[0]?.total_dropped) || 0;
@@ -1174,10 +1178,15 @@ export async function getPeriodStats(
     ? Math.round((totalPlanned / submissionCount) * 10) / 10
     : 0;
 
+  const unplannedRate = totalCompleted > 0
+    ? Math.round((totalUnplanned / totalCompleted) * 100)
+    : 0;
+
   return {
     participation_rate: participationRate,
     completion_rate: completionRate,
     blocker_rate: blockerRate,
+    unplanned_rate: unplannedRate,
     total_submissions: submissionCount,
     total_participants: participantCount,
     total_items_completed: itemsDone,
@@ -1479,4 +1488,135 @@ export async function deleteConfigOverride(
     `DELETE FROM config_overrides WHERE scope = $1 AND key = $2`,
     [scope, key]
   );
+}
+
+// ============================================================================
+// Blocker Streak Tracking
+// ============================================================================
+
+export interface BlockerStreak {
+  slack_user_id: string;
+  current_streak: number;
+  max_streak: number;
+  total_blocker_days: number;
+}
+
+/**
+ * Pure function — computes blocker streaks from ordered submission rows.
+ * current_streak: consecutive blocker days up to (and including) the user's last submission.
+ * max_streak: longest consecutive blocker run in the data.
+ * Only users with at least one blocker day are returned.
+ */
+export function computeBlockerStreaks(
+  rows: Array<{ slack_user_id: string; date: string; has_blocker: boolean }>
+): BlockerStreak[] {
+  const byUser = new Map<string, Array<{ date: string; has_blocker: boolean }>>();
+  for (const row of rows) {
+    if (!byUser.has(row.slack_user_id)) byUser.set(row.slack_user_id, []);
+    byUser.get(row.slack_user_id)!.push({ date: row.date, has_blocker: row.has_blocker });
+  }
+
+  const results: BlockerStreak[] = [];
+
+  for (const [userId, entries] of byUser) {
+    // entries are already ordered by date ASC from the query
+    let maxStreak = 0;
+    let runningStreak = 0;
+    let totalBlockerDays = 0;
+
+    for (const entry of entries) {
+      if (entry.has_blocker) {
+        runningStreak++;
+        totalBlockerDays++;
+        if (runningStreak > maxStreak) maxStreak = runningStreak;
+      } else {
+        runningStreak = 0;
+      }
+    }
+
+    // current_streak is the streak at the tail of the sorted entries
+    const currentStreak = runningStreak;
+
+    if (totalBlockerDays > 0) {
+      results.push({
+        slack_user_id: userId,
+        current_streak: currentStreak,
+        max_streak: maxStreak,
+        total_blocker_days: totalBlockerDays,
+      });
+    }
+  }
+
+  return results;
+}
+
+/** Get blocker streaks for all users in a daily within a date range */
+export async function getBlockerStreaks(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string
+): Promise<BlockerStreak[]> {
+  const rows = await db.query<{ slack_user_id: string; date: string; has_blocker: boolean }>(
+    `SELECT slack_user_id, date, (blockers IS NOT NULL AND blockers != '') as has_blocker
+     FROM submissions
+     WHERE daily_name = $1 AND date >= $2 AND date <= $3
+     ORDER BY slack_user_id, date`,
+    [dailyName, startDate, endDate]
+  );
+  return computeBlockerStreaks(rows);
+}
+
+// ============================================================================
+// Unplanned Work Overload Detection
+// ============================================================================
+
+export interface UnplannedOverload {
+  slack_user_id: string;
+  unplanned_count: number;
+  completed_count: number;
+  unplanned_pct: number;
+}
+
+/** Get users whose unplanned work exceeds the given percentage threshold */
+export async function getUnplannedOverload(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string,
+  threshold: number = 70
+): Promise<UnplannedOverload[]> {
+  const rows = await db.query<{
+    slack_user_id: string;
+    unplanned_count: number;
+    completed_count: number;
+  }>(
+    `SELECT
+       slack_user_id,
+       COALESCE(SUM(jsonb_array_length(COALESCE(unplanned, '[]')::jsonb)), 0) as unplanned_count,
+       COALESCE(SUM(
+         jsonb_array_length(COALESCE(yesterday_completed, '[]')::jsonb) +
+         jsonb_array_length(COALESCE(unplanned, '[]')::jsonb)
+       ), 0) as completed_count
+     FROM submissions
+     WHERE daily_name = $1 AND date >= $2 AND date <= $3
+     GROUP BY slack_user_id`,
+    [dailyName, startDate, endDate]
+  );
+
+  return rows
+    .map(row => {
+      const unplannedCount = Number(row.unplanned_count) || 0;
+      const completedCount = Number(row.completed_count) || 0;
+      const unplannedPct = completedCount > 0
+        ? Math.round((unplannedCount / completedCount) * 100)
+        : 0;
+      return {
+        slack_user_id: row.slack_user_id,
+        unplanned_count: unplannedCount,
+        completed_count: completedCount,
+        unplanned_pct: unplannedPct,
+      };
+    })
+    .filter(row => row.unplanned_pct >= threshold);
 }

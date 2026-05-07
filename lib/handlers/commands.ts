@@ -4,7 +4,7 @@
  */
 
 import { getDailies, getDaily, getSchedule, isAdmin, isSuperAdmin, getAdmins, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser, clearConfigCache, loadConfigOverrides, isDailyEnabled, getAllDailiesIncludingDisabled, getDailyManagers, getOverride } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId, setConfigOverride, deleteConfigOverride, getAllConfigOverrides } from '../db';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId, setConfigOverride, deleteConfigOverride, getAllConfigOverrides, getBlockerStreaks, getUnplannedOverload } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { fetchLinearIssuesForUser, fetchGitHubPRsForUser } from './interactions';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
@@ -242,6 +242,9 @@ export async function handleDigest(ctx: CommandContext): Promise<CommandResponse
             missingToday = await getMissingSubmissions(ctx.db, daily.name, endDate);
           }
 
+          const blockerStreaks = await getBlockerStreaks(ctx.db, daily.name, startDate, endDate);
+          const unplannedOverloads = await getUnplannedOverload(ctx.db, daily.name, startDate, endDate, 70);
+
           const digestText = formatManagerDigest({
             dailyName: daily.name,
             period,
@@ -251,6 +254,8 @@ export async function handleDigest(ctx: CommandContext): Promise<CommandResponse
             stats,
             totalWorkdays,
             missingToday,
+            blockerStreaks,
+            unplannedOverloads,
           });
           digestParts.push(digestText);
         } catch (err) {
@@ -309,6 +314,9 @@ export async function handleDigest(ctx: CommandContext): Promise<CommandResponse
       missingToday = await getMissingSubmissions(ctx.db, digestDailyName, endDate);
     }
 
+    const blockerStreaks = await getBlockerStreaks(ctx.db, digestDailyName, startDate, endDate);
+    const unplannedOverloads = await getUnplannedOverload(ctx.db, digestDailyName, startDate, endDate, 70);
+
     const digestText = formatManagerDigest({
       dailyName: digestDailyName,
       period,
@@ -318,6 +326,8 @@ export async function handleDigest(ctx: CommandContext): Promise<CommandResponse
       stats,
       totalWorkdays,
       missingToday,
+      blockerStreaks,
+      unplannedOverloads,
     });
 
     await sendDM(ctx.slackToken, ctx.userId, digestText);
@@ -611,6 +621,9 @@ export async function handleReport(ctx: CommandContext): Promise<CommandResponse
             trends = { current: currentStats, previous: previousStats };
           }
 
+          const blockerStreaks = await getBlockerStreaks(ctx.db, daily.name, startDate, endDate);
+          const unplannedOverloads = await getUnplannedOverload(ctx.db, daily.name, startDate, endDate, 70);
+
           const reportText = formatFullReport({
             dailyName: daily.name,
             period,
@@ -622,6 +635,8 @@ export async function handleReport(ctx: CommandContext): Promise<CommandResponse
             bottlenecks,
             dropStats,
             trends,
+            blockerStreaks,
+            unplannedOverloads,
           });
           reportParts.push(reportText);
         } catch (err) {
@@ -698,6 +713,9 @@ export async function handleReport(ctx: CommandContext): Promise<CommandResponse
       };
     }
 
+    const blockerStreaks = await getBlockerStreaks(ctx.db, reportDailyName, startDate, endDate);
+    const unplannedOverloads = await getUnplannedOverload(ctx.db, reportDailyName, startDate, endDate, 70);
+
     const reportText = formatFullReport({
       dailyName: reportDailyName,
       period,
@@ -709,6 +727,8 @@ export async function handleReport(ctx: CommandContext): Promise<CommandResponse
       bottlenecks,
       dropStats,
       trends,
+      blockerStreaks,
+      unplannedOverloads,
     });
 
     await sendDM(ctx.slackToken, ctx.userId, reportText);

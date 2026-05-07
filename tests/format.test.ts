@@ -1690,6 +1690,221 @@ describe('format utilities', () => {
     });
   });
 
+  describe('formatManagerDigest - blocker streaks and unplanned overload', () => {
+    it('shows 🚧 in Needs Attention when current_streak >= 3', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        blockerStreaks: [
+          { slack_user_id: 'U111', current_streak: 3, max_streak: 3, total_blocker_days: 3 },
+        ],
+      });
+
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('🚧 <@U111>');
+      expect(result).toContain('blocked 3 consecutive days');
+    });
+
+    it('does NOT show 🚧 streak warning when current_streak < 3', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        blockerStreaks: [
+          { slack_user_id: 'U222', current_streak: 2, max_streak: 4, total_blocker_days: 6 },
+        ],
+      });
+
+      // No 🚧 streak warning in action items (current_streak is only 2)
+      expect(result).not.toContain('consecutive days');
+    });
+
+    it('shows ⚡ in Needs Attention for unplanned overloads with correct percentages', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        unplannedOverloads: [
+          { slack_user_id: 'U333', unplanned_count: 7, completed_count: 10, unplanned_pct: 70 },
+        ],
+      });
+
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('⚡ <@U333>');
+      expect(result).toContain('70% unplanned work');
+      expect(result).toContain('7/10 items');
+    });
+
+    it('no crash and no Needs Attention section when blockerStreaks and unplannedOverloads are absent', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        // no blockerStreaks, no unplannedOverloads
+      });
+
+      expect(result).not.toContain('Needs Attention');
+    });
+
+    it('no crash and no Needs Attention when arrays are empty', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        blockerStreaks: [],
+        unplannedOverloads: [],
+      });
+
+      expect(result).not.toContain('Needs Attention');
+    });
+  });
+
+  describe('formatFullReport - blocker streaks and unplanned overload', () => {
+    const baseOptions = {
+      dailyName: 'daily-il',
+      period: 'weekly' as const,
+      startDate: '2025-12-12',
+      endDate: '2025-12-18',
+      submissions: [],
+      stats: [
+        { slack_user_id: 'U111', submission_count: 5, total_completed: 10, total_planned: 12, total_blockers: 3, avg_items_per_day: 2.4 },
+      ],
+      totalWorkdays: 5,
+    };
+
+    it('shows per-user blocker streak line when current_streak >= 3', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        blockerStreaks: [
+          { slack_user_id: 'U111', current_streak: 4, max_streak: 4, total_blocker_days: 4 },
+        ],
+      });
+
+      expect(result).toContain('🚧 Current blocker streak: 4 days');
+    });
+
+    it('does NOT show blocker streak line when current_streak < 3', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        blockerStreaks: [
+          { slack_user_id: 'U111', current_streak: 2, max_streak: 5, total_blocker_days: 7 },
+        ],
+      });
+
+      expect(result).not.toContain('Current blocker streak');
+    });
+
+    it('shows per-user unplanned overload line', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        unplannedOverloads: [
+          { slack_user_id: 'U111', unplanned_count: 8, completed_count: 10, unplanned_pct: 80 },
+        ],
+      });
+
+      expect(result).toContain('⚡ Unplanned work: 80%');
+      expect(result).toContain('8/10 items');
+    });
+
+    it('does not show overload line for users not in unplannedOverloads', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        unplannedOverloads: [], // U111 not in the list
+      });
+
+      expect(result).not.toContain('Unplanned work');
+    });
+
+    it('trend section includes unplanned_rate when present', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        trends: {
+          current: {
+            participation_rate: 80,
+            completion_rate: 75,
+            blocker_rate: 10,
+            unplanned_rate: 35,
+            total_submissions: 5,
+            total_participants: 1,
+            total_items_completed: 10,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.4,
+          },
+          previous: {
+            participation_rate: 70,
+            completion_rate: 65,
+            blocker_rate: 15,
+            unplanned_rate: 50,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 8,
+            total_items_dropped: 4,
+            avg_items_per_day: 2.0,
+          },
+        },
+      });
+
+      expect(result).toContain('Unplanned work');
+      expect(result).toContain('35%');
+    });
+
+    it('trend section omits unplanned_rate when it is 0 / undefined', () => {
+      // unplanned_rate = 0 is falsy, so the condition `!== undefined` matters
+      // The format.ts code checks: if (trends.current.unplanned_rate !== undefined)
+      const result = formatFullReport({
+        ...baseOptions,
+        trends: {
+          current: {
+            participation_rate: 80,
+            completion_rate: 75,
+            blocker_rate: 10,
+            unplanned_rate: 0,
+            total_submissions: 5,
+            total_participants: 1,
+            total_items_completed: 10,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.4,
+          },
+          previous: {
+            participation_rate: 70,
+            completion_rate: 65,
+            blocker_rate: 15,
+            unplanned_rate: 0,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 8,
+            total_items_dropped: 4,
+            avg_items_per_day: 2.0,
+          },
+        },
+      });
+
+      // unplanned_rate is 0 (not undefined) so line should appear, showing "0%"
+      expect(result).toContain('Unplanned work');
+    });
+  });
+
   describe('formatFullReport - in-progress flagging', () => {
     it('shows in-progress needs-attention section per user', () => {
       const result = formatFullReport({
