@@ -328,6 +328,131 @@ export interface SubmissionItem {
   position: number;
 }
 
+/** Get active work items for a user/daily on a specific date, ordered by status priority */
+export async function getActiveWorkItems(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3
+     ORDER BY
+       CASE status
+         WHEN 'in_progress' THEN 1
+         WHEN 'carried'     THEN 2
+         WHEN 'pending'     THEN 3
+         WHEN 'done'        THEN 4
+         WHEN 'dropped'     THEN 5
+         ELSE 6
+       END,
+       id ASC`,
+    [slackUserId, dailyName, date]
+  );
+}
+
+/** Update a single work item's status by ID */
+export async function updateWorkItemStatus(
+  db: DbClient,
+  itemId: number,
+  status: 'done' | 'dropped' | 'in_progress' | 'pending' | 'carried',
+  completedDate?: string
+): Promise<boolean> {
+  let sql: string;
+  let params: unknown[];
+
+  if (status === 'done') {
+    sql = `UPDATE work_items SET status = 'done', completed_date = $1 WHERE id = $2 RETURNING id`;
+    params = [completedDate ?? null, itemId];
+  } else {
+    sql = `UPDATE work_items SET status = $1 WHERE id = $2 RETURNING id`;
+    params = [status, itemId];
+  }
+
+  const result = await db.query<{ id: number }>(sql, params);
+  return result.length > 0;
+}
+
+/** Insert a single work item (source='manual', item_type='plan') */
+export async function addWorkItem(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  text: string,
+  date: string,
+  submissionId: number
+): Promise<WorkItem | null> {
+  const result = await db.query<WorkItem>(
+    `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id, source, item_type)
+     VALUES ($1, $2, $3, $4, 'pending', $5, 'manual', 'plan')
+     RETURNING *`,
+    [slackUserId, dailyName, text, date, submissionId]
+  );
+  return result[0] || null;
+}
+
+/**
+ * Rebuild the submission's JSONB arrays from the current work_items state.
+ * Call this after any App Home mutation to keep the submission record in sync.
+ */
+export async function updateSubmissionArrays(
+  db: DbClient,
+  submissionId: number,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<void> {
+  const items = await db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3`,
+    [slackUserId, dailyName, date]
+  );
+
+  const todayPlans: string[] = [];
+  const yesterdayCompleted: string[] = [];
+  const yesterdayIncomplete: string[] = [];
+  const yesterdayInProgress: string[] = [];
+
+  for (const item of items) {
+    if (item.item_type === 'unplanned') continue; // unplanned items managed separately
+    switch (item.status) {
+      case 'pending':
+      case 'carried':
+        // These are "today's plan" items that haven't changed state
+        if (item.carry_count === 0) {
+          todayPlans.push(item.text);
+        } else {
+          yesterdayIncomplete.push(item.text);
+        }
+        break;
+      case 'in_progress':
+        yesterdayInProgress.push(item.text);
+        break;
+      case 'done':
+        yesterdayCompleted.push(item.text);
+        break;
+      // dropped items are omitted from all arrays
+    }
+  }
+
+  await db.query(
+    `UPDATE submissions
+     SET today_plans = $1,
+         yesterday_completed = $2,
+         yesterday_incomplete = $3,
+         yesterday_in_progress = $4
+     WHERE id = $5`,
+    [
+      JSON.stringify(todayPlans),
+      JSON.stringify(yesterdayCompleted),
+      JSON.stringify(yesterdayIncomplete),
+      JSON.stringify(yesterdayInProgress),
+      submissionId,
+    ]
+  );
+}
+
 /** Create work items from today's plans */
 export async function createWorkItems(
   db: DbClient,

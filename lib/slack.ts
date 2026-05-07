@@ -320,6 +320,47 @@ export async function publishHomeView(
 }
 
 /**
+ * Update an existing message in a Slack channel
+ * @returns true if successful, false otherwise
+ */
+export async function updateMessage(
+  slackToken: string,
+  channel: string,
+  ts: string,
+  text: string,
+  blocks?: unknown[]
+): Promise<boolean> {
+  try {
+    const response = await fetch('https://slack.com/api/chat.update', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${slackToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel,
+        ts,
+        text,
+        blocks,
+        mrkdwn: true,
+      }),
+    });
+
+    const result = await response.json() as { ok: boolean; error?: string };
+
+    if (!result.ok) {
+      console.error('Failed to update message:', result.error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error updating message:', error);
+    return false;
+  }
+}
+
+/**
  * Get user info from Slack API (timezone data)
  */
 export async function getUserInfo(
