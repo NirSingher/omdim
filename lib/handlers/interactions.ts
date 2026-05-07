@@ -33,14 +33,17 @@ import {
   getParticipants,
   setOOO,
   clearOOO,
+  updateWorkItemStatus,
+  addWorkItem,
+  updateSubmissionArrays,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
 import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData, extractLinearReferences, fetchWorkflowStates, markIssuesInProgress as markLinearIssuesInProgress, commentOnIssue, resolveIdentifiers } from '../linear';
-import { postStandupToChannel, sendStandupDM } from '../format';
+import { postStandupToChannel, sendStandupDM, formatStandupBlocks, StandupData } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
-import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
+import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage } from '../slack';
 import { StandupMode } from '../modal';
 
 // ============================================================================
@@ -68,7 +71,7 @@ export interface InteractionPayload {
   type: string;
   trigger_id: string;
   user: { id: string };
-  actions?: Array<{ action_id: string; value: string }>;
+  actions?: Array<{ action_id: string; value: string; selected_option?: { value: string } }>;
   view?: {
     callback_id: string;
     private_metadata: string;
@@ -1321,6 +1324,220 @@ async function handleSettingsSubmission(
 }
 
 // ============================================================================
+// Phase 4: Standup Post Sync
+// ============================================================================
+
+/** Parse JSONB arrays (handles both array and string formats) */
+function parseJsonArray(value: string[] | null): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    return JSON.parse(value as unknown as string);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Rebuild and update the standup post in the channel after an App Home mutation.
+ * No-ops if the submission doesn't exist, hasn't been posted, or has no message ts.
+ */
+async function syncStandupPost(
+  db: DbClient,
+  slackToken: string,
+  userId: string,
+  dailyName: string,
+  date: string
+): Promise<void> {
+  const submission = await getSubmissionForDate(db, userId, dailyName, date);
+  if (!submission || !submission.posted || !submission.slack_message_ts) return;
+
+  const daily = getDaily(dailyName);
+  if (!daily || !daily.channel) return;
+
+  // Fetch carry counts for in-progress items (for "Day X" annotations)
+  const inProgressItems = parseJsonArray(submission.yesterday_in_progress);
+  let inProgressCarryCounts: Record<string, number> | undefined;
+  if (inProgressItems.length > 0) {
+    try {
+      inProgressCarryCounts = await getInProgressCarryCounts(db, userId, dailyName, inProgressItems);
+    } catch (error) {
+      console.error('Failed to get in-progress carry counts for sync:', error);
+    }
+  }
+
+  const githubOrg = getGitHubConfig(daily)?.org;
+
+  const data: StandupData = {
+    yesterdayCompleted: parseJsonArray(submission.yesterday_completed),
+    yesterdayIncomplete: parseJsonArray(submission.yesterday_incomplete),
+    yesterdayInProgress: inProgressItems,
+    yesterdayDropped: [], // dropped items aren't tracked on the submission record
+    unplanned: parseJsonArray(submission.unplanned),
+    todayPlans: parseJsonArray(submission.today_plans),
+    blockers: submission.blockers || '',
+    customAnswers: submission.custom_answers || {},
+    questions: daily.questions,
+    fieldOrder: daily.field_order,
+    inProgressCarryCounts,
+    githubOrg,
+  };
+
+  const blocks = formatStandupBlocks(userId, dailyName, data);
+  const fallbackText = `*<@${userId}>* submitted their standup`;
+
+  await updateMessage(slackToken, daily.channel, submission.slack_message_ts, fallbackText, blocks);
+}
+
+// ============================================================================
+// Phase 3: App Home Task Action Handlers
+// ============================================================================
+
+/**
+ * Handle overflow menu selection on a task item (done / in_progress / drop)
+ * action_id: "task_action", value JSON: { itemId, dailyName, action }
+ */
+async function handleTaskAction(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const selectedValue = payload.actions?.[0]?.selected_option?.value;
+  if (!selectedValue) {
+    console.error('No selected_option value in task_action');
+    return false;
+  }
+
+  let parsed: { itemId: number; dailyName: string; action: string };
+  try {
+    parsed = JSON.parse(selectedValue);
+  } catch {
+    console.error('Failed to parse task_action value:', selectedValue);
+    return false;
+  }
+
+  const { itemId, dailyName, action } = parsed;
+  const userId = payload.user.id;
+
+  // Map "drop" → "dropped" for DB; others pass through
+  const dbStatus = action === 'drop' ? 'dropped' : action as 'done' | 'in_progress';
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const todayStr = formatDate(getUserDate(tzOffset));
+
+  await updateWorkItemStatus(ctx.db, itemId, dbStatus, dbStatus === 'done' ? todayStr : undefined);
+
+  const submission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+  if (submission) {
+    await updateSubmissionArrays(ctx.db, submission.id, userId, dailyName, todayStr);
+  }
+
+  await refreshHome(userId, ctx);
+
+  if (submission) {
+    const syncPromise = syncStandupPost(ctx.db, ctx.slackToken, userId, dailyName, todayStr)
+      .catch(err => console.error('syncStandupPost failed:', err));
+    ctx.waitUntil?.(syncPromise);
+  }
+
+  return true;
+}
+
+/**
+ * Handle "Add Item" button click from App Home task list
+ * action_id: "task_add", value: dailyName
+ */
+async function handleTaskAdd(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const dailyName = payload.actions?.[0]?.value;
+  if (!dailyName) {
+    console.error('No dailyName in task_add action');
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const triggerId = payload.trigger_id;
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const todayStr = formatDate(getUserDate(tzOffset));
+
+  const submission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+  if (!submission) {
+    await sendDM(
+      ctx.slackToken,
+      userId,
+      `You need to submit your *${dailyName}* standup first before adding items.`
+    );
+    return true;
+  }
+
+  const modal = {
+    type: 'modal',
+    callback_id: 'task_add_submission',
+    title: { type: 'plain_text', text: 'Add Item' },
+    submit: { type: 'plain_text', text: 'Add' },
+    private_metadata: JSON.stringify({ dailyName, date: todayStr, submissionId: submission.id }),
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'task_text',
+        label: { type: 'plain_text', text: 'Item' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'task_text_input',
+          placeholder: { type: 'plain_text', text: 'What are you adding?' },
+          multiline: false,
+        },
+      },
+    ],
+  };
+
+  return openModal(ctx.slackToken, triggerId, modal);
+}
+
+/**
+ * Handle "Add Item" modal submission
+ * callback_id: "task_add_submission"
+ */
+async function handleTaskAddSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+
+  let metadata: { dailyName: string; date: string; submissionId: number };
+  try {
+    metadata = JSON.parse(payload.view!.private_metadata);
+  } catch {
+    console.error('Failed to parse task_add_submission metadata');
+    return false;
+  }
+
+  const { dailyName, date, submissionId } = metadata;
+
+  const text = payload.view!.state.values.task_text?.task_text_input?.value?.trim();
+  if (!text) {
+    return {
+      response_action: 'errors',
+      errors: { task_text: 'Please enter an item' },
+    };
+  }
+
+  await addWorkItem(ctx.db, userId, dailyName, text, date, submissionId);
+  await updateSubmissionArrays(ctx.db, submissionId, userId, dailyName, date);
+  await refreshHome(userId, ctx);
+
+  const syncPromise = syncStandupPost(ctx.db, ctx.slackToken, userId, dailyName, date)
+    .catch(err => console.error('syncStandupPost failed:', err));
+  ctx.waitUntil?.(syncPromise);
+
+  return true;
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -1367,6 +1584,13 @@ export async function handleInteraction(
     if (actionId === 'home_set_max_items') return handleSetMaxItems(payload, ctx);
     if (actionId === 'home_set_stale_pr_days') return handleSetStalePrDays(payload, ctx);
     if (actionId === 'home_set_linear_teams') return handleSetLinearTeams(payload, ctx);
+    if (actionId === 'task_action') return handleTaskAction(payload, ctx);
+    if (actionId === 'task_add') return handleTaskAdd(payload, ctx);
+  }
+
+  // Handle task_add modal submission
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'task_add_submission') {
+    return handleTaskAddSubmission(payload, ctx);
   }
 
   // Handle modal submission
