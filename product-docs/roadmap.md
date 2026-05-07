@@ -226,7 +226,37 @@ See `requirements.md` and `architecture.md`
 
 ## Planned
 
-(No items currently planned)
+### App Home: Today's Tasks Management
+View and manage today's standup items directly from the App Home tab.
+
+- [ ] Show today's planned items as an editable list in App Home
+- [ ] Quick-add new items inline
+- [ ] Mark items done / in-progress / drop from App Home
+- [ ] Show integration context (linked PR status, Linear ticket state) alongside each item
+- [ ] Real-time sync: changes in App Home reflect in the standup post (and vice versa)
+
+### Linear Intelligence
+
+**Cross-Reference Plans vs Linear**
+- [ ] Match plan items to assigned Linear issues (fuzzy title match + issue ID)
+- [ ] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
+- [ ] Weekly report: plan-to-Linear alignment score per user
+- [ ] Configurable strictness: `off` / `soft` / `strict`
+
+**Auto-Update Items from Linear Status**
+- [ ] Webhook or poll for Linear status changes on linked issues
+- [ ] Auto-mark standup items Done/In Progress based on Linear state
+- [ ] Notify user in DM when auto-updates happen
+
+**Priority Alignment Reporting**
+- [ ] Compare active standup items against Linear priority ordering
+- [ ] Digest: per-user alignment summary (on-track / off-track)
+- [ ] Individual DM: alignment report to off-track individuals
+
+### GitHub Work Alignment
+- [ ] Compare "today's plans" keywords to commit messages/PR titles
+- [ ] Surface misalignment: "You said X but worked on Y"
+- [ ] Auto-populate yesterday's work from commits
 
 ---
 
@@ -248,38 +278,6 @@ See `requirements.md` and `architecture.md`
 - [ ] DB-stored manager list (supplements config `managers`)
 - [ ] `digest_recipients` and `report_recipients` config arrays per daily (optional override)
 - [ ] Self-subscribe command: `/standup subscribe <daily> digest|report`
-
-### App Home: Today's Tasks Management
-View and manage today's standup items directly from the App Home tab.
-
-- [ ] Show today's planned items as an editable list in App Home
-- [ ] Quick-add new items inline
-- [ ] Mark items done / in-progress / drop from App Home
-- [ ] Show integration context (linked PR status, Linear ticket state) alongside each item
-- [ ] Real-time sync: changes in App Home reflect in the standup post (and vice versa)
-
-### GitHub Work Alignment
-- [ ] Compare "today's plans" keywords to commit messages/PR titles
-- [ ] Surface misalignment: "You said X but worked on Y"
-- [ ] Auto-populate yesterday's work from commits
-
-### Linear Intelligence
-
-**Cross-Reference Plans vs Linear**
-- [ ] Match plan items to assigned Linear issues (fuzzy title match + issue ID)
-- [ ] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
-- [ ] Weekly report: plan-to-Linear alignment score per user
-- [ ] Configurable strictness: `off` / `soft` / `strict`
-
-**Auto-Update Items from Linear Status**
-- [ ] Webhook or poll for Linear status changes on linked issues
-- [ ] Auto-mark standup items Done/In Progress based on Linear state
-- [ ] Notify user in DM when auto-updates happen
-
-**Priority Alignment Reporting**
-- [ ] Compare active standup items against Linear priority ordering
-- [ ] Digest: per-user alignment summary (on-track / off-track)
-- [ ] Individual DM: alignment report to off-track individuals
 
 ---
 
