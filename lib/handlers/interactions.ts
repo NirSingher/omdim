@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems, isAdmin } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems, isAdmin, getGitHubIntelligenceConfig } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -38,7 +38,7 @@ import {
   updateSubmissionArrays,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
-import { fetchUserPRData, UserPRData } from '../github';
+import { fetchUserPRData, UserPRData, fetchMergedPRs, MergedPR } from '../github';
 import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData, extractLinearReferences, fetchWorkflowStates, markIssuesInProgress as markLinearIssuesInProgress, commentOnIssue, resolveIdentifiers } from '../linear';
 import { postStandupToChannel, sendStandupDM, formatStandupBlocks, StandupData } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
@@ -223,6 +223,46 @@ export async function fetchGitHubPRsForUser(
   }
 }
 
+/**
+ * Fetch merged PRs for a user if GitHub intelligence auto_populate is enabled
+ */
+async function fetchMergedPRsForUser(
+  daily: ReturnType<typeof getDaily>,
+  userId: string,
+  ctx: InteractionContext,
+  since: string
+): Promise<MergedPR[]> {
+  if (!daily) return [];
+
+  const githubIntelConfig = getGitHubIntelligenceConfig(daily);
+  if (!githubIntelConfig?.auto_populate) return [];
+
+  const githubConfig = getGitHubConfig(daily);
+  if (!githubConfig || !ctx.env) return [];
+
+  const githubToken = ctx.env[githubConfig.tokenEnvVar];
+  if (!githubToken) return [];
+
+  // Get GitHub username: config mapping takes precedence over DB
+  let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+  if (!githubUsername) {
+    githubUsername = await getGitHubUsername(ctx.db, userId);
+  }
+
+  if (!githubUsername) return [];
+
+  try {
+    const mergedPRs = await withTimeout(
+      fetchMergedPRs(githubToken, githubUsername, githubConfig.org, since),
+      INTEGRATION_TIMEOUT_MS, 'GitHub merged PRs API'
+    );
+    return mergedPRs;
+  } catch (error) {
+    console.error('Failed to fetch merged PRs:', error);
+    return [];
+  }
+}
+
 // ============================================================================
 // Button Handler: Open Standup
 // ============================================================================
@@ -296,10 +336,16 @@ export async function handleOpenStandup(
     }
   }
 
-  // Fetch Linear issues and GitHub PRs in parallel
-  const [linearResult, githubResult] = await Promise.all([
+  // Compute "since" date for merged PRs: use previous submission date, or yesterday
+  const yesterdayDate = new Date(userDate);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const sinceDate = previousSubmission?.date || formatDate(yesterdayDate);
+
+  // Fetch Linear issues, GitHub PRs, and merged PRs in parallel
+  const [linearResult, githubResult, mergedPRs] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchMergedPRsForUser(daily, userId, ctx, sinceDate),
   ]);
 
   // Compute done suppression and auto-completed sets
@@ -337,7 +383,7 @@ export async function handleOpenStandup(
   }
 
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds, mergedPRs.length > 0 ? mergedPRs : undefined);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -893,10 +939,16 @@ export async function handleHomeStartDaily(
     }
   }
 
-  // Fetch Linear issues and GitHub PRs in parallel
-  const [linearResult, githubResult] = await Promise.all([
+  // Compute "since" date for merged PRs: yesterday relative to user's local date
+  const yesterdayDateHome = new Date(userDate);
+  yesterdayDateHome.setDate(yesterdayDateHome.getDate() - 1);
+  const sinceDateHome = formatDate(yesterdayDateHome);
+
+  // Fetch Linear issues, GitHub PRs, and merged PRs in parallel
+  const [linearResult, githubResult, mergedPRsHome] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchMergedPRsForUser(daily, userId, ctx, sinceDateHome),
   ]);
 
   // Compute done suppression and auto-completed sets
@@ -944,7 +996,8 @@ export async function handleHomeStartDaily(
     githubResult.prData,
     githubResult.reviewerMap,
     doneIdentifiers,
-    autoCompletedIds
+    autoCompletedIds,
+    mergedPRsHome.length > 0 ? mergedPRsHome : undefined
   );
 
   return openModal(ctx.slackToken, triggerId, modal);

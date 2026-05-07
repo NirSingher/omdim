@@ -45,6 +45,7 @@ vi.mock('../lib/config', () => ({
   getSchedule: vi.fn(() => ({ default_time: '10:00' })),
   getGitHubConfig: vi.fn(() => null), // No GitHub integration by default
   getGitHubUsernameFromConfig: vi.fn(() => null),
+  getGitHubIntelligenceConfig: vi.fn(() => null), // No GitHub intelligence by default
   getLinearConfig: vi.fn(() => null), // No Linear integration by default
   getLinearUserIdFromConfig: vi.fn(() => null),
   getLinearTeamIdForUser: vi.fn(() => null),

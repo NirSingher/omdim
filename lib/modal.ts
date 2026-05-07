@@ -4,7 +4,7 @@
  */
 
 import { Question, FieldOrder, getMaxPlanItems } from './config';
-import { UserPRData, GitHubPR } from './github';
+import { UserPRData, GitHubPR, MergedPR } from './github';
 import { LinearIssue } from './linear';
 
 // Re-export openModal from slack.ts for backward compatibility
@@ -114,11 +114,13 @@ export function buildStandupModal(
   prData?: UserPRData,
   reviewerMap?: Map<string, string>,
   doneIdentifiers?: Set<string>,
-  autoCompletedIds?: Set<string>
+  autoCompletedIds?: Set<string>,
+  mergedPRs?: MergedPR[]
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
-  const yesterdayPlans = yesterday?.plans || [];
+  // We may append merged PR plan items to this array later; keep it mutable
+  const yesterdayPlans: string[] = [...(yesterday?.plans || [])];
 
   // Deduplicate: extract integration IDs from yesterday's plans so we don't
   // show the same Linear tickets or GitHub PRs as both "yesterday" items and
@@ -314,6 +316,42 @@ export function buildStandupModal(
       }
       for (const { plan, index } of linearItems) {
         renderYesterdayItem(plan, index);
+      }
+    }
+
+    // Merged PRs auto-populate: add up to 5 new (non-duplicate) merged PRs as yesterday items
+    if (mergedPRs && mergedPRs.length > 0) {
+      const newMergedPRs = mergedPRs
+        .filter(pr => !yesterdayIntegrationIds.has(`${pr.repo}#${pr.number}`))
+        .slice(0, 5);
+
+      if (newMergedPRs.length > 0) {
+        if ([manualItems, prItems, linearItems].filter(g => g.length > 0).length > 0) {
+          blocks.push({
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '*📦 Merged PRs*' }],
+          });
+        }
+        for (const pr of newMergedPRs) {
+          const planText = `[${pr.repo}#${pr.number}] ${pr.title}`;
+          // Append to yesterdayPlans so the submission handler can find it at this index
+          const index = yesterdayPlans.length;
+          yesterdayPlans.push(planText);
+          blocks.push({
+            type: 'section',
+            block_id: `yesterday_item_${index}`,
+            text: {
+              type: 'mrkdwn',
+              text: planText.length > 60 ? planText.substring(0, 57) + '...' : planText,
+            },
+            accessory: {
+              type: 'static_select',
+              action_id: `item_status_${index}`,
+              options: YESTERDAY_ITEM_OPTIONS,
+              initial_option: YESTERDAY_ITEM_OPTIONS[2], // Default to "Done" for merged PRs
+            },
+          });
+        }
       }
     }
 
