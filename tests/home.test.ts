@@ -335,6 +335,180 @@ describe('handleAppHomeOpened - fetches linked accounts', () => {
   });
 });
 
+describe('buildHomeView - Interactive task management', () => {
+  it('renders active items with overflow menus when plan items have ids', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { id: 10, text: 'Fix bug', status: 'planned' as const },
+        { id: 11, text: 'Write tests', status: 'in_progress' as const },
+        { id: 12, text: 'Old task', status: 'carried' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const bugBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Fix bug')
+    );
+    expect(bugBlock).toBeDefined();
+    expect((bugBlock as any).accessory?.type).toBe('overflow');
+    expect((bugBlock as any).accessory?.action_id).toBe('task_action');
+
+    // Verify the overflow options encode itemId, dailyName, and action
+    const options = (bugBlock as any).accessory?.options as Array<{ value: string }>;
+    expect(options).toHaveLength(3);
+    const doneValue = JSON.parse(options[0].value);
+    expect(doneValue.itemId).toBe(10);
+    expect(doneValue.dailyName).toBe('daily-test');
+    expect(doneValue.action).toBe('done');
+
+    const inProgressValue = JSON.parse(options[1].value);
+    expect(inProgressValue.action).toBe('in_progress');
+
+    const dropValue = JSON.parse(options[2].value);
+    expect(dropValue.action).toBe('drop');
+  });
+
+  it('renders terminal items (done/dropped) without overflow menus', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { id: 20, text: 'Completed thing', status: 'done' as const },
+        { id: 21, text: 'Abandoned thing', status: 'dropped' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const doneBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Completed thing')
+    );
+    expect(doneBlock).toBeDefined();
+    expect((doneBlock as any).accessory).toBeUndefined();
+
+    const droppedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Abandoned thing')
+    );
+    expect(droppedBlock).toBeDefined();
+    expect((droppedBlock as any).accessory).toBeUndefined();
+  });
+
+  it('renders Add Item button after each daily\'s task list', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-il',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { id: 30, text: 'Some task', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const addBlock = view.blocks.find(
+      (b: any) => b.type === 'actions' &&
+        b.elements?.[0]?.action_id === 'task_add'
+    );
+    expect(addBlock).toBeDefined();
+    expect((addBlock as any).elements[0].value).toBe('daily-il');
+    expect((addBlock as any).elements[0].text?.text).toContain('Add Item');
+  });
+
+  it('renders correct overflow menus for mixed active and terminal items', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { id: 40, text: 'Active task', status: 'planned' as const },
+        { id: 41, text: 'Done task', status: 'done' as const },
+        { id: 42, text: 'WIP task', status: 'in_progress' as const },
+        { id: 43, text: 'Dropped task', status: 'dropped' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const activeBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Active task')
+    );
+    expect((activeBlock as any).accessory?.type).toBe('overflow');
+
+    const wipBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('WIP task')
+    );
+    expect((wipBlock as any).accessory?.type).toBe('overflow');
+
+    const doneBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Done task')
+    );
+    expect((doneBlock as any).accessory).toBeUndefined();
+
+    const droppedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Dropped task')
+    );
+    expect((droppedBlock as any).accessory).toBeUndefined();
+  });
+
+  it('renders plan items without IDs as plain sections (backward compat)', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        // No `id` field — legacy JSONB fallback items
+        { text: 'Legacy active task', status: 'planned' as const },
+        { text: 'Legacy carried task', status: 'carried' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const legacyActive = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Legacy active task')
+    );
+    expect(legacyActive).toBeDefined();
+    // No overflow accessory because there is no id
+    expect((legacyActive as any).accessory).toBeUndefined();
+
+    const legacyCarried = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Legacy carried task')
+    );
+    expect(legacyCarried).toBeDefined();
+    expect((legacyCarried as any).accessory).toBeUndefined();
+  });
+
+  it('does not render Add Item button when planItems is empty or absent', () => {
+    // No planItems at all
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: false,
+      tomorrowScheduled: false,
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const addBlock = view.blocks.find(
+      (b: any) => b.type === 'actions' && b.elements?.[0]?.action_id === 'task_add'
+    );
+    expect(addBlock).toBeUndefined();
+  });
+
+  it('does not render Add Item button when planItems array is empty', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [], // submitted but nothing to show
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const addBlock = view.blocks.find(
+      (b: any) => b.type === 'actions' && b.elements?.[0]?.action_id === 'task_add'
+    );
+    expect(addBlock).toBeUndefined();
+  });
+});
+
 describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -401,5 +575,82 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
     );
     expect(doneBlock).toBeDefined();
     expect((doneBlock as any).text.text).toContain('✅ ~Done task~');
+
+    // JSONB fallback items have no IDs, so none should have overflow menus
+    const blocksWithOverflow = view.blocks.filter(
+      (b: any) => b.type === 'section' && b.accessory?.type === 'overflow'
+    );
+    expect(blocksWithOverflow).toHaveLength(0);
+  });
+
+  it('uses work_items rows (primary path) when they exist and renders overflow menus', async () => {
+    vi.mocked(getUserDailies).mockResolvedValueOnce([
+      { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },
+    ]);
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
+      id: 5,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-test',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: [],
+      yesterday_incomplete: [],
+      yesterday_in_progress: [],
+      unplanned: null,
+      today_plans: ['Plan from DB'],
+      blockers: null,
+      custom_answers: null,
+      slack_message_ts: 'ts-abc',
+      posted: true,
+      items_normalized: true,
+    });
+    vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    // Return work_items with IDs — triggers primary path
+    vi.mocked(getActiveWorkItems).mockResolvedValueOnce([
+      {
+        id: 99,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        text: 'Plan from DB',
+        created_date: '2025-12-22',
+        status: 'pending',
+        carry_count: 0,
+        completed_date: null,
+        snoozed_until: null,
+        submission_id: 5,
+        source: 'manual',
+        source_ref: null,
+        source_url: null,
+        item_type: 'plan',
+      },
+    ]);
+    vi.mocked(publishHomeView).mockResolvedValueOnce(true);
+
+    const event: AppHomeOpenedEvent = { type: 'app_home_opened', user: 'U12345', tab: 'home' };
+    const ctx: HomeContext = { db: {} as any, slackToken: 'xoxb-test' };
+
+    await handleAppHomeOpened(event, ctx);
+
+    const publishCall = vi.mocked(publishHomeView).mock.calls[0];
+    const view = publishCall[2] as { blocks: Array<Record<string, unknown>> };
+
+    // The item should be rendered with an overflow menu because it has an id
+    const itemBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Plan from DB')
+    );
+    expect(itemBlock).toBeDefined();
+    expect((itemBlock as any).accessory?.type).toBe('overflow');
+    expect((itemBlock as any).accessory?.action_id).toBe('task_action');
+
+    const options = (itemBlock as any).accessory?.options as Array<{ value: string }>;
+    const doneOption = JSON.parse(options[0].value);
+    expect(doneOption.itemId).toBe(99);
+    expect(doneOption.action).toBe('done');
+
+    // Add Item button should be present
+    const addBlock = view.blocks.find(
+      (b: any) => b.type === 'actions' && b.elements?.[0]?.action_id === 'task_add'
+    );
+    expect(addBlock).toBeDefined();
   });
 });

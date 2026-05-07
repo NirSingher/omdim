@@ -28,6 +28,10 @@ vi.mock('../lib/db', () => ({
   getRecentlyDoneLinearItems: vi.fn(() => Promise.resolve([])),
   getDmStandupPreference: vi.fn(() => Promise.resolve(true)),
   setDmStandupPreference: vi.fn(),
+  // New task management functions
+  updateWorkItemStatus: vi.fn(() => Promise.resolve(true)),
+  addWorkItem: vi.fn(() => Promise.resolve({ id: 1, text: 'New item', status: 'pending' })),
+  updateSubmissionArrays: vi.fn(() => Promise.resolve()),
 }));
 
 // Mock the config module
@@ -53,6 +57,7 @@ vi.mock('../lib/slack', () => ({
   postMessage: vi.fn(),
   parseRichText: vi.fn(() => ''),
   sendDM: vi.fn(),
+  updateMessage: vi.fn(() => Promise.resolve(true)),
 }));
 
 // Mock the prompt module
@@ -68,6 +73,7 @@ vi.mock('../lib/prompt', () => ({
 vi.mock('../lib/format', () => ({
   postStandupToChannel: vi.fn(),
   sendStandupDM: vi.fn(),
+  formatStandupBlocks: vi.fn(() => []),
 }));
 
 // Mock the home module (imported by interactions for refreshHome)
@@ -76,8 +82,8 @@ vi.mock('../lib/handlers/home', () => ({
 }));
 
 import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
-import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts } from '../lib/db';
-import { openModal, sendDM } from '../lib/slack';
+import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts, updateWorkItemStatus, addWorkItem, updateSubmissionArrays, getSubmissionForDate } from '../lib/db';
+import { openModal, sendDM, updateMessage } from '../lib/slack';
 import { getMaxPlanItems } from '../lib/config';
 
 describe('interaction handlers', () => {
@@ -723,5 +729,346 @@ describe('interaction handlers', () => {
       // In-progress items should come first, then carried, then new plans
       expect(metadata.yesterdayPlans).toEqual(['WIP task', 'Carried task', 'New task']);
     });
+  });
+});
+
+// ============================================================================
+// Task management: handleTaskAction
+// ============================================================================
+
+describe('handleInteraction - task_action (overflow menu)', () => {
+  const makeTaskActionPayload = (action: string, itemId = 55): InteractionPayload => ({
+    type: 'block_actions',
+    trigger_id: 'trigger-task',
+    user: { id: 'U12345' },
+    actions: [{
+      action_id: 'task_action',
+      value: '',
+      selected_option: {
+        value: JSON.stringify({ itemId, dailyName: 'daily-il', action }),
+      },
+    }],
+  });
+
+  const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: submission exists and is posted
+    vi.mocked(getSubmissionForDate).mockResolvedValue({
+      id: 1,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-il',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: [],
+      yesterday_incomplete: [],
+      yesterday_in_progress: [],
+      unplanned: null,
+      today_plans: ['Some task'],
+      blockers: null,
+      custom_answers: null,
+      slack_message_ts: 'ts-111',
+      posted: true,
+      items_normalized: true,
+    });
+  });
+
+  it('mark done: calls updateWorkItemStatus with "done" and syncs arrays', async () => {
+    const result = await handleInteraction(makeTaskActionPayload('done', 55), ctx);
+
+    expect(result).toBe(true);
+    expect(updateWorkItemStatus).toHaveBeenCalledWith(
+      {},
+      55,
+      'done',
+      '2025-12-22' // today's date (mocked formatDate)
+    );
+    expect(updateSubmissionArrays).toHaveBeenCalledWith({}, 1, 'U12345', 'daily-il', '2025-12-22');
+  });
+
+  it('mark in_progress: calls updateWorkItemStatus with "in_progress" without completedDate', async () => {
+    const result = await handleInteraction(makeTaskActionPayload('in_progress', 55), ctx);
+
+    expect(result).toBe(true);
+    expect(updateWorkItemStatus).toHaveBeenCalledWith(
+      {},
+      55,
+      'in_progress',
+      undefined
+    );
+  });
+
+  it('drop: maps "drop" action to "dropped" status in db call', async () => {
+    const result = await handleInteraction(makeTaskActionPayload('drop', 55), ctx);
+
+    expect(result).toBe(true);
+    expect(updateWorkItemStatus).toHaveBeenCalledWith(
+      {},
+      55,
+      'dropped',
+      undefined
+    );
+  });
+
+  it('returns false when selected_option is missing', async () => {
+    const payload: InteractionPayload = {
+      type: 'block_actions',
+      trigger_id: 'trigger-task',
+      user: { id: 'U12345' },
+      actions: [{
+        action_id: 'task_action',
+        value: '',
+        // no selected_option
+      }],
+    };
+
+    const result = await handleInteraction(payload, ctx);
+    expect(result).toBe(false);
+    expect(updateWorkItemStatus).not.toHaveBeenCalled();
+  });
+
+  it('refreshes App Home after status update', async () => {
+    const { handleAppHomeOpened } = await import('../lib/handlers/home');
+    const result = await handleInteraction(makeTaskActionPayload('done', 55), ctx);
+
+    expect(result).toBe(true);
+    expect(handleAppHomeOpened).toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// Task management: handleTaskAdd (Add Item button)
+// ============================================================================
+
+describe('handleInteraction - task_add (Add Item button)', () => {
+  const makeTaskAddPayload = (dailyName = 'daily-il'): InteractionPayload => ({
+    type: 'block_actions',
+    trigger_id: 'trigger-add',
+    user: { id: 'U12345' },
+    actions: [{ action_id: 'task_add', value: dailyName }],
+  });
+
+  const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('opens Add Item modal when submission exists', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
+      id: 7,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-il',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: [],
+      yesterday_incomplete: [],
+      yesterday_in_progress: [],
+      unplanned: null,
+      today_plans: [],
+      blockers: null,
+      custom_answers: null,
+      slack_message_ts: null,
+      posted: false,
+      items_normalized: true,
+    });
+    vi.mocked(openModal).mockResolvedValueOnce(true);
+
+    const result = await handleInteraction(makeTaskAddPayload(), ctx);
+
+    expect(result).toBe(true);
+    expect(openModal).toHaveBeenCalled();
+
+    const modalArg = vi.mocked(openModal).mock.calls[0][2];
+    expect(modalArg.callback_id).toBe('task_add_submission');
+
+    const metadata = JSON.parse(modalArg.private_metadata);
+    expect(metadata.dailyName).toBe('daily-il');
+    expect(metadata.submissionId).toBe(7);
+  });
+
+  it('sends DM error and does not open modal when no submission exists', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce(null);
+
+    const result = await handleInteraction(makeTaskAddPayload(), ctx);
+
+    expect(result).toBe(true); // handler returns true to acknowledge the action
+    expect(openModal).not.toHaveBeenCalled();
+    expect(sendDM).toHaveBeenCalledWith(
+      'xoxb-test',
+      'U12345',
+      expect.stringContaining('submit your')
+    );
+  });
+});
+
+// ============================================================================
+// Task management: handleTaskAddSubmission (modal submit)
+// ============================================================================
+
+describe('handleInteraction - task_add_submission (modal)', () => {
+  const makeTaskAddSubmissionPayload = (text: string, submissionId = 7): InteractionPayload => ({
+    type: 'view_submission',
+    trigger_id: 'trigger-add-sub',
+    user: { id: 'U12345' },
+    view: {
+      callback_id: 'task_add_submission',
+      private_metadata: JSON.stringify({ dailyName: 'daily-il', date: '2025-12-22', submissionId }),
+      state: {
+        values: {
+          task_text: {
+            task_text_input: { value: text },
+          },
+        },
+      },
+    },
+  });
+
+  const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSubmissionForDate).mockResolvedValue(null); // syncStandupPost will no-op
+  });
+
+  it('creates work item and syncs submission arrays on valid submission', async () => {
+    const result = await handleInteraction(makeTaskAddSubmissionPayload('New task item'), ctx);
+
+    expect(result).toBe(true);
+    expect(addWorkItem).toHaveBeenCalledWith(
+      {},
+      'U12345',
+      'daily-il',
+      'New task item',
+      '2025-12-22',
+      7
+    );
+    expect(updateSubmissionArrays).toHaveBeenCalledWith({}, 7, 'U12345', 'daily-il', '2025-12-22');
+  });
+
+  it('refreshes App Home after adding item', async () => {
+    const { handleAppHomeOpened } = await import('../lib/handlers/home');
+    await handleInteraction(makeTaskAddSubmissionPayload('Another task'), ctx);
+
+    expect(handleAppHomeOpened).toHaveBeenCalled();
+  });
+
+  it('returns validation error when item text is empty', async () => {
+    const result = await handleInteraction(makeTaskAddSubmissionPayload(''), ctx);
+
+    expect(result).toEqual({
+      response_action: 'errors',
+      errors: { task_text: 'Please enter an item' },
+    });
+    expect(addWorkItem).not.toHaveBeenCalled();
+  });
+
+  it('returns validation error when item text is whitespace only', async () => {
+    const result = await handleInteraction(makeTaskAddSubmissionPayload('   '), ctx);
+
+    expect(result).toEqual({
+      response_action: 'errors',
+      errors: { task_text: 'Please enter an item' },
+    });
+    expect(addWorkItem).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// syncStandupPost (via handleTaskAction) — skips when submission conditions not met
+// ============================================================================
+
+describe('syncStandupPost — skip conditions (exercised via handleTaskAction)', () => {
+  const makeTaskActionPayload = (action: string): InteractionPayload => ({
+    type: 'block_actions',
+    trigger_id: 'trigger-task',
+    user: { id: 'U12345' },
+    actions: [{
+      action_id: 'task_action',
+      value: '',
+      selected_option: {
+        value: JSON.stringify({ itemId: 1, dailyName: 'daily-il', action }),
+      },
+    }],
+  });
+
+  const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('skips channel update when no submission exists for today', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValue(null);
+
+    await handleInteraction(makeTaskActionPayload('done'), ctx);
+
+    // updateMessage should not be called because syncStandupPost returns early
+    expect(updateMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips channel update when submission exists but not yet posted', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValue({
+      id: 2,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-il',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: [],
+      yesterday_incomplete: [],
+      yesterday_in_progress: [],
+      unplanned: null,
+      today_plans: [],
+      blockers: null,
+      custom_answers: null,
+      slack_message_ts: null, // no ts → no update
+      posted: false,          // not posted → no update
+      items_normalized: true,
+    });
+
+    await handleInteraction(makeTaskActionPayload('done'), ctx);
+
+    expect(updateMessage).not.toHaveBeenCalled();
+  });
+
+  it('calls updateMessage when submission is posted with a message ts', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValue({
+      id: 3,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-il',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: [],
+      yesterday_incomplete: [],
+      yesterday_in_progress: [],
+      unplanned: null,
+      today_plans: ['Task one'],
+      blockers: null,
+      custom_answers: null,
+      slack_message_ts: 'ts-posted-999',
+      posted: true,
+      items_normalized: true,
+    });
+
+    // handleTaskAction uses ctx.waitUntil?.(syncPromise) — provide a waitUntil
+    // that actually awaits the promise so we can assert on updateMessage.
+    const backgroundPromises: Promise<unknown>[] = [];
+    const ctxWithWaitUntil = {
+      ...ctx,
+      waitUntil: (p: Promise<unknown>) => { backgroundPromises.push(p); },
+    };
+
+    await handleInteraction(makeTaskActionPayload('done'), ctxWithWaitUntil);
+    // Drain the background work
+    await Promise.all(backgroundPromises);
+
+    expect(updateMessage).toHaveBeenCalledWith(
+      'xoxb-test',
+      'C123', // daily channel from mocked getDaily
+      'ts-posted-999',
+      expect.any(String),
+      expect.any(Array)
+    );
   });
 });
