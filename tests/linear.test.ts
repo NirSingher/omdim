@@ -12,6 +12,11 @@ import {
   fetchUserAssignedIssues,
   fetchUserLinearData,
   fetchTeamCycleData,
+  extractLinearReferences,
+  fetchWorkflowStates,
+  markIssuesInProgress,
+  commentOnIssue,
+  resolveIdentifiers,
 } from '../lib/linear';
 
 describe('linear client', () => {
@@ -853,6 +858,384 @@ describe('linear client', () => {
       expect(result.teamData).toHaveLength(1);
       expect(result.teamData[0].data.issues).toEqual([]);
       expect(result.cycleProgress).toBeNull();
+    });
+  });
+
+  // ============================================================================
+  // extractLinearReferences
+  // ============================================================================
+
+  describe('extractLinearReferences', () => {
+    it('finds a single reference', () => {
+      expect(extractLinearReferences('Blocked by ENG-123')).toEqual(['ENG-123']);
+    });
+
+    it('finds multiple references', () => {
+      expect(extractLinearReferences('ENG-123 and PLAT-456 are blocking')).toEqual([
+        'ENG-123',
+        'PLAT-456',
+      ]);
+    });
+
+    it('returns empty array when no references are present', () => {
+      expect(extractLinearReferences('No issues here')).toEqual([]);
+    });
+
+    it('handles trailing punctuation', () => {
+      expect(extractLinearReferences('See ENG-123.')).toEqual(['ENG-123']);
+    });
+
+    it('handles parentheses around a reference', () => {
+      expect(extractLinearReferences('(ENG-123)')).toEqual(['ENG-123']);
+    });
+
+    it('deduplicates repeated references', () => {
+      expect(extractLinearReferences('ENG-123 and also ENG-123')).toEqual(['ENG-123']);
+    });
+
+    it('does NOT match lowercase identifiers', () => {
+      expect(extractLinearReferences('eng-123')).toEqual([]);
+    });
+
+    it('returns empty array for empty string', () => {
+      expect(extractLinearReferences('')).toEqual([]);
+    });
+
+    it('handles mixed-case where prefix is all-caps but suffix is not', () => {
+      // Only all-caps prefix + digits should match; partial caps should not
+      expect(extractLinearReferences('Eng-123')).toEqual([]);
+    });
+
+    it('handles multiple occurrences of the same and different references', () => {
+      const result = extractLinearReferences('ENG-1 ENG-2 ENG-1 PLAT-9 PLAT-9');
+      expect(result).toHaveLength(3);
+      expect(result).toContain('ENG-1');
+      expect(result).toContain('ENG-2');
+      expect(result).toContain('PLAT-9');
+    });
+  });
+
+  // ============================================================================
+  // fetchWorkflowStates
+  // ============================================================================
+
+  describe('fetchWorkflowStates', () => {
+    it('returns a Map keyed by workflow state type with id and name', async () => {
+      const mockResponse = {
+        data: {
+          team: {
+            states: {
+              nodes: [
+                { id: 'state-started-1', name: 'In Progress', type: 'started' },
+                { id: 'state-unstarted-1', name: 'Todo', type: 'unstarted' },
+                { id: 'state-completed-1', name: 'Done', type: 'completed' },
+              ],
+            },
+          },
+        },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchWorkflowStates('token', 'team-1');
+
+      expect(result).toBeInstanceOf(Map);
+      expect(result.get('started')).toEqual({ id: 'state-started-1', name: 'In Progress' });
+      expect(result.get('unstarted')).toEqual({ id: 'state-unstarted-1', name: 'Todo' });
+      expect(result.get('completed')).toEqual({ id: 'state-completed-1', name: 'Done' });
+    });
+
+    it('sends Authorization header with the provided token', async () => {
+      const mockResponse = {
+        data: { team: { states: { nodes: [] } } },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      await fetchWorkflowStates('my-linear-token', 'team-abc');
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.linear.app/graphql',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'my-linear-token',
+          }),
+          body: expect.stringContaining('team-abc'),
+        })
+      );
+    });
+
+    it('returns empty Map when team has no states', async () => {
+      const mockResponse = {
+        data: { team: { states: { nodes: [] } } },
+      };
+
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockResponse,
+      });
+
+      const result = await fetchWorkflowStates('token', 'team-1');
+      expect(result.size).toBe(0);
+    });
+
+    it('throws on API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => 'Unauthorized',
+      });
+
+      await expect(fetchWorkflowStates('bad-token', 'team-1')).rejects.toThrow('Linear API error');
+    });
+  });
+
+  // ============================================================================
+  // markIssuesInProgress
+  // ============================================================================
+
+  describe('markIssuesInProgress', () => {
+    it('calls issueUpdate for each issue ID and returns correct counts', async () => {
+      const makeSuccessResponse = (id: string) => ({
+        data: { issueUpdate: { success: true, issue: { id } } },
+      });
+
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => makeSuccessResponse('issue-1') })
+        .mockResolvedValueOnce({ ok: true, json: async () => makeSuccessResponse('issue-2') });
+
+      const result = await markIssuesInProgress('token', ['issue-1', 'issue-2'], 'state-started-1');
+
+      expect(result.updated).toBe(2);
+      expect(result.skipped).toBe(0);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('sends the correct inProgressStateId in the mutation variables', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { issueUpdate: { success: true, issue: { id: 'issue-1' } } } }),
+      });
+
+      await markIssuesInProgress('token', ['issue-1'], 'state-started-xyz');
+
+      const callBody = JSON.parse(
+        (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body
+      );
+      expect(callBody.variables).toMatchObject({
+        stateId: 'state-started-xyz',
+      });
+    });
+
+    it('counts failed updates as skipped', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issueUpdate: { success: true, issue: { id: 'issue-1' } } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issueUpdate: { success: false, issue: { id: 'issue-2' } } } }),
+        });
+
+      const result = await markIssuesInProgress('token', ['issue-1', 'issue-2'], 'state-started-1');
+
+      expect(result.updated).toBe(1);
+      expect(result.skipped).toBe(1);
+    });
+
+    it('handles API errors per issue and counts them as skipped', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ data: { issueUpdate: { success: true, issue: { id: 'issue-1' } } } }) })
+        .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'Server Error' });
+
+      const result = await markIssuesInProgress('token', ['issue-1', 'issue-2'], 'state-started-1');
+
+      expect(result.updated).toBe(1);
+      expect(result.skipped).toBe(1);
+    });
+
+    it('returns 0 updated and 0 skipped for empty issue list', async () => {
+      const result = await markIssuesInProgress('token', [], 'state-started-1');
+
+      expect(result.updated).toBe(0);
+      expect(result.skipped).toBe(0);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  // ============================================================================
+  // commentOnIssue
+  // ============================================================================
+
+  describe('commentOnIssue', () => {
+    it('returns true on successful comment creation', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { commentCreate: { success: true, comment: { id: 'comment-1' } } },
+        }),
+      });
+
+      const result = await commentOnIssue('token', 'issue-1', 'Great progress!');
+      expect(result).toBe(true);
+    });
+
+    it('sends the correct issueId and body in the mutation', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { commentCreate: { success: true, comment: { id: 'comment-1' } } },
+        }),
+      });
+
+      await commentOnIssue('token', 'issue-abc', 'Hello from standup');
+
+      const callBody = JSON.parse(
+        (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body
+      );
+      expect(callBody.variables).toMatchObject({
+        issueId: 'issue-abc',
+        body: 'Hello from standup',
+      });
+    });
+
+    it('returns false when the API reports success: false', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { commentCreate: { success: false, comment: null } },
+        }),
+      });
+
+      const result = await commentOnIssue('token', 'issue-1', 'Test comment');
+      expect(result).toBe(false);
+    });
+
+    it('throws on API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => 'Forbidden',
+      });
+
+      await expect(commentOnIssue('token', 'issue-1', 'Test comment')).rejects.toThrow('Linear API error');
+    });
+
+    it('sends Authorization header with the provided token', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { commentCreate: { success: true, comment: { id: 'comment-1' } } },
+        }),
+      });
+
+      await commentOnIssue('my-token', 'issue-1', 'body text');
+
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://api.linear.app/graphql',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'my-token' }),
+        })
+      );
+    });
+  });
+
+  // ============================================================================
+  // resolveIdentifiers
+  // ============================================================================
+
+  describe('resolveIdentifiers', () => {
+    it('returns a Map from identifier to UUID for resolved issues', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issue: { id: 'uuid-1', identifier: 'ENG-123' } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issue: { id: 'uuid-2', identifier: 'PLAT-456' } } }),
+        });
+
+      const result = await resolveIdentifiers('token', ['ENG-123', 'PLAT-456']);
+
+      expect(result).toBeInstanceOf(Map);
+      expect(result.get('ENG-123')).toBe('uuid-1');
+      expect(result.get('PLAT-456')).toBe('uuid-2');
+    });
+
+    it('omits unresolvable identifiers from the Map', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issue: { id: 'uuid-1', identifier: 'ENG-123' } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issue: null } }),
+        });
+
+      const result = await resolveIdentifiers('token', ['ENG-123', 'ENG-999']);
+
+      expect(result.size).toBe(1);
+      expect(result.get('ENG-123')).toBe('uuid-1');
+      expect(result.has('ENG-999')).toBe(false);
+    });
+
+    it('returns empty Map when no identifiers are provided', async () => {
+      const result = await resolveIdentifiers('token', []);
+
+      expect(result).toBeInstanceOf(Map);
+      expect(result.size).toBe(0);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('returns empty Map on API error', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      });
+
+      const result = await resolveIdentifiers('token', ['ENG-123']);
+      expect(result).toBeInstanceOf(Map);
+      expect(result.size).toBe(0);
+    });
+
+    it('sends per-identifier queries', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issue: { id: 'uuid-1', identifier: 'ENG-1' } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ data: { issue: { id: 'uuid-2', identifier: 'ENG-2' } } }),
+        });
+
+      await resolveIdentifiers('token', ['ENG-1', 'ENG-2']);
+
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      const call1Body = JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+      const call2Body = JSON.parse((global.fetch as ReturnType<typeof vi.fn>).mock.calls[1][1].body);
+      expect(call1Body.variables.id).toBe('ENG-1');
+      expect(call2Body.variables.id).toBe('ENG-2');
+    });
+
+    it('handles null issue in response', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: { issue: null } }),
+      });
+
+      const result = await resolveIdentifiers('token', ['ENG-999']);
+      expect(result.size).toBe(0);
     });
   });
 });

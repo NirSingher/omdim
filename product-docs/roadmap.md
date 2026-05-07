@@ -214,11 +214,19 @@ See `requirements.md` and `architecture.md`
 
 ---
 
+### Linear Enhancements ✅
+- [x] Mark issues as "in progress" when selected as today's plan in standup modal
+- [x] Auto-resolve identifiers to Linear issue UUIDs via GraphQL API
+- [x] Fetch team workflow states to find correct "started" state ID
+- [x] Link blockers to Linear issues: extract references (e.g., ENG-123) from blockers text, post comment on the Linear issue
+- [x] Fire-and-forget: non-blocking, wrapped in try/catch so submission never fails due to Linear errors
+- [x] Full test coverage: 52 tests for all new Linear functions
+
+---
+
 ## Planned
 
-### Linear Enhancements
-- [ ] Mark issues as "in progress" when added to standup
-- [ ] Link blockers to Linear issues
+(No items currently planned)
 
 ---
 

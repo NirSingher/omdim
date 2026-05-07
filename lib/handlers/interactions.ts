@@ -34,7 +34,7 @@ import {
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData } from '../github';
-import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData } from '../linear';
+import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData, extractLinearReferences, fetchWorkflowStates, markIssuesInProgress as markLinearIssuesInProgress, commentOnIssue, resolveIdentifiers } from '../linear';
 import { postStandupToChannel, sendStandupDM } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
@@ -588,6 +588,42 @@ export async function handleStandupSubmission(
     } catch (error) {
       // Don't fail the submission if work item tracking fails
       console.error('Failed to track work items:', error);
+    }
+
+    // Mark selected Linear tickets as "In Progress" and comment blockers
+    try {
+      const linearConfig = daily ? getLinearConfig(daily) : null;
+      const linearToken = linearConfig && ctx.env ? ctx.env[linearConfig.tokenEnvVar] : undefined;
+      if (linearToken) {
+        if (linearSelections && linearSelections.length > 0) {
+          const teamId = daily ? getLinearTeamIdForUser(daily, userId) : undefined;
+          if (teamId) {
+            const states = await fetchWorkflowStates(linearToken, teamId);
+            const startedState = states.get('started');
+            if (startedState) {
+              const identifiers = linearSelections.map(opt => opt.value);
+              const idMap = await resolveIdentifiers(linearToken, identifiers);
+              const issueIds = [...idMap.values()];
+              if (issueIds.length > 0) {
+                const result = await markLinearIssuesInProgress(linearToken, issueIds, startedState.id);
+                console.log(`Linear: marked ${result.updated} issues in-progress, ${result.skipped} skipped`);
+              }
+            }
+          }
+        }
+
+        if (blockers) {
+          const refs = extractLinearReferences(blockers);
+          if (refs.length > 0) {
+            const idMap = await resolveIdentifiers(linearToken, refs);
+            for (const [, issueId] of idMap) {
+              await commentOnIssue(linearToken, issueId, `🚧 Blocker reported in standup by <@${userId}>:\n\n${blockers}`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to process Linear actions:', error);
     }
 
     // Get carry counts for in-progress items (for attention warnings)
