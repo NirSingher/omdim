@@ -238,21 +238,24 @@ See `requirements.md` and `architecture.md`
 
 ### Linear Intelligence
 
-**Cross-Reference Plans vs Linear**
-- [ ] Match plan items to assigned Linear issues (fuzzy title match + issue ID)
-- [ ] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
+**Cross-Reference Plans vs Linear (Phase 1)** ✅
+- [x] Match plan items to assigned Linear issues (source_ref exact match + text regex fallback)
+- [x] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
+- [x] Gated on `intelligence.enabled: true` in daily config
+- [x] GitHub PR items excluded from "plans not in Linear"
 - [ ] Weekly report: plan-to-Linear alignment score per user
 - [ ] Configurable strictness: `off` / `soft` / `strict`
 
-**Auto-Update Items from Linear Status**
+**Priority Alignment Reporting (Phase 2)** ✅
+- [x] Compare active standup items against Linear priority ordering
+- [x] Digest: per-user alignment summary (on-track / off-track)
+- [x] Flags Urgent (P1) and High (P2) issues missing from plans
+- [ ] Individual DM: alignment report to off-track individuals
+
+**Auto-Update Items from Linear Status (Phase 3)**
 - [ ] Webhook or poll for Linear status changes on linked issues
 - [ ] Auto-mark standup items Done/In Progress based on Linear state
 - [ ] Notify user in DM when auto-updates happen
-
-**Priority Alignment Reporting**
-- [ ] Compare active standup items against Linear priority ordering
-- [ ] Digest: per-user alignment summary (on-track / off-track)
-- [ ] Individual DM: alignment report to off-track individuals
 
 ### GitHub Work Alignment
 - [ ] Compare "today's plans" keywords to commit messages/PR titles
