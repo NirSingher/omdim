@@ -1438,3 +1438,45 @@ export async function recordReminderSent(
     [dailyName, date]
   );
 }
+
+// ============================================================================
+// Config Overrides
+// ============================================================================
+
+export interface ConfigOverride {
+  scope: string;
+  key: string;
+  value: unknown;
+}
+
+export async function getAllConfigOverrides(db: DbClient): Promise<ConfigOverride[]> {
+  return db.query<ConfigOverride>(
+    `SELECT scope, key, value FROM config_overrides ORDER BY scope, key`
+  );
+}
+
+export async function setConfigOverride(
+  db: DbClient,
+  scope: string,
+  key: string,
+  value: unknown,
+  updatedBy?: string
+): Promise<void> {
+  await db.query(
+    `INSERT INTO config_overrides (scope, key, value, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (scope, key) DO UPDATE SET value = $3, updated_by = $4, updated_at = NOW()`,
+    [scope, key, JSON.stringify(value), updatedBy]
+  );
+}
+
+export async function deleteConfigOverride(
+  db: DbClient,
+  scope: string,
+  key: string
+): Promise<void> {
+  await db.query(
+    `DELETE FROM config_overrides WHERE scope = $1 AND key = $2`,
+    [scope, key]
+  );
+}

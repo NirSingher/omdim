@@ -3,7 +3,7 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems } from '../lib/config';
+import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate } from '../lib/db';
 import { fetchTeamPRData, TeamPRData } from '../lib/github';
@@ -89,6 +89,7 @@ export default {
     if (cronPattern === '*/30 * * * *') {
       console.log('Running prompt cron job');
       const db = getDb(env.DATABASE_URL);
+      await loadConfigOverrides(db);
 
       // Run prompt cron (send DM prompts to users)
       const promptStats = await runPromptCron(db, env.SLACK_BOT_TOKEN);
@@ -168,6 +169,7 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
 
   const payload = parseCommandPayload(body);
   const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
 
   // Handle /daily command separately
   if (payload.command === '/daily') {
@@ -241,6 +243,7 @@ async function handleSlackInteractions(request: Request, env: Env, ctx: Executio
   console.log('Interaction:', { type: payload.type, user: payload.user.id });
 
   const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
   const result = await handleInteraction(payload, {
     db,
     slackToken: env.SLACK_BOT_TOKEN,
@@ -301,6 +304,7 @@ async function handleSlackEvents(request: Request, env: Env): Promise<Response> 
     // Handle app_home_opened event
     if (event.type === 'app_home_opened') {
       const db = getDb(env.DATABASE_URL);
+      await loadConfigOverrides(db);
       await handleAppHomeOpened(event, {
         db,
         slackToken: env.SLACK_BOT_TOKEN,
@@ -325,6 +329,7 @@ async function handlePromptCron(url: URL, env: Env): Promise<Response> {
   const force = url.searchParams.get('force') === 'true';
 
   const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
   const stats = await runPromptCron(db, env.SLACK_BOT_TOKEN, force);
 
   return new Response(JSON.stringify({
@@ -395,6 +400,8 @@ async function handleDigestCron(url: URL, env: Env): Promise<Response> {
     return new Response('Invalid period. Use: daily, weekly, 4-week', { status: 400 });
   }
 
+  const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
   const result = await runDigestCron(env, period);
 
   return new Response(JSON.stringify({

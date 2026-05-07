@@ -10,7 +10,11 @@ vi.mock('../lib/config', () => ({
   getDaily: vi.fn(),
   getSchedule: vi.fn(),
   getDailies: vi.fn(),
+  getAllDailiesIncludingDisabled: vi.fn(),
+  isDailyEnabled: vi.fn(() => true),
   getConfigError: vi.fn(() => null),
+  clearConfigCache: vi.fn(),
+  loadConfigOverrides: vi.fn(() => Promise.resolve()),
 }));
 
 // Mock db module
@@ -29,6 +33,8 @@ vi.mock('../lib/db', () => ({
   setOOO: vi.fn(),
   clearOOO: vi.fn(),
   getUserOOO: vi.fn(() => []),
+  setConfigOverride: vi.fn(),
+  deleteConfigOverride: vi.fn(),
 }));
 
 // Mock slack module
@@ -66,8 +72,8 @@ import {
   CommandContext,
 } from '../lib/handlers/commands';
 
-import { isAdmin, getDaily, getSchedule, getDailies, getConfigError } from '../lib/config';
-import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO } from '../lib/db';
+import { isAdmin, getDaily, getSchedule, getDailies, getConfigError, getAllDailiesIncludingDisabled, isDailyEnabled, clearConfigCache, loadConfigOverrides } from '../lib/config';
+import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO, setConfigOverride, deleteConfigOverride } from '../lib/db';
 import { parseUserId, sendDM } from '../lib/slack';
 import { getUserTimezone, getUserDate, formatDate, sendPromptDM } from '../lib/prompt';
 import { formatManagerDigest } from '../lib/format';
@@ -183,7 +189,7 @@ describe('command handlers', () => {
 
   describe('handleList', () => {
     it('lists all dailies with participants when no name provided', async () => {
-      vi.mocked(getDailies).mockReturnValue([
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
         { name: 'daily-il', channel: '#il-standup' },
         { name: 'daily-us', channel: '#us-standup' },
       ] as any);
@@ -200,7 +206,7 @@ describe('command handlers', () => {
     });
 
     it('lists all dailies with participants when "all" provided', async () => {
-      vi.mocked(getDailies).mockReturnValue([
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
         { name: 'daily-il', channel: '#il-standup' },
       ] as any);
       vi.mocked(getParticipants).mockResolvedValue([{ slack_user_id: 'U111' }] as any);
@@ -493,7 +499,7 @@ describe('command handlers', () => {
     });
 
     it('routes list command', async () => {
-      vi.mocked(getDailies).mockReturnValue([]);
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([]);
       const response = await handleCommand('list', createContext(['list']));
       expect(response.text).toContain('dailies');
     });
@@ -512,6 +518,93 @@ describe('command handlers', () => {
     it('routes week command (deprecated)', async () => {
       const response = await handleCommand('week', createContext(['week']));
       expect(response.text).toContain('deprecated');
+    });
+
+    it('routes config reload command', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
+        { name: 'daily-il' },
+      ] as any);
+      const response = await handleCommand('config', createContext(['config', 'reload']));
+      expect(response.text).toContain('Config reloaded');
+    });
+
+    it('routes pause command', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(true);
+      const response = await handleCommand('pause', createContext(['pause', 'daily-il']));
+      expect(response.text).toContain('paused');
+      expect(setConfigOverride).toHaveBeenCalled();
+    });
+
+    it('routes resume command', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(false);
+      const response = await handleCommand('resume', createContext(['resume', 'daily-il']));
+      expect(response.text).toContain('active');
+      expect(deleteConfigOverride).toHaveBeenCalled();
+    });
+  });
+
+  describe('dynamic configuration commands', () => {
+    it('config reload requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('config', createContext(['config', 'reload']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('pause requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('pause', createContext(['pause', 'daily-il']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('resume requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('resume', createContext(['resume', 'daily-il']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('pause requires daily name', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      const response = await handleCommand('pause', createContext(['pause']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('pause validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+      const response = await handleCommand('pause', createContext(['pause', 'nonexistent']));
+      expect(response.text).toContain('Unknown daily');
+    });
+
+    it('pause shows message when already paused', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(false);
+      const response = await handleCommand('pause', createContext(['pause', 'daily-il']));
+      expect(response.text).toContain('already paused');
+    });
+
+    it('resume shows message when already active', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(true);
+      const response = await handleCommand('resume', createContext(['resume', 'daily-il']));
+      expect(response.text).toContain('already active');
+    });
+
+    it('list shows paused indicator', async () => {
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
+        { name: 'daily-il', channel: '#il-standup' },
+      ] as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(false);
+      vi.mocked(getParticipants).mockResolvedValue([{ slack_user_id: 'U111' }] as any);
+
+      const response = await handleList(createContext(['list']));
+      expect(response.text).toContain('⏸️');
     });
   });
 });

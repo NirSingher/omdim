@@ -169,13 +169,16 @@ See `requirements.md` and `architecture.md`
 
 ---
 
-## Planned
+### Dynamic Configuration ✅
+- [x] Hot-reload config changes without redeploying (DB overrides loaded per-request)
+- [x] Pause/resume dailies: `/standup pause <daily>` / `/standup resume <daily>`
+- [x] Admin command to reload config: `/standup config reload`
+- [x] Store config overrides in DB (`config_overrides` table, takes precedence over YAML)
+- [x] Paused dailies shown with ⏸️ in `/standup list`
 
-### Dynamic Configuration
-- [ ] Hot-reload config changes without redeploying
-- [ ] Pause/resume dailies via config flag (`enabled: false`)
-- [ ] Admin command to reload config: `/standup config reload`
-- [ ] Store config overrides in DB (takes precedence over YAML)
+---
+
+## Planned
 
 ### Force Prompt Command (Full)
 - [x] `/standup force-prompt <daily>` - force prompt yourself

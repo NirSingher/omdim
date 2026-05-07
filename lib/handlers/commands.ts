@@ -3,8 +3,8 @@
  * Handles: help, prompt, add, remove, list, digest, week, daily
  */
 
-import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId } from '../db';
+import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser, clearConfigCache, loadConfigOverrides, isDailyEnabled, getAllDailiesIncludingDisabled } from '../config';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId, setConfigOverride, deleteConfigOverride } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { fetchLinearIssuesForUser, fetchGitHubPRsForUser } from './interactions';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
@@ -56,7 +56,11 @@ export function handleHelp(): CommandResponse {
     '`/standup digest <daily|all> [period]` - Get team summary (DM)\n' +
     '`/standup report <daily|all> [period]` - Get detailed team report (DM)\n' +
     '    _period: `day` (default), `week`, `month`_\n' +
-    '    _Use `all` to run for all dailies_'
+    '    _Use `all` to run for all dailies_\n\n' +
+    '*Admin*\n' +
+    '`/standup pause <daily>` - Pause a daily (skip prompts, digests)\n' +
+    '`/standup resume <daily>` - Resume a paused daily\n' +
+    '`/standup config reload` - Reload configuration'
   );
 }
 
@@ -121,7 +125,7 @@ export async function handleList(ctx: CommandContext): Promise<CommandResponse> 
 
   // No arg or 'all' → show all dailies with participants
   if (!listDailyName || isAllDailies(listDailyName)) {
-    const dailies = getDailies();
+    const dailies = getAllDailiesIncludingDisabled();
     if (dailies.length === 0) {
       return ephemeralResponse('No dailies configured.');
     }
@@ -132,6 +136,7 @@ export async function handleList(ctx: CommandContext): Promise<CommandResponse> 
         const participants = await getParticipants(ctx.db, daily.name);
         const oooRecords = await getActiveOOOForDaily(ctx.db, daily.name, todayStr);
         const oooUserIds = new Set(oooRecords.map(r => r.slack_user_id));
+        const pausedLabel = !isDailyEnabled(daily.name) ? ' ⏸️' : '';
 
         const userList = participants.length > 0
           ? participants.map(p => {
@@ -139,7 +144,7 @@ export async function handleList(ctx: CommandContext): Promise<CommandResponse> 
               return `<@${p.slack_user_id}>${oooLabel}`;
             }).join(', ')
           : '_no participants_';
-        results.push(`*${daily.name}* (${daily.channel}): ${userList}`);
+        results.push(`*${daily.name}*${pausedLabel} (${daily.channel}): ${userList}`);
       }
       return ephemeralResponse(results.join('\n'));
     } catch (err) {
@@ -1122,6 +1127,77 @@ export async function handleLinear(ctx: CommandContext): Promise<CommandResponse
 }
 
 // ============================================================================
+// Dynamic Configuration Commands
+// ============================================================================
+
+async function handleConfigReload(ctx: CommandContext): Promise<CommandResponse> {
+  if (!isAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only admins can reload config.');
+  }
+
+  clearConfigCache();
+  await loadConfigOverrides(ctx.db);
+
+  const dailies = getAllDailiesIncludingDisabled();
+  const enabledCount = dailies.filter(d => isDailyEnabled(d.name)).length;
+  const disabledCount = dailies.length - enabledCount;
+
+  let msg = `✅ Config reloaded. ${enabledCount} dailies active.`;
+  if (disabledCount > 0) {
+    msg += ` ${disabledCount} paused.`;
+  }
+  return ephemeralResponse(msg);
+}
+
+async function handlePause(ctx: CommandContext): Promise<CommandResponse> {
+  if (!isAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only admins can pause dailies.');
+  }
+
+  const dailyName = ctx.args[1];
+  if (!dailyName) {
+    return ephemeralResponse('Usage: `/standup pause <daily>`');
+  }
+
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    return ephemeralResponse(`❌ Unknown daily: \`${dailyName}\``);
+  }
+
+  if (!isDailyEnabled(dailyName)) {
+    return ephemeralResponse(`ℹ️ \`${dailyName}\` is already paused.`);
+  }
+
+  await setConfigOverride(ctx.db, dailyName, 'enabled', false, ctx.userId);
+  await loadConfigOverrides(ctx.db);
+  return ephemeralResponse(`⏸️ \`${dailyName}\` is now paused. Prompts, digests, and reminders will be skipped.\nUse \`/standup resume ${dailyName}\` to re-enable.`);
+}
+
+async function handleResume(ctx: CommandContext): Promise<CommandResponse> {
+  if (!isAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only admins can resume dailies.');
+  }
+
+  const dailyName = ctx.args[1];
+  if (!dailyName) {
+    return ephemeralResponse('Usage: `/standup resume <daily>`');
+  }
+
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    return ephemeralResponse(`❌ Unknown daily: \`${dailyName}\``);
+  }
+
+  if (isDailyEnabled(dailyName)) {
+    return ephemeralResponse(`ℹ️ \`${dailyName}\` is already active.`);
+  }
+
+  await deleteConfigOverride(ctx.db, dailyName, 'enabled');
+  await loadConfigOverrides(ctx.db);
+  return ephemeralResponse(`▶️ \`${dailyName}\` is now active again. Prompts, digests, and reminders will resume.`);
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -1166,6 +1242,12 @@ export async function handleCommand(
       return handleLinear(ctx);
     case 'force-prompt':
       return handleForcePrompt(ctx);
+    case 'config':
+      return handleConfigReload(ctx);
+    case 'pause':
+      return handlePause(ctx);
+    case 'resume':
+      return handleResume(ctx);
     default:
       return ephemeralResponse(
         `Unknown command: \`${subcommand}\`\nTry \`/standup help\` for usage.`

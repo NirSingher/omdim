@@ -118,6 +118,41 @@ const EMPTY_CONFIG: Config = {
 };
 
 // ============================================================================
+// Config Overrides (DB-backed, takes precedence over YAML)
+// ============================================================================
+
+let overridesCache: Map<string, unknown> | null = null;
+
+function overrideKey(scope: string, key: string): string {
+  return `${scope}::${key}`;
+}
+
+export async function loadConfigOverrides(db: { query: <T>(sql: string, params?: unknown[]) => Promise<T[]> }): Promise<void> {
+  const rows = await db.query<{ scope: string; key: string; value: unknown }>(
+    `SELECT scope, key, value FROM config_overrides`
+  );
+  overridesCache = new Map();
+  for (const row of rows) {
+    overridesCache.set(overrideKey(row.scope, row.key), row.value);
+  }
+}
+
+export function getOverride<T = unknown>(scope: string, key: string): T | undefined {
+  if (!overridesCache) return undefined;
+  return overridesCache.get(overrideKey(scope, key)) as T | undefined;
+}
+
+export function isDailyEnabled(dailyName: string): boolean {
+  const override = getOverride<boolean>(dailyName, 'enabled');
+  if (override !== undefined) return override;
+  return true;
+}
+
+export function clearOverridesCache(): void {
+  overridesCache = null;
+}
+
+// ============================================================================
 // Config Loading
 // ============================================================================
 
@@ -202,6 +237,10 @@ export function isAdmin(userId: string): boolean {
 }
 
 export function getDailies(): Daily[] {
+  return loadConfig().dailies.filter(d => isDailyEnabled(d.name));
+}
+
+export function getAllDailiesIncludingDisabled(): Daily[] {
   return loadConfig().dailies;
 }
 
@@ -272,10 +311,11 @@ export function getMaxPlanItems(dailyName?: string): number {
   return config.max_plan_items ?? 5;
 }
 
-// Clear cache (useful for testing or hot reload)
+// Clear all caches (useful for testing or hot reload)
 export function clearConfigCache(): void {
   cachedConfig = null;
   configError = null;
+  overridesCache = null;
 }
 
 // ============================================================================

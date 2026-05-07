@@ -98,6 +98,17 @@ CREATE TABLE IF NOT EXISTS ooo (
   UNIQUE(slack_user_id, daily_name, start_date, end_date)
 );
 
+-- Config overrides (DB takes precedence over YAML)
+CREATE TABLE IF NOT EXISTS config_overrides (
+  id SERIAL PRIMARY KEY,
+  scope TEXT NOT NULL DEFAULT 'global',
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  updated_by TEXT,
+  UNIQUE(scope, key)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_participants_daily ON participants(daily_name);
 CREATE INDEX IF NOT EXISTS idx_submissions_date ON submissions(date);
