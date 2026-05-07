@@ -232,30 +232,33 @@ See `requirements.md` and `architecture.md`
 - [ ] Full integration context (live PR status, Linear ticket state) — deferred
 - [ ] Bidirectional sync from channel post edits — deferred (Slack limitation)
 
----
+### Linear Intelligence ✅
 
-## Planned
-
-### Linear Intelligence
-
-**Cross-Reference Plans vs Linear (Phase 1)** ✅
+**Cross-Reference Plans vs Linear**
 - [x] Match plan items to assigned Linear issues (source_ref exact match + text regex fallback)
 - [x] Flag in digest: "Plans not in Linear" and "Linear items not in plans"
 - [x] Gated on `intelligence.enabled: true` in daily config
 - [x] GitHub PR items excluded from "plans not in Linear"
-- [ ] Weekly report: plan-to-Linear alignment score per user
-- [ ] Configurable strictness: `off` / `soft` / `strict`
+- [ ] Weekly report: plan-to-Linear alignment score per user — deferred
+- [ ] Configurable strictness: `off` / `soft` / `strict` — deferred
 
-**Priority Alignment Reporting (Phase 2)** ✅
+**Priority Alignment Reporting**
 - [x] Compare active standup items against Linear priority ordering
 - [x] Digest: per-user alignment summary (on-track / off-track)
 - [x] Flags Urgent (P1) and High (P2) issues missing from plans
-- [ ] Individual DM: alignment report to off-track individuals
+- [ ] Individual DM: alignment report to off-track individuals — deferred
 
-**Auto-Update Items from Linear Status (Phase 3)**
-- [ ] Webhook or poll for Linear status changes on linked issues
-- [ ] Auto-mark standup items Done/In Progress based on Linear state
-- [ ] Notify user in DM when auto-updates happen
+**Auto-Update Items from Linear Status**
+- [x] Webhook endpoint (`POST /api/webhooks/linear`) for Linear status change events
+- [x] HMAC-SHA256 signature verification
+- [x] Auto-mark standup items Done/In Progress based on Linear state
+- [x] Notify user in DM when auto-updates happen
+- [x] Update channel post and refresh App Home after auto-update
+- [x] Gated on `intelligence.auto_update` config per-daily
+
+---
+
+## Planned
 
 ### GitHub Work Alignment
 - [ ] Compare "today's plans" keywords to commit messages/PR titles
