@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS submissions (
   slack_message_ts TEXT,      -- posted message ID
   yesterday_in_progress JSONB, -- ["item5"]
   posted BOOLEAN DEFAULT TRUE, -- false for scheduled (tomorrow) submissions
+  items_normalized BOOLEAN NOT NULL DEFAULT FALSE,
   UNIQUE(slack_user_id, daily_name, date)
 );
 
@@ -67,7 +68,21 @@ CREATE TABLE IF NOT EXISTS work_items (
   carry_count INTEGER NOT NULL DEFAULT 0,
   completed_date DATE,
   snoozed_until DATE,  -- null = not snoozed, date = hidden from bottlenecks until this date
-  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL
+  submission_id INTEGER REFERENCES submissions(id) ON DELETE SET NULL,
+  source TEXT NOT NULL DEFAULT 'manual',  -- manual, github_pr, linear_ticket
+  source_ref TEXT,   -- external ID: "repo#42", "ENG-123"
+  source_url TEXT,   -- full URL to external resource
+  item_type TEXT NOT NULL DEFAULT 'plan'  -- plan, unplanned
+);
+
+-- Link items to submissions with their role in that submission
+CREATE TABLE IF NOT EXISTS submission_items (
+  id SERIAL PRIMARY KEY,
+  submission_id INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+  work_item_id INTEGER NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,  -- today_plan, unplanned, yesterday_completed, yesterday_incomplete, yesterday_in_progress, yesterday_dropped
+  position INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(submission_id, work_item_id, role)
 );
 
 -- Channel reminder dedup log
@@ -86,6 +101,11 @@ CREATE TABLE IF NOT EXISTS reminder_log (
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;
 -- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS yesterday_in_progress JSONB;
 -- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS dm_standup BOOLEAN DEFAULT TRUE;
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_ref TEXT;
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_url TEXT;
+-- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'plan';
+-- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS items_normalized BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (
@@ -119,4 +139,8 @@ CREATE INDEX IF NOT EXISTS idx_slack_users_updated ON slack_users(updated_at);
 CREATE INDEX IF NOT EXISTS idx_work_items_user_daily ON work_items(slack_user_id, daily_name);
 CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
 CREATE INDEX IF NOT EXISTS idx_work_items_carry ON work_items(carry_count) WHERE carry_count >= 3;
+CREATE INDEX IF NOT EXISTS idx_work_items_source ON work_items(source) WHERE source <> 'manual';
+CREATE INDEX IF NOT EXISTS idx_work_items_source_ref ON work_items(source_ref) WHERE source_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_submission_items_submission ON submission_items(submission_id);
+CREATE INDEX IF NOT EXISTS idx_submission_items_work_item ON submission_items(work_item_id);
 CREATE INDEX IF NOT EXISTS idx_ooo_lookup ON ooo(slack_user_id, daily_name, start_date, end_date);

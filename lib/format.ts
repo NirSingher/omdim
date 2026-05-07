@@ -5,7 +5,7 @@
  * - Generates daily digests and weekly summaries
  */
 
-import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats, BlockerStreak, UnplannedOverload } from './db';
+import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats, BlockerStreak, UnplannedOverload, WorkItem } from './db';
 import { postMessage, sendDM as slackSendDM, sendDMWithBlocks } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 import { TeamLinearData, CycleProgress } from './linear';
@@ -1319,6 +1319,21 @@ function enrichItemSource(text: string, githubOrg?: string): string {
   }
   // Linear ticket: "ENG-123"
   return `<https://linear.app/issue/${id}|🎫 ${id}> ${title}`;
+}
+
+/**
+ * Enrich a work item entity using its structured source fields (no regex needed).
+ * Falls back to enrichItemSource for items without source metadata.
+ */
+export function enrichItemFromEntity(item: WorkItem, githubOrg?: string): string {
+  if (item.source === 'manual' || !item.source_ref) {
+    return enrichItemSource(item.text, githubOrg);
+  }
+  const icon = item.source === 'github_pr' ? '📦' : '🎫';
+  const url = item.source_url || '#';
+  const ref = item.source_ref;
+  const title = item.text.replace(/^\[[^\]]+\]\s*/, '');
+  return `<${url}|${icon} ${ref}> ${title}`;
 }
 
 /** Parse JSONB arrays from database (handles both array and string formats) */

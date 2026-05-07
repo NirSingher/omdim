@@ -16,6 +16,8 @@ import {
   markItemsInProgress,
   getInProgressCarryCounts,
   createWorkItems,
+  linkItemsToSubmission,
+  ItemSource,
   snoozeItem,
   getSubmissionForDate,
   getGitHubUsername,
@@ -410,15 +412,41 @@ export async function handleStandupSubmission(
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
   const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
 
-  // Parse Linear ticket selections and append to todayPlans
-  // Parse integration checkbox selections — extract display text from the option's text field
-  // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers
+  // Parse integration checkbox selections — extract display text and structured source info
+  // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers for flat text
   const parseOptionText = (text: string): string => text.replace(/^\*([^*]+)\*\s*/, '[$1] ');
+  const extractIdentifier = (text: string): string | undefined => {
+    const m = text.match(/^\*([^*]+)\*\s*/);
+    return m ? m[1] : undefined;
+  };
+
+  interface StructuredItem {
+    text: string;
+    source: ItemSource;
+    sourceRef?: string;
+    sourceUrl?: string;
+  }
+  const structuredPlans: StructuredItem[] = [];
+
+  // Manual text plans
+  for (const plan of todayPlans) {
+    structuredPlans.push({ text: plan, source: 'manual' });
+  }
+
+  const githubOrg = daily ? getGitHubConfig(daily)?.org : undefined;
 
   const linearSelections = values.linear_tickets?.linear_tickets_input?.selected_options;
   if (linearSelections && linearSelections.length > 0) {
     for (const option of linearSelections) {
-      todayPlans.push(parseOptionText(option.text?.text || option.value));
+      const flatText = parseOptionText(option.text?.text || option.value);
+      todayPlans.push(flatText);
+      const identifier = extractIdentifier(option.text?.text || '');
+      structuredPlans.push({
+        text: flatText,
+        source: 'linear_ticket',
+        sourceRef: identifier,
+        sourceUrl: identifier ? `https://linear.app/issue/${identifier}` : undefined,
+      });
     }
   }
 
@@ -426,7 +454,16 @@ export async function handleStandupSubmission(
   const reviewSelections = values.review_requests?.review_requests_input?.selected_options;
   if (reviewSelections && reviewSelections.length > 0) {
     for (const option of reviewSelections) {
-      todayPlans.push(parseOptionText(option.text?.text || option.value));
+      const flatText = parseOptionText(option.text?.text || option.value);
+      todayPlans.push(flatText);
+      const ref = option.value; // "repo#42"
+      const [repo, num] = ref.split('#');
+      structuredPlans.push({
+        text: flatText,
+        source: 'github_pr',
+        sourceRef: ref,
+        sourceUrl: githubOrg ? `https://github.com/${githubOrg}/${repo}/pull/${num}` : undefined,
+      });
     }
   }
   const myPrSelections = values.my_prs?.my_prs_input?.selected_options;
@@ -438,6 +475,14 @@ export async function handleStandupSubmission(
         planText += ` — waiting on ${reviewers}`;
       }
       todayPlans.push(planText);
+      const ref = option.value; // "repo#42"
+      const [repo, num] = ref.split('#');
+      structuredPlans.push({
+        text: planText,
+        source: 'github_pr',
+        sourceRef: ref,
+        sourceUrl: githubOrg ? `https://github.com/${githubOrg}/${repo}/pull/${num}` : undefined,
+      });
     }
   }
 
@@ -561,27 +606,51 @@ export async function handleStandupSubmission(
       // Mark yesterday's items based on status
       if (yesterdayCompleted.length > 0) {
         await markItemsDone(ctx.db, userId, dailyName, yesterdayCompleted, todayStr);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayCompleted, 'yesterday_completed');
       }
       if (yesterdayDropped.length > 0) {
         await markItemsDropped(ctx.db, userId, dailyName, yesterdayDropped);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayDropped, 'yesterday_dropped');
       }
       if (yesterdayIncomplete.length > 0) {
         await incrementCarryCount(ctx.db, userId, dailyName, yesterdayIncomplete);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayIncomplete, 'yesterday_incomplete');
       }
       if (yesterdayInProgress.length > 0) {
         await markItemsInProgress(ctx.db, userId, dailyName, yesterdayInProgress);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayInProgress, 'yesterday_in_progress');
       }
 
-      // Create new work items for today's plans
-      if (todayPlans.length > 0) {
+      // Create new work items for today's plans (with structured source metadata)
+      if (structuredPlans.length > 0) {
         await createWorkItems(
           ctx.db,
-          todayPlans.map(text => ({
+          structuredPlans.map((item, i) => ({
+            slackUserId: userId,
+            dailyName,
+            text: item.text,
+            date: todayStr,
+            submissionId: submission.id,
+            source: item.source,
+            sourceRef: item.sourceRef,
+            sourceUrl: item.sourceUrl,
+            itemType: 'plan' as const,
+          }))
+        );
+      }
+
+      // Create work items for unplanned items
+      if (unplanned.length > 0) {
+        await createWorkItems(
+          ctx.db,
+          unplanned.map((text, i) => ({
             slackUserId: userId,
             dailyName,
             text,
             date: todayStr,
             submissionId: submission.id,
+            source: 'manual' as const,
+            itemType: 'unplanned' as const,
           }))
         );
       }
@@ -641,7 +710,6 @@ export async function handleStandupSubmission(
     // are already included in todayPlans — re-fetching would show ALL PRs
     // regardless of what the user selected.
     if (daily?.channel) {
-      const githubConfig = getGitHubConfig(daily);
       const standupData = {
         yesterdayCompleted,
         yesterdayIncomplete,
@@ -654,7 +722,7 @@ export async function handleStandupSubmission(
         questions: daily.questions,
         fieldOrder: daily.field_order,
         inProgressCarryCounts,
-        githubOrg: githubConfig?.org,
+        githubOrg,
       };
 
       const messageTs = await postStandupToChannel(

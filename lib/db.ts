@@ -292,6 +292,9 @@ export async function updateUserSetting(
 // Work Items (for analytics)
 // ============================================================================
 
+export type ItemSource = 'manual' | 'github_pr' | 'linear_ticket';
+export type ItemType = 'plan' | 'unplanned';
+
 export interface WorkItem {
   id: number;
   slack_user_id: string;
@@ -303,6 +306,26 @@ export interface WorkItem {
   completed_date: string | null;
   snoozed_until: string | null;
   submission_id: number | null;
+  source: ItemSource;
+  source_ref: string | null;
+  source_url: string | null;
+  item_type: ItemType;
+}
+
+export type SubmissionItemRole =
+  | 'today_plan'
+  | 'unplanned'
+  | 'yesterday_completed'
+  | 'yesterday_incomplete'
+  | 'yesterday_in_progress'
+  | 'yesterday_dropped';
+
+export interface SubmissionItem {
+  id: number;
+  submission_id: number;
+  work_item_id: number;
+  role: SubmissionItemRole;
+  position: number;
 }
 
 /** Create work items from today's plans */
@@ -314,21 +337,63 @@ export async function createWorkItems(
     text: string;
     date: string;
     submissionId: number;
+    source?: ItemSource;
+    sourceRef?: string;
+    sourceUrl?: string;
+    itemType?: ItemType;
   }>
 ): Promise<WorkItem[]> {
   if (items.length === 0) return [];
 
   const results: WorkItem[] = [];
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const source = item.source ?? 'manual';
+    const itemType = item.itemType ?? 'plan';
     const result = await db.query<WorkItem>(
-      `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5)
+      `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id, source, source_ref, source_url, item_type)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
        RETURNING *`,
-      [item.slackUserId, item.dailyName, item.text, item.date, item.submissionId]
+      [item.slackUserId, item.dailyName, item.text, item.date, item.submissionId, source, item.sourceRef ?? null, item.sourceUrl ?? null, itemType]
     );
-    if (result[0]) results.push(result[0]);
+    if (result[0]) {
+      results.push(result[0]);
+      await db.query(
+        `INSERT INTO submission_items (submission_id, work_item_id, role, position)
+         VALUES ($1, $2, $3, $4)`,
+        [item.submissionId, result[0].id, itemType === 'unplanned' ? 'unplanned' : 'today_plan', i + 1]
+      );
+    }
   }
   return results;
+}
+
+/** Link existing work items to a submission with a role (for yesterday status transitions) */
+export async function linkItemsToSubmission(
+  db: DbClient,
+  submissionId: number,
+  slackUserId: string,
+  dailyName: string,
+  itemTexts: string[],
+  role: SubmissionItemRole
+): Promise<void> {
+  for (let i = 0; i < itemTexts.length; i++) {
+    const items = await db.query<{ id: number }>(
+      `SELECT id FROM work_items
+       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3
+         AND status IN ('pending', 'carried', 'in_progress')
+       ORDER BY created_date DESC LIMIT 1`,
+      [slackUserId, dailyName, itemTexts[i]]
+    );
+    if (items[0]) {
+      await db.query(
+        `INSERT INTO submission_items (submission_id, work_item_id, role, position)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (submission_id, work_item_id, role) DO NOTHING`,
+        [submissionId, items[0].id, role, i + 1]
+      );
+    }
+  }
 }
 
 /** Mark items as done */
@@ -424,7 +489,7 @@ export async function markItemsInProgress(
   return updated;
 }
 
-/** Get recently done Linear items (items with [IDENTIFIER] prefix marked done within N days) */
+/** Get recently done Linear items (uses source column for new items, falls back to text pattern for old) */
 export async function getRecentlyDoneLinearItems(
   db: DbClient,
   slackUserId: string,
@@ -436,7 +501,7 @@ export async function getRecentlyDoneLinearItems(
      WHERE slack_user_id = $1
        AND daily_name = $2
        AND status = 'done'
-       AND text LIKE '[%]%'
+       AND (source = 'linear_ticket' OR (source = 'manual' AND text LIKE '[%]%'))
        AND completed_date >= CURRENT_DATE - ($3 || ' days')::INTERVAL
      ORDER BY completed_date DESC`,
     [slackUserId, dailyName, days]
@@ -678,6 +743,7 @@ export interface Submission {
   custom_answers: Record<string, string> | null;
   slack_message_ts: string | null;
   posted: boolean;
+  items_normalized: boolean;
 }
 
 // Get the most recent previous submission for a user (regardless of how many days ago)
@@ -722,8 +788,8 @@ export async function saveSubmission(
     `INSERT INTO submissions (
        slack_user_id, daily_name, date,
        yesterday_completed, yesterday_incomplete, yesterday_in_progress, unplanned,
-       today_plans, blockers, custom_answers, posted
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       today_plans, blockers, custom_answers, posted, items_normalized
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE)
      ON CONFLICT (slack_user_id, daily_name, date) DO UPDATE SET
        yesterday_completed = $12,
        yesterday_incomplete = $13,
@@ -733,6 +799,7 @@ export async function saveSubmission(
        blockers = $17,
        custom_answers = $18,
        posted = $19,
+       items_normalized = TRUE,
        submitted_at = NOW()
      RETURNING *`,
     [

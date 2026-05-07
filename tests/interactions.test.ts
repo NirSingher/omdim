@@ -17,6 +17,7 @@ vi.mock('../lib/db', () => ({
   markItemsInProgress: vi.fn(),
   getInProgressCarryCounts: vi.fn(() => Promise.resolve({})),
   createWorkItems: vi.fn(),
+  linkItemsToSubmission: vi.fn(),
   getGitHubUsername: vi.fn(() => Promise.resolve(null)),
   getLinearUserId: vi.fn(() => Promise.resolve(null)),
   setGitHubUsername: vi.fn(),
