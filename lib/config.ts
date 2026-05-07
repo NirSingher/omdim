@@ -231,9 +231,21 @@ export function getSchedule(name: string): Schedule | undefined {
   return config.schedules.find((s) => s.name === name);
 }
 
-export function isAdmin(userId: string): boolean {
+export function isSuperAdmin(userId: string): boolean {
   const config = loadConfig();
   return config.admins.includes(userId);
+}
+
+export function isAdmin(userId: string): boolean {
+  if (isSuperAdmin(userId)) return true;
+  const dbAdmins = getOverride<string[]>('global', 'admins');
+  return dbAdmins?.includes(userId) ?? false;
+}
+
+export function getAdmins(): { superAdmins: string[]; dbAdmins: string[] } {
+  const config = loadConfig();
+  const dbAdmins = getOverride<string[]>('global', 'admins') ?? [];
+  return { superAdmins: config.admins, dbAdmins };
 }
 
 export function getDailies(): Daily[] {
@@ -248,17 +260,16 @@ export function getSchedules(): Schedule[] {
   return loadConfig().schedules;
 }
 
-/** Get all managers for a daily (supports both legacy single manager and new managers array) */
+/** Get all managers for a daily (YAML + DB, deduplicated) */
 export function getDailyManagers(daily: Daily): string[] {
-  // New format takes precedence
+  const yamlManagers: string[] = [];
   if (daily.managers && daily.managers.length > 0) {
-    return daily.managers;
+    yamlManagers.push(...daily.managers);
+  } else if (daily.manager) {
+    yamlManagers.push(daily.manager);
   }
-  // Fallback to legacy single manager
-  if (daily.manager) {
-    return [daily.manager];
-  }
-  return [];
+  const dbManagers = getOverride<string[]>(daily.name, 'managers') ?? [];
+  return [...new Set([...yamlManagers, ...dbManagers])];
 }
 
 /** Get all dailies that have at least one manager configured */

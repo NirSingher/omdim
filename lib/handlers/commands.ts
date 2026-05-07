@@ -3,8 +3,8 @@
  * Handles: help, prompt, add, remove, list, digest, week, daily
  */
 
-import { getDailies, getDaily, getSchedule, isAdmin, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser, clearConfigCache, loadConfigOverrides, isDailyEnabled, getAllDailiesIncludingDisabled } from '../config';
-import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId, setConfigOverride, deleteConfigOverride } from '../db';
+import { getDailies, getDaily, getSchedule, isAdmin, isSuperAdmin, getAdmins, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser, clearConfigCache, loadConfigOverrides, isDailyEnabled, getAllDailiesIncludingDisabled, getDailyManagers, getOverride } from '../config';
+import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId, setConfigOverride, deleteConfigOverride, getAllConfigOverrides } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { fetchLinearIssuesForUser, fetchGitHubPRsForUser } from './interactions';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
@@ -58,6 +58,8 @@ export function handleHelp(): CommandResponse {
     '    _period: `day` (default), `week`, `month`_\n' +
     '    _Use `all` to run for all dailies_\n\n' +
     '*Admin*\n' +
+    '`/standup admin [add|remove|list] [@user]` - Manage admins (super-admin only)\n' +
+    '`/standup manager [add|remove|list] <daily> [@user]` - Manage daily managers\n' +
     '`/standup prompt all <daily>` - Send prompts to all participants\n' +
     '`/standup pause <daily>` - Pause a daily (skip prompts, digests)\n' +
     '`/standup resume <daily>` - Resume a paused daily\n' +
@@ -1134,6 +1136,128 @@ export async function handleLinear(ctx: CommandContext): Promise<CommandResponse
 }
 
 // ============================================================================
+// Admin Management
+// ============================================================================
+
+async function handleAdmin(ctx: CommandContext): Promise<CommandResponse> {
+  const action = ctx.args[1]?.toLowerCase();
+
+  if (action === 'list') {
+    const { superAdmins, dbAdmins } = getAdmins();
+    const lines: string[] = ['*Admins*'];
+    lines.push('');
+    lines.push('*Super-admins* (config):');
+    for (const id of superAdmins) lines.push(`  • <@${id}>`);
+    if (dbAdmins.length > 0) {
+      lines.push('');
+      lines.push('*Admins* (added):');
+      for (const id of dbAdmins) lines.push(`  • <@${id}>`);
+    }
+    return ephemeralResponse(lines.join('\n'));
+  }
+
+  if (!isSuperAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only super-admins (defined in config) can manage admins.');
+  }
+
+  if (action === 'add') {
+    const targetId = parseUserId(ctx.args[2] || '');
+    if (!targetId) return ephemeralResponse('Usage: `/standup admin add @user`');
+    if (isAdmin(targetId)) return ephemeralResponse(`ℹ️ <@${targetId}> is already an admin.`);
+
+    const dbAdmins = getOverride<string[]>('global', 'admins') ?? [];
+    await setConfigOverride(ctx.db, 'global', 'admins', [...dbAdmins, targetId], ctx.userId);
+    await loadConfigOverrides(ctx.db);
+    return ephemeralResponse(`✅ <@${targetId}> is now an admin.`);
+  }
+
+  if (action === 'remove') {
+    const targetId = parseUserId(ctx.args[2] || '');
+    if (!targetId) return ephemeralResponse('Usage: `/standup admin remove @user`');
+    if (isSuperAdmin(targetId)) return ephemeralResponse('❌ Cannot remove a super-admin. Edit config.yaml instead.');
+
+    const dbAdmins = getOverride<string[]>('global', 'admins') ?? [];
+    if (!dbAdmins.includes(targetId)) return ephemeralResponse(`ℹ️ <@${targetId}> is not a DB-added admin.`);
+
+    await setConfigOverride(ctx.db, 'global', 'admins', dbAdmins.filter(id => id !== targetId), ctx.userId);
+    await loadConfigOverrides(ctx.db);
+    return ephemeralResponse(`✅ <@${targetId}> is no longer an admin.`);
+  }
+
+  return ephemeralResponse('Usage: `/standup admin [add|remove|list] [@user]`');
+}
+
+// ============================================================================
+// Manager Management
+// ============================================================================
+
+async function handleManager(ctx: CommandContext): Promise<CommandResponse> {
+  if (!isAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only admins can manage daily managers.');
+  }
+
+  const action = ctx.args[1]?.toLowerCase();
+  const dailyName = ctx.args[2];
+
+  if (action === 'list') {
+    if (!dailyName) return ephemeralResponse('Usage: `/standup manager list <daily>`');
+    const daily = getDaily(dailyName);
+    if (!daily) return ephemeralResponse(`❌ Daily "${dailyName}" not found.`);
+
+    const managers = getDailyManagers(daily);
+    if (managers.length === 0) return ephemeralResponse(`*${dailyName}* has no managers.`);
+
+    const list = managers.map(id => `  • <@${id}>`).join('\n');
+    return ephemeralResponse(`*${dailyName}* managers:\n${list}`);
+  }
+
+  if (action === 'add') {
+    const targetId = parseUserId(ctx.args[3] || '') || parseUserId(dailyName || '');
+    const resolvedDaily = parseUserId(dailyName || '') ? ctx.args[3] : dailyName;
+
+    if (!resolvedDaily || !targetId) {
+      return ephemeralResponse('Usage: `/standup manager add <daily> @user`');
+    }
+
+    const daily = getDaily(resolvedDaily);
+    if (!daily) return ephemeralResponse(`❌ Daily "${resolvedDaily}" not found.`);
+
+    const currentManagers = getDailyManagers(daily);
+    if (currentManagers.includes(targetId)) {
+      return ephemeralResponse(`ℹ️ <@${targetId}> is already a manager of *${resolvedDaily}*.`);
+    }
+
+    const dbManagers = getOverride<string[]>(resolvedDaily, 'managers') ?? [];
+    await setConfigOverride(ctx.db, resolvedDaily, 'managers', [...dbManagers, targetId], ctx.userId);
+    await loadConfigOverrides(ctx.db);
+    return ephemeralResponse(`✅ <@${targetId}> is now a manager of *${resolvedDaily}*. They'll receive digests and reports.`);
+  }
+
+  if (action === 'remove') {
+    const targetId = parseUserId(ctx.args[3] || '') || parseUserId(dailyName || '');
+    const resolvedDaily = parseUserId(dailyName || '') ? ctx.args[3] : dailyName;
+
+    if (!resolvedDaily || !targetId) {
+      return ephemeralResponse('Usage: `/standup manager remove <daily> @user`');
+    }
+
+    const daily = getDaily(resolvedDaily);
+    if (!daily) return ephemeralResponse(`❌ Daily "${resolvedDaily}" not found.`);
+
+    const dbManagers = getOverride<string[]>(resolvedDaily, 'managers') ?? [];
+    if (!dbManagers.includes(targetId)) {
+      return ephemeralResponse(`ℹ️ <@${targetId}> is not a DB-added manager of *${resolvedDaily}*. YAML managers must be removed from config.`);
+    }
+
+    await setConfigOverride(ctx.db, resolvedDaily, 'managers', dbManagers.filter(id => id !== targetId), ctx.userId);
+    await loadConfigOverrides(ctx.db);
+    return ephemeralResponse(`✅ <@${targetId}> is no longer a manager of *${resolvedDaily}*.`);
+  }
+
+  return ephemeralResponse('Usage: `/standup manager [add|remove|list] <daily> [@user]`');
+}
+
+// ============================================================================
 // Mass Prompt (Admin)
 // ============================================================================
 
@@ -1298,6 +1422,10 @@ export async function handleCommand(
       return handleLinear(ctx);
     case 'force-prompt':
       return handleForcePrompt(ctx);
+    case 'admin':
+      return handleAdmin(ctx);
+    case 'manager':
+      return handleManager(ctx);
     case 'config':
       return handleConfigReload(ctx);
     case 'pause':

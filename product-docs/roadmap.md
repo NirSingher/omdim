@@ -184,17 +184,20 @@ See `requirements.md` and `architecture.md`
 
 ---
 
-## Planned
+### Admin Management ✅
+- [x] `/standup admin add @user` - add admin (super-admin only)
+- [x] `/standup admin remove @user` - remove admin
+- [x] `/standup admin list` - show all admins (super-admins + DB admins)
+- [x] Super-admins defined in config (can manage other admins)
+- [x] DB admins stored via `config_overrides` table
+- [x] `/standup manager add <daily> @user` - admin assigns a daily manager
+- [x] `/standup manager remove <daily> @user` - admin removes a daily manager
+- [x] `/standup manager list <daily>` - show managers for a daily
+- [x] Daily managers merged from YAML + DB (deduplicated)
 
-### Admin Management
-- [ ] `/standup admin add @user` - add admin (super-admin only)
-- [ ] `/standup admin remove @user` - remove admin
-- [ ] `/standup admin list` - show all admins
-- [ ] Define super-admins in config (can manage other admins)
-- [ ] `/standup manager add <daily> @user` - admin assigns a daily manager
-- [ ] `/standup manager remove <daily> @user` - admin removes a daily manager
-- [ ] `/standup manager list <daily>` - show managers for a daily
-- [ ] Daily managers receive digest and report without being reporters
+---
+
+## Planned
 
 ### Remaining Stats & Analytics
 - [ ] Blocker resolution time tracking
