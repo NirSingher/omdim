@@ -42,6 +42,7 @@ vi.mock('../lib/slack', () => ({
   parseUserId: vi.fn(),
   ephemeralResponse: vi.fn((text: string) => ({ response_type: 'ephemeral', text })),
   sendDM: vi.fn(),
+  openModal: vi.fn(() => Promise.resolve(true)),
 }));
 
 // Mock prompt module
@@ -74,7 +75,7 @@ import {
 
 import { isAdmin, getDaily, getSchedule, getDailies, getConfigError, getAllDailiesIncludingDisabled, isDailyEnabled, clearConfigCache, loadConfigOverrides } from '../lib/config';
 import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO, setConfigOverride, deleteConfigOverride } from '../lib/db';
-import { parseUserId, sendDM } from '../lib/slack';
+import { parseUserId, sendDM, openModal } from '../lib/slack';
 import { getUserTimezone, getUserDate, formatDate, sendPromptDM } from '../lib/prompt';
 import { formatManagerDigest } from '../lib/format';
 
@@ -605,6 +606,65 @@ describe('command handlers', () => {
 
       const response = await handleList(createContext(['list']));
       expect(response.text).toContain('⏸️');
+    });
+  });
+
+  describe('mass prompt (prompt all <daily>)', () => {
+    const createContextWithTrigger = (args: string[]): CommandContext => ({
+      userId: 'U12345',
+      args,
+      db: mockDb,
+      slackToken: mockToken,
+      triggerId: 'test-trigger-id',
+    });
+
+    it('requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'daily-il']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'nonexistent']));
+      expect(response.text).toContain('not found');
+    });
+
+    it('shows error when no participants', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getParticipants).mockResolvedValue([]);
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'daily-il']));
+      expect(response.text).toContain('No participants');
+    });
+
+    it('opens confirmation modal with participant count', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getParticipants).mockResolvedValue([
+        { slack_user_id: 'U111' },
+        { slack_user_id: 'U222' },
+        { slack_user_id: 'U333' },
+      ] as any);
+
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'daily-il']));
+
+      expect(openModal).toHaveBeenCalled();
+      const modalCall = vi.mocked(openModal).mock.calls[0];
+      const view = modalCall[2] as any;
+      expect(view.callback_id).toBe('mass_prompt_confirm');
+      expect(view.blocks[0].text.text).toContain('3 participants');
+    });
+
+    it('falls through to self-prompt when only `prompt all` (no daily name)', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([
+        { daily_name: 'daily-il' },
+      ] as any);
+      vi.mocked(sendPromptDM).mockResolvedValue(true);
+
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all']));
+      expect(response.text).toContain('Sent prompts for 1 dailies');
     });
   });
 });

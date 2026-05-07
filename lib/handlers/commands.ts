@@ -58,6 +58,7 @@ export function handleHelp(): CommandResponse {
     '    _period: `day` (default), `week`, `month`_\n' +
     '    _Use `all` to run for all dailies_\n\n' +
     '*Admin*\n' +
+    '`/standup prompt all <daily>` - Send prompts to all participants\n' +
     '`/standup pause <daily>` - Pause a daily (skip prompts, digests)\n' +
     '`/standup resume <daily>` - Resume a paused daily\n' +
     '`/standup config reload` - Reload configuration'
@@ -328,6 +329,12 @@ export async function handleDigest(ctx: CommandContext): Promise<CommandResponse
 /** Send prompt DM with "Open Standup" button */
 export async function handlePrompt(ctx: CommandContext): Promise<CommandResponse> {
   const promptDailyName = ctx.args[1];
+  const massPromptDaily = ctx.args[2];
+
+  // Admin mass-prompt: `/standup prompt all <daily>`
+  if (promptDailyName && isAllDailies(promptDailyName) && massPromptDaily) {
+    return handleMassPrompt(ctx, massPromptDaily);
+  }
 
   try {
     // Get user's dailies
@@ -1124,6 +1131,55 @@ export async function handleLinear(ctx: CommandContext): Promise<CommandResponse
     console.error('Failed to manage Linear link:', err);
     return ephemeralResponse('❌ Failed to manage Linear link. Please try again.');
   }
+}
+
+// ============================================================================
+// Mass Prompt (Admin)
+// ============================================================================
+
+async function handleMassPrompt(ctx: CommandContext, dailyName: string): Promise<CommandResponse> {
+  if (!isAdmin(ctx.userId)) {
+    return ephemeralResponse('❌ Only admins can send mass prompts.');
+  }
+
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    return ephemeralResponse(`❌ Daily "${dailyName}" not found.`);
+  }
+
+  const participants = await getParticipants(ctx.db, dailyName);
+  if (participants.length === 0) {
+    return ephemeralResponse(`❌ No participants in *${dailyName}*.`);
+  }
+
+  if (!ctx.triggerId) {
+    return ephemeralResponse('❌ Cannot open confirmation dialog. Please try again.');
+  }
+
+  const view = {
+    type: 'modal' as const,
+    callback_id: 'mass_prompt_confirm',
+    private_metadata: JSON.stringify({ dailyName }),
+    title: { type: 'plain_text' as const, text: 'Send Mass Prompt' },
+    submit: { type: 'plain_text' as const, text: 'Send Prompts' },
+    close: { type: 'plain_text' as const, text: 'Cancel' },
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `Send standup prompts to *all ${participants.length} participants* in *${dailyName}*?\n\nEach user will receive a DM with a standup prompt.`,
+        },
+      },
+    ],
+  };
+
+  const opened = await openModal(ctx.slackToken, ctx.triggerId, view);
+  if (!opened) {
+    return ephemeralResponse('❌ Failed to open confirmation dialog.');
+  }
+
+  return ephemeralResponse('Opening confirmation...');
 }
 
 // ============================================================================

@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems, isAdmin } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -28,6 +28,7 @@ import {
   setDmStandupPreference,
   updateUserSetting,
   getUserDailies,
+  getParticipants,
   setOOO,
   clearOOO,
 } from '../db';
@@ -36,7 +37,7 @@ import { fetchUserPRData, UserPRData } from '../github';
 import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData } from '../linear';
 import { postStandupToChannel, sendStandupDM } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
-import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
+import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
 import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
 import { StandupMode } from '../modal';
 
@@ -1282,6 +1283,11 @@ export async function handleInteraction(
     return handleOOOSetSubmission(payload, ctx);
   }
 
+  // Handle mass prompt confirmation
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'mass_prompt_confirm') {
+    return handleMassPromptConfirm(payload, ctx);
+  }
+
   // Handle settings modal submissions
   if (payload.type === 'view_submission') {
     const callbackId = payload.view?.callback_id || '';
@@ -1291,5 +1297,41 @@ export async function handleInteraction(
   }
 
   // Unknown interaction type
+  return true;
+}
+
+async function handleMassPromptConfirm(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+  if (!isAdmin(userId)) return false;
+
+  let metadata: { dailyName: string };
+  try {
+    metadata = JSON.parse(payload.view?.private_metadata || '{}');
+  } catch {
+    return false;
+  }
+
+  const { dailyName } = metadata;
+  if (!dailyName) return false;
+
+  const participants = await getParticipants(ctx.db, dailyName);
+  let sent = 0;
+  let failed = 0;
+
+  for (const p of participants) {
+    const ok = await sendPromptDM(ctx.slackToken, p.slack_user_id, dailyName);
+    if (ok) sent++;
+    else failed++;
+  }
+
+  let summary = `📬 Sent prompts to ${sent} user${sent !== 1 ? 's' : ''} in *${dailyName}*.`;
+  if (failed > 0) {
+    summary += `\n⚠️ ${failed} failed.`;
+  }
+
+  await sendDM(ctx.slackToken, userId, summary);
   return true;
 }

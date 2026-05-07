@@ -176,15 +176,15 @@ See `requirements.md` and `architecture.md`
 - [x] Store config overrides in DB (`config_overrides` table, takes precedence over YAML)
 - [x] Paused dailies shown with ⏸️ in `/standup list`
 
+### Force Prompt Command (Full) ✅
+- [x] `/standup force-prompt <daily>` - force prompt yourself
+- [x] `/standup prompt all <daily>` - admin command to prompt all participants
+- [x] Confirmation modal before mass-prompting (shows participant count)
+- [x] Summary DM: "Sent prompts to 7 users in daily-il"
+
 ---
 
 ## Planned
-
-### Force Prompt Command (Full)
-- [x] `/standup force-prompt <daily>` - force prompt yourself
-- [ ] `/standup prompt all <daily>` - admin command to prompt all participants
-- [ ] Confirmation step before mass-prompting
-- [ ] Show summary: "Sent prompts to 7 users"
 
 ### Admin Management
 - [ ] `/standup admin add @user` - add admin (super-admin only)
