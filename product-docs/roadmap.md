@@ -205,12 +205,16 @@ See `requirements.md` and `architecture.md`
 
 ---
 
-## Planned
+### GitHub PR Filtering ✅
+- [x] Exclude PRs where reviewer already commented/reviewed and PR not updated since (ball in author's court)
+- [x] Hide PRs already approved by someone else (no action needed)
+- [x] "Ball in court" heuristic: reviewer's latest review timestamp vs PR's `updated_at`
+- [x] Fail-open design: if reviews can't be fetched, PR stays visible
+- [x] Extracted `fetchPRReviews()` helper, shared by review-request filtering and re-review detection
 
-### GitHub PR Filtering
-- [ ] Exclude PRs where user has commented and is awaiting author response
-- [ ] Only show review requests that actually need the user's action
-- [ ] Detect "ball in their court" vs "ball in your court" via comment recency
+---
+
+## Planned
 
 ### Linear Enhancements
 - [ ] Mark issues as "in progress" when added to standup
