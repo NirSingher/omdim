@@ -222,18 +222,19 @@ See `requirements.md` and `architecture.md`
 - [x] Fire-and-forget: non-blocking, wrapped in try/catch so submission never fails due to Linear errors
 - [x] Full test coverage: 52 tests for all new Linear functions
 
+### App Home: Today's Tasks Management ✅
+- [x] Interactive task list in App Home with per-item overflow menus (done / in-progress / drop)
+- [x] Quick-add new items via modal (triggered by "Add Item" button)
+- [x] Mark items done / in-progress / drop from App Home
+- [x] Source tags shown per item (manual, PR, Linear)
+- [x] Real-time sync: changes in App Home update the standup post in the channel via chat.update
+- [x] Backward compat: JSONB fallback for submissions without work_item records
+- [ ] Full integration context (live PR status, Linear ticket state) — deferred
+- [ ] Bidirectional sync from channel post edits — deferred (Slack limitation)
+
 ---
 
 ## Planned
-
-### App Home: Today's Tasks Management
-View and manage today's standup items directly from the App Home tab.
-
-- [ ] Show today's planned items as an editable list in App Home
-- [ ] Quick-add new items inline
-- [ ] Mark items done / in-progress / drop from App Home
-- [ ] Show integration context (linked PR status, Linear ticket state) alongside each item
-- [ ] Real-time sync: changes in App Home reflect in the standup post (and vice versa)
 
 ### Linear Intelligence
 
