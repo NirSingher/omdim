@@ -17,6 +17,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Create config for tests
+        run: cp config.yaml.example config.yaml
+
       - run: npm ci
 
       - name: Type check
