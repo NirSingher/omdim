@@ -225,15 +225,23 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
           }
         }
 
-        // "Add Item" button at the end of each daily's task list
+        // Action buttons at the end of each daily's task list
         blocks.push({
           type: 'actions',
-          elements: [{
-            type: 'button',
-            text: { type: 'plain_text', text: '➕ Add Item', emoji: true },
-            action_id: 'task_add',
-            value: status.dailyName,
-          }],
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '➕ Add Item', emoji: true },
+              action_id: 'task_add',
+              value: status.dailyName,
+            },
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '✏️ Edit Standup', emoji: true },
+              action_id: 'home_edit_standup',
+              value: status.dailyName,
+            },
+          ],
         });
       }
     }

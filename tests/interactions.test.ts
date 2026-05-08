@@ -85,7 +85,7 @@ vi.mock('../lib/handlers/home', () => ({
   handleAppHomeOpened: vi.fn(() => Promise.resolve(true)),
 }));
 
-import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
+import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, handleEditStandup, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
 import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts, updateWorkItemStatus, addWorkItem, updateSubmissionArrays, getSubmissionForDate, getParticipants } from '../lib/db';
 import { openModal, sendDM, updateMessage, extractMentionedUserIds, parseRichText } from '../lib/slack';
 import { getMaxPlanItems, getDaily, getSchedule, getConfigError } from '../lib/config';
@@ -1266,5 +1266,162 @@ describe('blocker @-mention DMs', () => {
       'U_OUTSIDE',
       expect.anything()
     );
+  });
+});
+
+// ============================================================================
+// Edit After Submit
+// ============================================================================
+
+describe('handleEditStandup', () => {
+  const makeEditPayload = (dailyName = 'daily-il'): InteractionPayload => ({
+    type: 'block_actions',
+    trigger_id: 'trigger-edit',
+    user: { id: 'U12345' },
+    actions: [{ action_id: 'home_edit_standup', value: dailyName }],
+  });
+
+  const ctx = { db: {} as any, slackToken: 'xoxb-test' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDaily).mockReturnValue({ name: 'daily-il', channel: 'C123', questions: [] } as any);
+    vi.mocked(getConfigError).mockReturnValue(null);
+  });
+
+  it('opens modal with prefill from today submission', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
+      id: 10,
+      slack_user_id: 'U12345',
+      daily_name: 'daily-il',
+      date: '2025-12-22',
+      submitted_at: new Date(),
+      yesterday_completed: [],
+      yesterday_incomplete: [],
+      yesterday_in_progress: [],
+      unplanned: ['Fixed urgent bug'],
+      today_plans: ['Deploy feature', 'Code review'],
+      blockers: 'Waiting on QA',
+      custom_answers: null,
+      slack_message_ts: 'ts-orig',
+      posted: true,
+      items_normalized: true,
+    });
+    vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    vi.mocked(openModal).mockResolvedValueOnce(true);
+
+    const result = await handleEditStandup(makeEditPayload(), ctx);
+
+    expect(result).toBe(true);
+    expect(openModal).toHaveBeenCalled();
+
+    const modalArg = vi.mocked(openModal).mock.calls[0][2];
+    const metadata = JSON.parse(modalArg.private_metadata);
+    expect(metadata.dailyName).toBe('daily-il');
+    expect(metadata.mode).toBe('today');
+  });
+
+  it('sends DM when no submission exists for today', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce(null);
+
+    const result = await handleEditStandup(makeEditPayload(), ctx);
+
+    expect(result).toBe(true);
+    expect(openModal).not.toHaveBeenCalled();
+    expect(sendDM).toHaveBeenCalledWith(
+      'xoxb-test',
+      'U12345',
+      expect.stringContaining('No standup found')
+    );
+  });
+
+  it('routes home_edit_standup action correctly', async () => {
+    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
+      id: 10, slack_user_id: 'U12345', daily_name: 'daily-il', date: '2025-12-22',
+      submitted_at: new Date(), yesterday_completed: [], yesterday_incomplete: [],
+      yesterday_in_progress: [], unplanned: null, today_plans: ['Task'],
+      blockers: null, custom_answers: null, slack_message_ts: null,
+      posted: true, items_normalized: true,
+    });
+    vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    vi.mocked(openModal).mockResolvedValueOnce(true);
+
+    const result = await handleInteraction(makeEditPayload(), ctx);
+    expect(result).toBe(true);
+    expect(openModal).toHaveBeenCalled();
+  });
+});
+
+describe('handleStandupSubmission - re-submit updates existing post', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getDaily).mockReturnValue({ name: 'daily-il', channel: 'C123', questions: [] } as any);
+    vi.mocked(getSchedule).mockReturnValue({ default_time: '10:00' } as any);
+    vi.mocked(getConfigError).mockReturnValue(null);
+    vi.mocked(getMaxPlanItems).mockReturnValue(0);
+    vi.mocked(formatDate).mockReturnValue('2025-12-22');
+    vi.mocked(getDateInTimezone).mockReturnValue(new Date('2025-12-22T12:00:00'));
+    vi.mocked(hasScheduledTimePassed).mockReturnValue(true);
+    vi.mocked(postStandupToChannel).mockResolvedValue('ts-new' as any);
+  });
+
+  it('updates existing channel message when submission has slack_message_ts', async () => {
+    vi.mocked(saveSubmission).mockResolvedValueOnce({
+      id: 10,
+      slack_message_ts: 'ts-existing-123',
+    } as any);
+
+    const payload: InteractionPayload = {
+      type: 'view_submission',
+      trigger_id: 'trigger123',
+      user: { id: 'U12345' },
+      view: {
+        callback_id: 'standup_submission',
+        private_metadata: JSON.stringify({ dailyName: 'daily-il', yesterdayPlans: [], mode: 'today' }),
+        state: {
+          values: {
+            today_plans: { plans_input: { value: 'Updated plan' } },
+          },
+        },
+      },
+    };
+
+    await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+    expect(updateMessage).toHaveBeenCalledWith(
+      'xoxb-test',
+      'C123',
+      'ts-existing-123',
+      expect.any(String),
+      expect.any(Array)
+    );
+    expect(postStandupToChannel).not.toHaveBeenCalled();
+  });
+
+  it('posts new message when submission has no slack_message_ts', async () => {
+    vi.mocked(saveSubmission).mockResolvedValueOnce({
+      id: 11,
+      slack_message_ts: null,
+    } as any);
+
+    const payload: InteractionPayload = {
+      type: 'view_submission',
+      trigger_id: 'trigger123',
+      user: { id: 'U12345' },
+      view: {
+        callback_id: 'standup_submission',
+        private_metadata: JSON.stringify({ dailyName: 'daily-il', yesterdayPlans: [], mode: 'today' }),
+        state: {
+          values: {
+            today_plans: { plans_input: { value: 'New plan' } },
+          },
+        },
+      },
+    };
+
+    await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+    expect(postStandupToChannel).toHaveBeenCalled();
+    expect(updateMessage).not.toHaveBeenCalled();
   });
 });

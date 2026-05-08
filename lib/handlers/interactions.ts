@@ -775,10 +775,7 @@ export async function handleStandupSubmission(
       }
     }
 
-    // Post to channel
-    // NOTE: We do NOT re-fetch PR data here. The user's checkbox selections
-    // are already included in todayPlans — re-fetching would show ALL PRs
-    // regardless of what the user selected.
+    // Post to channel (or update existing post on re-submit)
     if (daily?.channel) {
       const standupData = {
         yesterdayCompleted,
@@ -795,17 +792,24 @@ export async function handleStandupSubmission(
         githubOrg,
       };
 
-      const messageTs = await postStandupToChannel(
-        ctx.slackToken,
-        daily.channel,
-        userId,
-        dailyName,
-        standupData
-      );
+      if (submission.slack_message_ts) {
+        // Re-submit: update the existing channel post in place
+        const blocks = formatStandupBlocks(userId, dailyName, standupData);
+        const fallbackText = `*<@${userId}>* updated their standup`;
+        await updateMessage(ctx.slackToken, daily.channel, submission.slack_message_ts, fallbackText, blocks);
+      } else {
+        // First submit: post new message
+        const messageTs = await postStandupToChannel(
+          ctx.slackToken,
+          daily.channel,
+          userId,
+          dailyName,
+          standupData
+        );
 
-      // Store message timestamp for future reference
-      if (messageTs && submission.id) {
-        await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
+        if (messageTs && submission.id) {
+          await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
+        }
       }
 
       // Send DM copy if user preference allows
@@ -1020,6 +1024,129 @@ export async function handleHomeStartDaily(
     autoCompletedIds,
     mergedPRsHome.length > 0 ? mergedPRsHome : undefined,
     getDailySections(daily)
+  );
+
+  return openModal(ctx.slackToken, triggerId, modal);
+}
+
+// ============================================================================
+// Button Handler: Edit Standup
+// ============================================================================
+
+/**
+ * Handle "Edit Standup" button from App Home
+ * Reopens the modal pre-filled with today's submission data
+ */
+export async function handleEditStandup(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const dailyName = payload.actions?.[0]?.value;
+  if (!dailyName) {
+    console.error('No daily name in home_edit_standup action');
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const triggerId = payload.trigger_id;
+
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    console.error(`Daily "${dailyName}" not found`);
+    return false;
+  }
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const userDate = getUserDate(tzOffset);
+  const todayStr = formatDate(userDate);
+
+  // Fetch today's submission for prefill
+  const todaySubmission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+  if (!todaySubmission) {
+    await sendDM(ctx.slackToken, userId, `No standup found for today in *${dailyName}*. Use "Start Daily" to submit one.`);
+    return true;
+  }
+
+  // Build prefill from today's submission
+  const prefill: SubmissionPrefill = {
+    todayPlans: todaySubmission.today_plans || undefined,
+    unplanned: todaySubmission.unplanned || undefined,
+    blockers: todaySubmission.blockers || undefined,
+    customAnswers: todaySubmission.custom_answers || undefined,
+  };
+
+  // Build yesterday data from the submission *before* today (same logic as handleOpenStandup)
+  const previousSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
+
+  let yesterdayData: YesterdayData | null = null;
+  if (previousSubmission) {
+    const todayPlans = previousSubmission.today_plans
+      ? (Array.isArray(previousSubmission.today_plans)
+          ? previousSubmission.today_plans
+          : JSON.parse(previousSubmission.today_plans as unknown as string))
+      : [];
+    const carriedItems = previousSubmission.yesterday_incomplete
+      ? (Array.isArray(previousSubmission.yesterday_incomplete)
+          ? previousSubmission.yesterday_incomplete
+          : JSON.parse(previousSubmission.yesterday_incomplete as unknown as string))
+      : [];
+    const inProgressItems = previousSubmission.yesterday_in_progress
+      ? (Array.isArray(previousSubmission.yesterday_in_progress)
+          ? previousSubmission.yesterday_in_progress
+          : JSON.parse(previousSubmission.yesterday_in_progress as unknown as string))
+      : [];
+    const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
+    if (allPlans.length > 0) {
+      yesterdayData = {
+        plans: allPlans,
+        completed: [],
+        incomplete: [],
+        inProgressCount: inProgressItems.length,
+      };
+    }
+  }
+
+  // Fetch integrations in parallel
+  const yesterdayDate = new Date(userDate);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const sinceDate = previousSubmission?.date || formatDate(yesterdayDate);
+
+  const [linearResult, githubResult, mergedPRs] = await Promise.all([
+    fetchLinearIssuesForUser(daily, userId, ctx),
+    fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchMergedPRsForUser(daily, userId, ctx, sinceDate),
+  ]);
+
+  let doneIdentifiers: Set<string> | undefined;
+  let autoCompletedIds: Set<string> | undefined;
+
+  if (linearResult.allActiveIdentifiers.length > 0 || yesterdayData) {
+    try {
+      const recentlyDoneItems = await getRecentlyDoneLinearItems(ctx.db, userId, dailyName);
+      const doneIds = new Set(
+        recentlyDoneItems.map(text => text.match(/^\[([^\]]+)\]/)?.[1]).filter((id): id is string => !!id)
+      );
+      if (doneIds.size > 0) doneIdentifiers = doneIds;
+      if (yesterdayData && linearResult.allActiveIdentifiers.length > 0) {
+        const activeSet = new Set(linearResult.allActiveIdentifiers);
+        const autoDone = new Set<string>();
+        for (const plan of yesterdayData.plans) {
+          const match = plan.match(/^\[([^\]]+)\]\s/);
+          if (match && !activeSet.has(match[1]) && !doneIds.has(match[1])) autoDone.add(match[1]);
+        }
+        if (autoDone.size > 0) autoCompletedIds = autoDone;
+      }
+    } catch (error) {
+      console.error('Failed to compute done/auto-completed sets:', error);
+    }
+  }
+
+  const sects = getDailySections(daily);
+  const modal = buildStandupModal(
+    dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate,
+    'today', prefill, linearResult.issues, githubResult.prData, githubResult.reviewerMap,
+    doneIdentifiers, autoCompletedIds, mergedPRs.length > 0 ? mergedPRs : undefined, sects
   );
 
   return openModal(ctx.slackToken, triggerId, modal);
@@ -1659,6 +1786,7 @@ export async function handleInteraction(
     if (actionId === 'home_set_max_items') return handleSetMaxItems(payload, ctx);
     if (actionId === 'home_set_stale_pr_days') return handleSetStalePrDays(payload, ctx);
     if (actionId === 'home_set_linear_teams') return handleSetLinearTeams(payload, ctx);
+    if (actionId === 'home_edit_standup') return handleEditStandup(payload, ctx);
     if (actionId === 'task_action') return handleTaskAction(payload, ctx);
     if (actionId === 'task_add') return handleTaskAdd(payload, ctx);
   }

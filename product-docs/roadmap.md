@@ -289,10 +289,10 @@ See `requirements.md` and `architecture.md`
 - [x] Per-daily `weekly_recap` config (default true)
 - [x] Piggyback on existing weekly digest cron
 
-### Edit After Submit
-- [ ] "Edit Standup" button on channel post and App Home
-- [ ] Reopen modal pre-filled with today's plans/unplanned
-- [ ] Work item reconciliation on re-submit, channel post updated in place
+### Edit After Submit ✅
+- [x] "Edit Standup" button on App Home (visible when today's submission exists)
+- [x] Reopen modal pre-filled with today's plans/unplanned/blockers
+- [x] Channel post updated in place on re-submit (no duplicate messages)
 
 ---
 
