@@ -3,7 +3,7 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled, getLinearIntelligenceConfig, getGitHubIntelligenceConfig } from '../lib/config';
+import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled, getLinearIntelligenceConfig, getGitHubIntelligenceConfig, getWeeklyRecap } from '../lib/config';
 import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
 import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate, getBlockerStreaks, getUnplannedOverload, getActiveWorkItems } from '../lib/db';
 import { computeLinearAlignment, AlignmentResult } from '../lib/linear-intelligence';
@@ -15,7 +15,7 @@ import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
 import { handleLinearWebhook } from '../lib/handlers/webhooks';
-import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo, formatTeamSummary } from '../lib/format';
+import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo, formatTeamSummary, formatPersonalWeeklyRecap } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -500,6 +500,26 @@ async function runDigestCronUnified(env: Env): Promise<{
         const weeklyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'weekly');
         weeklySent += weeklyResult.sent;
         errors += weeklyResult.errors;
+
+        // Personal weekly recap DMs
+        if (getWeeklyRecap(daily)) {
+          try {
+            const recapEnd = formatDate(new Date());
+            const recapStartObj = new Date();
+            recapStartObj.setDate(recapStartObj.getDate() - 6);
+            const recapStart = formatDate(recapStartObj);
+            const weeklySubs = await getSubmissionsInRange(db, daily.name, recapStart, recapEnd);
+            const participants = await getParticipants(db, daily.name);
+            for (const p of participants) {
+              const userSubs = weeklySubs.filter(s => s.slack_user_id === p.slack_user_id);
+              const recap = formatPersonalWeeklyRecap(daily.name, userSubs);
+              await sendDM(env.SLACK_BOT_TOKEN, p.slack_user_id, recap);
+            }
+          } catch (err) {
+            console.error(`Failed to send weekly recaps for "${daily.name}":`, err);
+            errors++;
+          }
+        }
       }
 
       // Post OOO notice to daily channel for users whose OOO starts today (workdays only)

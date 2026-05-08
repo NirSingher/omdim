@@ -107,6 +107,8 @@ const DailySchema = z.object({
     blockers: z.boolean().default(true),
     unplanned: z.boolean().default(true),
   }).optional(),
+  // Send personal weekly recap DM to each participant on weekly digest day (default true)
+  weekly_recap: z.boolean().optional(),
 });
 
 const ConfigSchema = z.object({
@@ -340,6 +342,11 @@ export function getDailySections(daily: Daily): { blockers: boolean; unplanned: 
     blockers: daily.sections?.blockers ?? true,
     unplanned: daily.sections?.unplanned ?? true,
   };
+}
+
+/** Whether to send weekly recap DMs to participants (default true) */
+export function getWeeklyRecap(daily: Daily): boolean {
+  return daily.weekly_recap ?? true;
 }
 
 /** Get the digest time (UTC, HH:MM format, defaults to 14:00) */

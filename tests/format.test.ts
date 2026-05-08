@@ -21,6 +21,7 @@ import {
   formatMemberPRSummary,
   formatTeamSummary,
   formatFullReport,
+  formatPersonalWeeklyRecap,
 } from '../lib/format';
 import type { TeamPRData } from '../lib/github';
 import type { TeamLinearData, CycleProgress } from '../lib/linear';
@@ -1967,6 +1968,127 @@ describe('format utilities', () => {
 
       expect(result).not.toContain('In progress — needs attention');
       expect(result).toContain('Stuck items');
+    });
+  });
+
+  describe('formatPersonalWeeklyRecap', () => {
+    it('shows "no standups" message when submissions array is empty', () => {
+      const result = formatPersonalWeeklyRecap('daily-il', []);
+      expect(result).toContain('No standups submitted this week');
+      expect(result).toContain('daily-il');
+    });
+
+    it('includes completed items from submissions', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: ['Fix auth bug', 'Write tests'],
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: ['Deploy'], blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('✅ *Completed* (2)');
+      expect(result).toContain('Fix auth bug');
+      expect(result).toContain('Write tests');
+    });
+
+    it('includes carried items', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: null,
+          yesterday_incomplete: ['Stuck task'], yesterday_in_progress: null,
+          unplanned: null, today_plans: ['Deploy'], blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('➡️ *Still carrying* (1)');
+      expect(result).toContain('Stuck task');
+    });
+
+    it('includes blockers', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: null,
+          yesterday_incomplete: null, yesterday_in_progress: null,
+          unplanned: null, today_plans: ['Deploy'], blockers: 'Waiting on API access',
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('🚧 *Blockers reported* (1)');
+      expect(result).toContain('Waiting on API access');
+    });
+
+    it('deduplicates items across multiple submissions', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: ['Task A'],
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: null, blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+        {
+          id: 2, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-05',
+          submitted_at: new Date(), yesterday_completed: ['Task A', 'Task B'],
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: null, blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('✅ *Completed* (2)');
+    });
+
+    it('shows submission count in header', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: ['A'], yesterday_incomplete: null,
+          yesterday_in_progress: null, unplanned: null, today_plans: null, blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+        {
+          id: 2, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-05',
+          submitted_at: new Date(), yesterday_completed: null, yesterday_incomplete: null,
+          yesterday_in_progress: null, unplanned: null, today_plans: null, blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+        {
+          id: 3, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-06',
+          submitted_at: new Date(), yesterday_completed: null, yesterday_incomplete: null,
+          yesterday_in_progress: null, unplanned: null, today_plans: null, blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('3 standups submitted this week');
+    });
+
+    it('caps completed items at 10', () => {
+      const completed = Array.from({ length: 15 }, (_, i) => `Task ${i + 1}`);
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: completed,
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: null, blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('…and 5 more');
     });
   });
 });

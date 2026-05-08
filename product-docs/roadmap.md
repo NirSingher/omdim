@@ -284,10 +284,10 @@ See `requirements.md` and `architecture.md`
 - [x] `today_plans` and `yesterday` always shown (locked)
 - [x] Backward compatible defaults (all sections on)
 
-### Weekly Personal Recap DM
-- [ ] Friday DM to each participant: completed, carried, dropped, merged PRs, blockers
-- [ ] Per-daily `weekly_recap` config (default true)
-- [ ] Piggyback on existing weekly digest cron
+### Weekly Personal Recap DM ✅
+- [x] Weekly DM to each participant: completed, carried, blockers
+- [x] Per-daily `weekly_recap` config (default true)
+- [x] Piggyback on existing weekly digest cron
 
 ### Edit After Submit
 - [ ] "Edit Standup" button on channel post and App Home

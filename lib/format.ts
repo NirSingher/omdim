@@ -1458,3 +1458,72 @@ function parseJsonArray(value: string[] | null): string[] {
     return [];
   }
 }
+
+// ============================================================================
+// Weekly Personal Recap
+// ============================================================================
+
+export function formatPersonalWeeklyRecap(
+  dailyName: string,
+  submissions: Submission[]
+): string {
+  if (submissions.length === 0) {
+    return `📊 *Weekly recap — ${dailyName}*\n\nNo standups submitted this week.`;
+  }
+
+  const completed: string[] = [];
+  const carried: string[] = [];
+  const dropped: string[] = [];
+  const blockerTexts: string[] = [];
+
+  for (const sub of submissions) {
+    for (const item of parseJsonArray(sub.yesterday_completed)) {
+      if (!completed.includes(item)) completed.push(item);
+    }
+    for (const item of parseJsonArray(sub.yesterday_incomplete)) {
+      if (!carried.includes(item)) carried.push(item);
+    }
+    // "dropped" aren't stored on the submission — they're in work_items.
+    // Use today_plans that never appeared as completed in later submissions as a proxy:
+    // actually, we can approximate by collecting items from yesterday_in_progress
+    // that were eventually dropped. For v1 just skip "dropped" — it requires cross-referencing
+    // work_items which is out of scope for the simple recap.
+
+    const blocker = sub.blockers?.trim();
+    if (blocker && !blockerTexts.includes(blocker)) {
+      blockerTexts.push(blocker);
+    }
+  }
+
+  const lines: string[] = [`📊 *Weekly recap — ${dailyName}*`];
+  lines.push(`_${submissions.length} standup${submissions.length !== 1 ? 's' : ''} submitted this week_`);
+  lines.push('');
+
+  if (completed.length > 0) {
+    lines.push(`✅ *Completed* (${completed.length})`);
+    for (const item of completed.slice(0, 10)) {
+      lines.push(`  • ${item}`);
+    }
+    if (completed.length > 10) lines.push(`  _…and ${completed.length - 10} more_`);
+    lines.push('');
+  }
+
+  if (carried.length > 0) {
+    lines.push(`➡️ *Still carrying* (${carried.length})`);
+    for (const item of carried.slice(0, 5)) {
+      lines.push(`  • ${item}`);
+    }
+    if (carried.length > 5) lines.push(`  _…and ${carried.length - 5} more_`);
+    lines.push('');
+  }
+
+  if (blockerTexts.length > 0) {
+    lines.push(`🚧 *Blockers reported* (${blockerTexts.length})`);
+    for (const b of blockerTexts.slice(0, 5)) {
+      lines.push(`  • ${b.length > 80 ? b.slice(0, 77) + '...' : b}`);
+    }
+    if (blockerTexts.length > 5) lines.push(`  _…and ${blockerTexts.length - 5} more_`);
+  }
+
+  return lines.join('\n');
+}

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { loadConfigOverrides, getOverride, isDailyEnabled, clearConfigCache, clearOverridesCache, getDailies, getAllDailiesIncludingDisabled, getDailySections } from '../lib/config';
+import { loadConfigOverrides, getOverride, isDailyEnabled, clearConfigCache, clearOverridesCache, getDailies, getAllDailiesIncludingDisabled, getDailySections, getWeeklyRecap } from '../lib/config';
 
 describe('config overrides', () => {
   beforeEach(() => {
@@ -115,5 +115,17 @@ describe('getDailySections', () => {
     const result = getDailySections(daily);
     expect(result.blockers).toBe(false);
     expect(result.unplanned).toBe(true);
+  });
+});
+
+describe('getWeeklyRecap', () => {
+  it('defaults to true when not configured', () => {
+    const daily = { name: 'test', channel: 'C1', schedule: 's' } as any;
+    expect(getWeeklyRecap(daily)).toBe(true);
+  });
+
+  it('returns configured value', () => {
+    const daily = { name: 'test', channel: 'C1', schedule: 's', weekly_recap: false } as any;
+    expect(getWeeklyRecap(daily)).toBe(false);
   });
 });
