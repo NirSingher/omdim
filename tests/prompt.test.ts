@@ -12,12 +12,43 @@ vi.mock('../lib/config', () => ({
   loadConfig: vi.fn(),
   getConfigError: vi.fn(() => null),
   getReminderMinutesBefore: vi.fn(() => 90),
+  getNudgeMinutesBefore: vi.fn(() => 0),
+  getDigestTime: vi.fn(() => '14:00'),
 }));
 
 // Mock slack module (makes API calls)
 vi.mock('../lib/slack', () => ({
   getUserInfo: vi.fn(),
   postMessage: vi.fn(),
+}));
+
+// Mock db module (for nudge cron tests)
+vi.mock('../lib/db', () => ({
+  getAllParticipants: vi.fn(() => Promise.resolve([])),
+  getOrCreatePrompt: vi.fn(),
+  updatePromptSent: vi.fn(),
+  getCachedUser: vi.fn(() => Promise.resolve(null)),
+  upsertCachedUser: vi.fn(),
+  getActiveOOO: vi.fn(() => Promise.resolve(null)),
+  getUnpostedSubmissions: vi.fn(() => Promise.resolve([])),
+  markSubmissionPosted: vi.fn(),
+  markItemsDone: vi.fn(),
+  markItemsDropped: vi.fn(),
+  incrementCarryCount: vi.fn(),
+  markItemsInProgress: vi.fn(),
+  createWorkItems: vi.fn(),
+  getGitHubUsername: vi.fn(() => Promise.resolve(null)),
+  getUsersWithGitHubLinks: vi.fn(() => Promise.resolve([])),
+  wasReminderSent: vi.fn(() => Promise.resolve(false)),
+  recordReminderSent: vi.fn(),
+  getDmStandupPreference: vi.fn(() => Promise.resolve(true)),
+  getMissingSubmissions: vi.fn(() => Promise.resolve([])),
+}));
+
+// Mock format module
+vi.mock('../lib/format', () => ({
+  postStandupToChannel: vi.fn(),
+  sendStandupDM: vi.fn(),
 }));
 
 import {
@@ -29,7 +60,11 @@ import {
   formatDate,
   getMinutesLate,
   formatLatenessPrefix,
+  runNudgeCron,
 } from '../lib/prompt';
+import { getDailies, getSchedule, getConfigError, getNudgeMinutesBefore, getDigestTime } from '../lib/config';
+import { postMessage } from '../lib/slack';
+import { getMissingSubmissions } from '../lib/db';
 
 describe('prompt utilities', () => {
   describe('formatDate', () => {
@@ -297,5 +332,93 @@ describe('prompt utilities', () => {
       expect(formatLatenessPrefix(75)).toBe('1h 15m late · ');
       expect(formatLatenessPrefix(90)).toBe('1h 30m late · ');
     });
+  });
+});
+
+describe('runNudgeCron', () => {
+  const mockDb = {} as any;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(getConfigError).mockReturnValue(null);
+    vi.mocked(getDailies).mockReturnValue([]);
+    vi.mocked(getNudgeMinutesBefore).mockReturnValue(0);
+    vi.mocked(getDigestTime).mockReturnValue('14:00');
+    vi.mocked(getMissingSubmissions).mockResolvedValue([]);
+    vi.mocked(postMessage).mockResolvedValue('ts-123');
+  });
+
+  it('skips when nudge_minutes_before is 0', async () => {
+    vi.mocked(getDailies).mockReturnValue([
+      { name: 'daily-il', channel: 'C1', schedule: 'sched' } as any,
+    ]);
+    vi.mocked(getNudgeMinutesBefore).mockReturnValue(0);
+
+    const result = await runNudgeCron(mockDb, 'xoxb-test');
+    expect(result.skipped).toBeGreaterThan(0);
+    expect(result.sent).toBe(0);
+  });
+
+  it('skips when config has errors', async () => {
+    vi.mocked(getConfigError).mockReturnValue('bad config');
+    const result = await runNudgeCron(mockDb, 'xoxb-test');
+    expect(result.sent).toBe(0);
+  });
+
+  it('sends DMs to users who have not submitted when in nudge window', async () => {
+    // digest at 14:00 UTC, nudge 30 min before = 13:30 UTC
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T13:35:00Z')); // Wednesday 13:35 UTC
+
+    vi.mocked(getDigestTime).mockReturnValue('14:00');
+    vi.mocked(getDailies).mockReturnValue([
+      { name: 'daily-il', channel: 'C1', schedule: 'sched' } as any,
+    ]);
+    vi.mocked(getNudgeMinutesBefore).mockReturnValue(30);
+    vi.mocked(getSchedule).mockReturnValue({
+      name: 'sched',
+      timezone: 'UTC',
+      days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+      default_time: '10:00',
+    } as any);
+    vi.mocked(getMissingSubmissions).mockResolvedValue(['U_ALICE', 'U_BOB']);
+
+    const result = await runNudgeCron(mockDb, 'xoxb-test');
+
+    expect(result.sent).toBe(2);
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenCalledWith(
+      'xoxb-test',
+      'U_ALICE',
+      expect.stringContaining('digest posts in'),
+      expect.any(Array)
+    );
+
+    vi.useRealTimers();
+  });
+
+  it('skips when not in nudge time window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-06T10:00:00Z')); // Wednesday 10:00 UTC — well before 13:30
+
+    vi.mocked(getDigestTime).mockReturnValue('14:00');
+    vi.mocked(getDailies).mockReturnValue([
+      { name: 'daily-il', channel: 'C1', schedule: 'sched' } as any,
+    ]);
+    vi.mocked(getNudgeMinutesBefore).mockReturnValue(30);
+    vi.mocked(getSchedule).mockReturnValue({
+      name: 'sched',
+      timezone: 'UTC',
+      days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+      default_time: '10:00',
+    } as any);
+
+    const result = await runNudgeCron(mockDb, 'xoxb-test');
+
+    expect(result.skipped).toBeGreaterThan(0);
+    expect(result.sent).toBe(0);
+    expect(getMissingSubmissions).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });

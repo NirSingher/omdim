@@ -274,10 +274,10 @@ See `requirements.md` and `architecture.md`
 - [x] Skip self-mentions and non-participants
 - [x] Today-mode only (no DMs for queued/tomorrow submissions)
 
-### Nudge Reminder
-- [ ] Per-daily `nudge_minutes_before` config (0 to disable, default 0)
-- [ ] DM participants who haven't submitted, N minutes before digest time
-- [ ] Respect OOO, paused dailies, non-workdays
+### Nudge Reminder ✅
+- [x] Per-daily `nudge_minutes_before` config (0 to disable, default 0)
+- [x] DM participants who haven't submitted, N minutes before digest time
+- [x] Respect OOO, paused dailies, non-workdays
 
 ### Standup Templates
 - [ ] Per-daily `sections` config: toggle `blockers` and `unplanned` on/off

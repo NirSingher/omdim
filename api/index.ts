@@ -10,7 +10,7 @@ import { computeLinearAlignment, AlignmentResult } from '../lib/linear-intellige
 import { computeGitHubAlignment, GitHubAlignmentResult } from '../lib/github-intelligence';
 import { fetchTeamPRData, TeamPRData, fetchTeamMergedPRs } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
-import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
+import { runPromptCron, runScheduledPosts, runReminderCron, runNudgeCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
@@ -113,6 +113,10 @@ export default {
       // Run reminder cron (send channel reminders before daily standups)
       const reminderStats = await runReminderCron(db, env.SLACK_BOT_TOKEN);
       console.log('Reminder cron complete:', reminderStats);
+
+      // Run nudge cron (DM users who haven't submitted before digest)
+      const nudgeStats = await runNudgeCron(db, env.SLACK_BOT_TOKEN);
+      console.log('Nudge cron complete:', nudgeStats);
 
       // Check if it's time to send digests (based on configured digest_time)
       if (isDigestTime()) {

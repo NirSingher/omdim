@@ -96,6 +96,8 @@ const DailySchema = z.object({
   integrations: IntegrationsSchema.optional(),
   // Reminder: how many minutes before daily to send channel reminder (0 = disabled, default 90)
   reminder_minutes_before: z.number().min(0).optional(),
+  // Nudge: DM participants who haven't submitted N minutes before digest (0 = disabled, default 0)
+  nudge_minutes_before: z.number().min(0).optional(),
   // Per-daily plan-size warning threshold (overrides global max_plan_items)
   max_plan_items: z.number().int().min(0).optional(),
   // Post a consolidated team summary to the daily channel at digest time
@@ -320,6 +322,11 @@ export function getIntegrationStatus(daily: Daily): { github: boolean; linear: b
 /** Get the reminder minutes before daily (defaults to 90, 0 = disabled) */
 export function getReminderMinutesBefore(daily: Daily): number {
   return daily.reminder_minutes_before ?? 90;
+}
+
+/** Get nudge minutes before digest (defaults to 0 = disabled) */
+export function getNudgeMinutesBefore(daily: Daily): number {
+  return daily.nudge_minutes_before ?? 0;
 }
 
 /** Get the digest time (UTC, HH:MM format, defaults to 14:00) */

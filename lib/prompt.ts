@@ -5,8 +5,8 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent, getDmStandupPreference } from './db';
-import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getReminderMinutesBefore } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent, getDmStandupPreference, getMissingSubmissions } from './db';
+import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getReminderMinutesBefore, getNudgeMinutesBefore, getDigestTime } from './config';
 import { getUserInfo, postMessage } from './slack';
 import { postStandupToChannel, sendStandupDM } from './format';
 import { fetchUserPRData, UserPRData } from './github';
@@ -818,5 +818,89 @@ export async function runReminderCron(
   }
 
   console.log(`Reminder cron complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.errors} errors`);
+  return stats;
+}
+
+// ============================================================================
+// Nudge Cron (per-user DM before digest time)
+// ============================================================================
+
+export async function runNudgeCron(
+  db: DbClient,
+  slackToken: string
+): Promise<{ sent: number; skipped: number; errors: number }> {
+  const stats = { sent: 0, skipped: 0, errors: 0 };
+
+  const configErr = getConfigError();
+  if (configErr) {
+    console.error('Nudge cron aborted due to config error:', configErr);
+    return stats;
+  }
+
+  const digestTime = getDigestTime();
+  const [digestHour, digestMinute] = digestTime.split(':').map(Number);
+  const digestUTCMinutes = digestHour * 60 + digestMinute;
+
+  const now = new Date();
+  const nowUTCMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+
+  const dailies = getDailies();
+
+  for (const daily of dailies) {
+    try {
+      const nudgeMinutes = getNudgeMinutesBefore(daily);
+      if (nudgeMinutes === 0) {
+        stats.skipped++;
+        continue;
+      }
+
+      const schedule = getSchedule(daily.schedule);
+      if (!schedule?.timezone) {
+        stats.skipped++;
+        continue;
+      }
+
+      const localNow = getTimeInTimezone(schedule.timezone);
+      if (!isWorkday(schedule.days, localNow)) {
+        stats.skipped++;
+        continue;
+      }
+
+      const nudgeUTCMinutes = digestUTCMinutes - nudgeMinutes;
+      const diff = nowUTCMinutes - nudgeUTCMinutes;
+      if (diff < 0 || diff >= 30) {
+        stats.skipped++;
+        continue;
+      }
+
+      const todayStr = formatDate(localNow);
+      const missing = await getMissingSubmissions(db, daily.name, todayStr);
+      if (missing.length === 0) {
+        stats.skipped++;
+        continue;
+      }
+
+      for (const userId of missing) {
+        try {
+          const blocks = buildPromptBlocks(daily.name, 0);
+          const text = `⏰ The *${daily.name}* digest posts in ~${nudgeMinutes} minutes — don't forget your standup!`;
+          const sent = await postMessage(slackToken, userId, text, blocks);
+          if (sent) {
+            stats.sent++;
+          } else {
+            stats.errors++;
+          }
+        } catch (err) {
+          console.error(`Error sending nudge to ${userId} for ${daily.name}:`, err);
+          stats.errors++;
+        }
+      }
+    } catch (err) {
+      console.error(`Error in nudge cron for ${daily.name}:`, err);
+      stats.errors++;
+    }
+  }
+
+  console.log(`Nudge cron complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.errors} errors`);
   return stats;
 }
