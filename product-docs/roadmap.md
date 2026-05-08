@@ -256,14 +256,14 @@ See `requirements.md` and `architecture.md`
 - [x] Update channel post and refresh App Home after auto-update
 - [x] Gated on `intelligence.auto_update` config per-daily
 
----
-
-## Planned
-
-### GitHub Work Alignment
-- [ ] Compare "today's plans" keywords to commit messages/PR titles
-- [ ] Surface misalignment: "You said X but worked on Y"
-- [ ] Auto-populate yesterday's work from commits
+### GitHub Work Alignment ✅
+- [x] Compare "today's plans" keywords to merged PR titles (keyword overlap matching)
+- [x] Surface misalignment in manager digest: "plans without matching PRs" and "merged PRs unplanned"
+- [x] Auto-populate yesterday's work from merged PRs in standup modal
+- [x] GitHub Search API integration (`is:pr is:merged author:X org:Y`)
+- [x] Config: `intelligence.github.work_alignment` and `auto_populate` per-daily
+- [x] Dedup merged PRs against existing yesterday items by source_ref
+- [x] Cap auto-populated merged PRs at 5 (modal block limit)
 
 ---
 
