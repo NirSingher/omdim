@@ -117,6 +117,24 @@ export function parseUserId(text: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Extract all unique Slack user IDs mentioned in a mrkdwn string.
+ * Matches <@U123> and <@U123|display-name> formats.
+ */
+export function extractMentionedUserIds(text: string): string[] {
+  const pattern = /<@(U[A-Z0-9]+)(?:\|[^>]*)?>/g;
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (!seen.has(match[1])) {
+      seen.add(match[1]);
+      ids.push(match[1]);
+    }
+  }
+  return ids;
+}
+
 // ============================================================================
 // Response Helpers
 // ============================================================================

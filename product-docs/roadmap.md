@@ -267,6 +267,35 @@ See `requirements.md` and `architecture.md`
 
 ---
 
+## Up Next
+
+### Blocker @-Mention Notifications ✅
+- [x] Detect `<@U...>` mentions in blocker text, DM mentioned participants
+- [x] Skip self-mentions and non-participants
+- [x] Today-mode only (no DMs for queued/tomorrow submissions)
+
+### Nudge Reminder
+- [ ] Per-daily `nudge_minutes_before` config (0 to disable, default 0)
+- [ ] DM participants who haven't submitted, N minutes before digest time
+- [ ] Respect OOO, paused dailies, non-workdays
+
+### Standup Templates
+- [ ] Per-daily `sections` config: toggle `blockers` and `unplanned` on/off
+- [ ] `today_plans` and `yesterday` always shown (locked)
+- [ ] Backward compatible defaults (all sections on)
+
+### Weekly Personal Recap DM
+- [ ] Friday DM to each participant: completed, carried, dropped, merged PRs, blockers
+- [ ] Per-daily `weekly_recap` config (default true)
+- [ ] Piggyback on existing weekly digest cron
+
+### Edit After Submit
+- [ ] "Edit Standup" button on channel post and App Home
+- [ ] Reopen modal pre-filled with today's plans/unplanned
+- [ ] Work item reconciliation on re-submit, channel post updated in place
+
+---
+
 ## Later
 
 ### Performance & Scaling

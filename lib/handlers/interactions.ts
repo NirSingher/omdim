@@ -43,7 +43,7 @@ import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearDa
 import { postStandupToChannel, sendStandupDM, formatStandupBlocks, StandupData } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
-import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage } from '../slack';
+import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage, extractMentionedUserIds } from '../slack';
 import { StandupMode } from '../modal';
 
 // ============================================================================
@@ -742,6 +742,24 @@ export async function handleStandupSubmission(
       }
     } catch (error) {
       console.error('Failed to process Linear actions:', error);
+    }
+
+    // Blocker @-mention DMs: notify mentioned participants
+    if (blockers) {
+      try {
+        const mentionedIds = extractMentionedUserIds(blockers);
+        if (mentionedIds.length > 0) {
+          const participants = await getParticipants(ctx.db, dailyName);
+          const participantIds = new Set(participants.map(p => p.slack_user_id));
+          for (const mentionedId of mentionedIds) {
+            if (mentionedId === userId) continue;
+            if (!participantIds.has(mentionedId)) continue;
+            await sendDM(ctx.slackToken, mentionedId, `🚧 <@${userId}> flagged you in a blocker:\n\n_${blockers}_`);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to send blocker mention DMs:', error);
+      }
     }
 
     // Get carry counts for in-progress items (for attention warnings)

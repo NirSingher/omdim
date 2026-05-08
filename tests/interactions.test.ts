@@ -32,6 +32,7 @@ vi.mock('../lib/db', () => ({
   updateWorkItemStatus: vi.fn(() => Promise.resolve(true)),
   addWorkItem: vi.fn(() => Promise.resolve({ id: 1, text: 'New item', status: 'pending' })),
   updateSubmissionArrays: vi.fn(() => Promise.resolve()),
+  getParticipants: vi.fn(() => Promise.resolve([])),
 }));
 
 // Mock the config module
@@ -59,6 +60,7 @@ vi.mock('../lib/slack', () => ({
   parseRichText: vi.fn(() => ''),
   sendDM: vi.fn(),
   updateMessage: vi.fn(() => Promise.resolve(true)),
+  extractMentionedUserIds: vi.fn(() => []),
 }));
 
 // Mock the prompt module
@@ -83,9 +85,11 @@ vi.mock('../lib/handlers/home', () => ({
 }));
 
 import { handleSnoozeBottleneck, handleInteraction, handleOpenStandup, handleStandupSubmission, InteractionPayload, ValidationErrorResponse } from '../lib/handlers/interactions';
-import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts, updateWorkItemStatus, addWorkItem, updateSubmissionArrays, getSubmissionForDate } from '../lib/db';
-import { openModal, sendDM, updateMessage } from '../lib/slack';
-import { getMaxPlanItems } from '../lib/config';
+import { snoozeItem, getPreviousSubmission, saveSubmission, markItemsInProgress, getInProgressCarryCounts, updateWorkItemStatus, addWorkItem, updateSubmissionArrays, getSubmissionForDate, getParticipants } from '../lib/db';
+import { openModal, sendDM, updateMessage, extractMentionedUserIds, parseRichText } from '../lib/slack';
+import { getMaxPlanItems, getDaily, getSchedule, getConfigError } from '../lib/config';
+import { postStandupToChannel } from '../lib/format';
+import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../lib/prompt';
 
 describe('interaction handlers', () => {
   beforeEach(() => {
@@ -1070,6 +1074,100 @@ describe('syncStandupPost — skip conditions (exercised via handleTaskAction)',
       'ts-posted-999',
       expect.any(String),
       expect.any(Array)
+    );
+  });
+});
+
+describe('blocker @-mention DMs', () => {
+  const makeSubmissionPayload = (blockerText: string): InteractionPayload => ({
+    type: 'view_submission',
+    user: { id: 'U_SUBMITTER' },
+    view: {
+      callback_id: 'standup_submission',
+      private_metadata: JSON.stringify({ dailyName: 'daily-il', yesterdayPlans: [], mode: 'today' }),
+      state: {
+        values: {
+          today_plans: { plans_input: { value: 'some plan' } },
+          blockers: { blockers_input: { rich_text_value: {} } },
+        },
+      },
+    },
+  });
+
+  const ctx = {
+    slackToken: 'xoxb-test',
+    db: {},
+    waitUntil: (p: Promise<unknown>) => { p.catch(() => {}); },
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(extractMentionedUserIds).mockReturnValue([]);
+    vi.mocked(parseRichText).mockReturnValue('');
+    vi.mocked(saveSubmission).mockResolvedValue({ id: 1 } as any);
+    vi.mocked(getInProgressCarryCounts).mockResolvedValue({});
+    vi.mocked(getParticipants).mockResolvedValue([]);
+    vi.mocked(getDaily).mockReturnValue({ name: 'daily-il', channel: 'C123', questions: [] } as any);
+    vi.mocked(getSchedule).mockReturnValue({ default_time: '10:00' } as any);
+    vi.mocked(getConfigError).mockReturnValue(null);
+    vi.mocked(getMaxPlanItems).mockReturnValue(0);
+    vi.mocked(formatDate).mockReturnValue('2025-12-22');
+    vi.mocked(getDateInTimezone).mockReturnValue(new Date('2025-12-22T12:00:00'));
+    vi.mocked(getUserDate).mockReturnValue(new Date('2025-12-22T12:00:00'));
+    vi.mocked(getUserTimezone).mockResolvedValue({ tz: 'UTC', tz_offset: 0 } as any);
+    vi.mocked(hasScheduledTimePassed).mockReturnValue(true);
+    vi.mocked(postStandupToChannel).mockResolvedValue(undefined as any);
+  });
+
+  it('sends DM to mentioned participant', async () => {
+    vi.mocked(parseRichText).mockReturnValue('waiting on <@U_OTHER> for review');
+    vi.mocked(extractMentionedUserIds).mockReturnValue(['U_OTHER']);
+    vi.mocked(getParticipants).mockResolvedValue([
+      { slack_user_id: 'U_SUBMITTER' } as any,
+      { slack_user_id: 'U_OTHER' } as any,
+    ]);
+
+    await handleInteraction(makeSubmissionPayload('waiting on <@U_OTHER>'), ctx as any);
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(sendDM).toHaveBeenCalledWith(
+      'xoxb-test',
+      'U_OTHER',
+      expect.stringContaining('flagged you in a blocker')
+    );
+  });
+
+  it('does not DM self-mentions', async () => {
+    vi.mocked(parseRichText).mockReturnValue('I <@U_SUBMITTER> am blocked');
+    vi.mocked(extractMentionedUserIds).mockReturnValue(['U_SUBMITTER']);
+    vi.mocked(getParticipants).mockResolvedValue([
+      { slack_user_id: 'U_SUBMITTER' } as any,
+    ]);
+
+    await handleInteraction(makeSubmissionPayload('I <@U_SUBMITTER> am blocked'), ctx as any);
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(sendDM).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'U_SUBMITTER',
+      expect.stringContaining('flagged you in a blocker')
+    );
+  });
+
+  it('does not DM non-participants', async () => {
+    vi.mocked(parseRichText).mockReturnValue('need <@U_OUTSIDE> to help');
+    vi.mocked(extractMentionedUserIds).mockReturnValue(['U_OUTSIDE']);
+    vi.mocked(getParticipants).mockResolvedValue([
+      { slack_user_id: 'U_SUBMITTER' } as any,
+    ]);
+
+    await handleInteraction(makeSubmissionPayload('need <@U_OUTSIDE>'), ctx as any);
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(sendDM).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'U_OUTSIDE',
+      expect.anything()
     );
   });
 });

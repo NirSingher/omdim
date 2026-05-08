@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseUserId,
+  extractMentionedUserIds,
   parseCommandPayload,
   ephemeralResponse,
   inChannelResponse,
@@ -29,6 +30,32 @@ describe('slack utilities', () => {
 
     it('extracts from text with surrounding content', () => {
       expect(parseUserId('add <@UABCD1234> to team')).toBe('UABCD1234');
+    });
+  });
+
+  describe('extractMentionedUserIds', () => {
+    it('returns empty array for text with no mentions', () => {
+      expect(extractMentionedUserIds('waiting on API review')).toEqual([]);
+    });
+
+    it('returns empty array for empty string', () => {
+      expect(extractMentionedUserIds('')).toEqual([]);
+    });
+
+    it('extracts a single mention', () => {
+      expect(extractMentionedUserIds('blocked by <@U123ABC>')).toEqual(['U123ABC']);
+    });
+
+    it('extracts multiple distinct mentions', () => {
+      expect(extractMentionedUserIds('need <@UAAA> and <@UBBB> to review')).toEqual(['UAAA', 'UBBB']);
+    });
+
+    it('deduplicates repeated mentions', () => {
+      expect(extractMentionedUserIds('<@UAAA> and <@UAAA> again')).toEqual(['UAAA']);
+    });
+
+    it('handles mention with display name suffix', () => {
+      expect(extractMentionedUserIds('<@U123|alice>')).toEqual(['U123']);
     });
   });
 
