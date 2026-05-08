@@ -115,7 +115,8 @@ export function buildStandupModal(
   reviewerMap?: Map<string, string>,
   doneIdentifiers?: Set<string>,
   autoCompletedIds?: Set<string>,
-  mergedPRs?: MergedPR[]
+  mergedPRs?: MergedPR[],
+  sections?: { blockers: boolean; unplanned: boolean }
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -356,30 +357,31 @@ export function buildStandupModal(
     }
 
     // Unplanned completions - grouped with yesterday (both are "what happened")
-    const unplannedYesterdayElement: Record<string, unknown> = {
-      type: 'plain_text_input',
-      action_id: 'unplanned_input',
-      multiline: true,
-      placeholder: {
-        type: 'plain_text',
-        text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
-      },
-    };
-    // Pre-fill if editing existing submission
-    if (prefill?.unplanned && prefill.unplanned.length > 0) {
-      unplannedYesterdayElement.initial_value = prefill.unplanned.join('\n');
+    if (sections?.unplanned ?? true) {
+      const unplannedYesterdayElement: Record<string, unknown> = {
+        type: 'plain_text_input',
+        action_id: 'unplanned_input',
+        multiline: true,
+        placeholder: {
+          type: 'plain_text',
+          text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
+        },
+      };
+      if (prefill?.unplanned && prefill.unplanned.length > 0) {
+        unplannedYesterdayElement.initial_value = prefill.unplanned.join('\n');
+      }
+      blocks.push({
+        type: 'input',
+        block_id: 'unplanned',
+        optional: true,
+        element: unplannedYesterdayElement,
+        label: {
+          type: 'plain_text',
+          text: '✨ Unplanned wins',
+          emoji: true,
+        },
+      });
     }
-    blocks.push({
-      type: 'input',
-      block_id: 'unplanned',
-      optional: true,
-      element: unplannedYesterdayElement,
-      label: {
-        type: 'plain_text',
-        text: '✨ Unplanned wins',
-        emoji: true,
-      },
-    });
 
     blocks.push({ type: 'divider' });
   }
@@ -387,8 +389,11 @@ export function buildStandupModal(
   // Build ordered list of remaining fields (exclude unplanned if already shown above)
   const orderedFields: OrderedField[] = [];
 
+  const showUnplanned = sections?.unplanned ?? true;
+  const showBlockers = sections?.blockers ?? true;
+
   // Only add unplanned to ordered fields if this is first day (wasn't shown above)
-  if (isFirstDay) {
+  if (isFirstDay && showUnplanned) {
     orderedFields.push({ type: 'unplanned', order: order.unplanned });
   }
 
@@ -399,7 +404,9 @@ export function buildStandupModal(
   if (prData && (prData.awaitingReview.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
     orderedFields.push({ type: 'my_prs', order: order.my_prs });
   }
-  orderedFields.push({ type: 'blockers', order: order.blockers });
+  if (showBlockers) {
+    orderedFields.push({ type: 'blockers', order: order.blockers });
+  }
 
   // Add custom questions with their indices
   customQuestions.forEach((question, index) => {
@@ -735,6 +742,7 @@ export function buildStandupModal(
       yesterdayPlans,
       mode,
       targetDate: targetDateStr,
+      ...(sections ? { sections } : {}),
       ...(unmappedReviewerLogins.length > 0 ? { unmappedReviewers: unmappedReviewerLogins } : {}),
       ...(Object.keys(prReviewerTags).length > 0 ? { prReviewerTags } : {}),
   });

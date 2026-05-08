@@ -51,6 +51,7 @@ vi.mock('../lib/config', () => ({
   getLinearUserIdFromConfig: vi.fn(() => null),
   getLinearTeamIdForUser: vi.fn(() => null),
   getMaxPlanItems: vi.fn(() => 0), // Disabled by default in tests
+  getDailySections: vi.fn(() => ({ blockers: true, unplanned: true })),
 }));
 
 // Mock the slack module
@@ -1075,6 +1076,102 @@ describe('syncStandupPost — skip conditions (exercised via handleTaskAction)',
       expect.any(String),
       expect.any(Array)
     );
+  });
+});
+
+describe('standup template sections - submission parsing', () => {
+  const makePayload = (opts: {
+    sections?: { blockers: boolean; unplanned: boolean };
+    blockerRichText?: object;
+    unplannedText?: string;
+  }): InteractionPayload => {
+    const values: Record<string, Record<string, any>> = {
+      today_plans: { plans_input: { value: 'some plan' } },
+    };
+    if (opts.unplannedText) {
+      values.unplanned = { unplanned_input: { value: opts.unplannedText } };
+    }
+    if (opts.blockerRichText) {
+      values.blockers = { blockers_input: { rich_text_value: opts.blockerRichText } };
+    }
+
+    return {
+      type: 'view_submission',
+      trigger_id: 'trigger123',
+      user: { id: 'U12345' },
+      view: {
+        callback_id: 'standup_submission',
+        private_metadata: JSON.stringify({
+          dailyName: 'daily-il',
+          yesterdayPlans: [],
+          mode: 'today',
+          ...(opts.sections ? { sections: opts.sections } : {}),
+        }),
+        state: { values },
+      },
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(saveSubmission).mockResolvedValue({ id: 1 } as any);
+    vi.mocked(getMaxPlanItems).mockReturnValue(0);
+    vi.mocked(parseRichText).mockReturnValue('some blocker text');
+  });
+
+  it('ignores unplanned input when sections.unplanned is false', async () => {
+    const payload = makePayload({
+      sections: { blockers: true, unplanned: false },
+      unplannedText: 'Fixed a bug',
+    });
+
+    await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+    const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
+    expect(saveCall.unplanned).toEqual([]);
+  });
+
+  it('ignores blockers input when sections.blockers is false', async () => {
+    const payload = makePayload({
+      sections: { blockers: false, unplanned: true },
+      blockerRichText: { type: 'rich_text', elements: [] },
+    });
+
+    await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+    const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
+    expect(saveCall.blockers).toBe('');
+  });
+
+  it('parses both when sections are both true', async () => {
+    vi.mocked(parseRichText).mockReturnValue('blocker text');
+
+    const payload = makePayload({
+      sections: { blockers: true, unplanned: true },
+      unplannedText: 'Fixed a bug',
+      blockerRichText: { type: 'rich_text', elements: [] },
+    });
+
+    await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+    const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
+    expect(saveCall.unplanned).toEqual(['Fixed a bug']);
+    expect(saveCall.blockers).toBe('blocker text');
+  });
+
+  it('defaults to parsing both when sections not in metadata', async () => {
+    vi.mocked(parseRichText).mockReturnValue('blocker text');
+
+    const payload = makePayload({
+      unplannedText: 'Fixed a bug',
+      blockerRichText: { type: 'rich_text', elements: [] },
+    });
+
+    await handleStandupSubmission(payload, { db: {} as any, slackToken: 'xoxb-test' });
+
+    const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
+    expect(saveCall.unplanned).toEqual(['Fixed a bug']);
+    expect(saveCall.blockers).toBe('blocker text');
   });
 });
 

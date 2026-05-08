@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { loadConfigOverrides, getOverride, isDailyEnabled, clearConfigCache, clearOverridesCache, getDailies, getAllDailiesIncludingDisabled } from '../lib/config';
+import { loadConfigOverrides, getOverride, isDailyEnabled, clearConfigCache, clearOverridesCache, getDailies, getAllDailiesIncludingDisabled, getDailySections } from '../lib/config';
 
 describe('config overrides', () => {
   beforeEach(() => {
@@ -96,5 +96,24 @@ describe('config overrides', () => {
 
     clearConfigCache();
     expect(getOverride('global', 'test')).toBeUndefined();
+  });
+});
+
+describe('getDailySections', () => {
+  it('defaults both to true when sections not configured', () => {
+    const daily = { name: 'test', channel: 'C1', schedule: 's' } as any;
+    expect(getDailySections(daily)).toEqual({ blockers: true, unplanned: true });
+  });
+
+  it('returns configured values', () => {
+    const daily = { name: 'test', channel: 'C1', schedule: 's', sections: { blockers: false, unplanned: true } } as any;
+    expect(getDailySections(daily)).toEqual({ blockers: false, unplanned: true });
+  });
+
+  it('defaults missing fields to true', () => {
+    const daily = { name: 'test', channel: 'C1', schedule: 's', sections: { blockers: false } } as any;
+    const result = getDailySections(daily);
+    expect(result.blockers).toBe(false);
+    expect(result.unplanned).toBe(true);
   });
 });

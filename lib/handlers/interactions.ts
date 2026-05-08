@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems, isAdmin, getGitHubIntelligenceConfig } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems, isAdmin, getGitHubIntelligenceConfig, getDailySections } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -383,7 +383,8 @@ export async function handleOpenStandup(
   }
 
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds, mergedPRs.length > 0 ? mergedPRs : undefined);
+  const sects = getDailySections(daily);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds, mergedPRs.length > 0 ? mergedPRs : undefined, sects);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -414,6 +415,7 @@ export async function handleStandupSubmission(
     yesterdayPlans?: string[];
     mode?: StandupMode;
     targetDate?: string;
+    sections?: { blockers: boolean; unplanned: boolean };
     unmappedReviewers?: string[];
     prReviewerTags?: Record<string, string>;
   };
@@ -456,10 +458,11 @@ export async function handleStandupSubmission(
     }
   });
 
-  // Parse text inputs
-  const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
+  // Parse text inputs (gate by sections config from metadata)
+  const sectionsCfg = metadata.sections ?? { blockers: true, unplanned: true };
+  const unplanned = sectionsCfg.unplanned ? parseLines(values.unplanned?.unplanned_input?.value) : [];
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
-  const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
+  const blockers = sectionsCfg.blockers ? (parseRichText(values.blockers?.blockers_input?.rich_text_value) || '') : '';
 
   // Parse integration checkbox selections — extract display text and structured source info
   // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers for flat text
@@ -1015,7 +1018,8 @@ export async function handleHomeStartDaily(
     githubResult.reviewerMap,
     doneIdentifiers,
     autoCompletedIds,
-    mergedPRsHome.length > 0 ? mergedPRsHome : undefined
+    mergedPRsHome.length > 0 ? mergedPRsHome : undefined,
+    getDailySections(daily)
   );
 
   return openModal(ctx.slackToken, triggerId, modal);

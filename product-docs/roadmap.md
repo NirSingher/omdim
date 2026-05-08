@@ -279,10 +279,10 @@ See `requirements.md` and `architecture.md`
 - [x] DM participants who haven't submitted, N minutes before digest time
 - [x] Respect OOO, paused dailies, non-workdays
 
-### Standup Templates
-- [ ] Per-daily `sections` config: toggle `blockers` and `unplanned` on/off
-- [ ] `today_plans` and `yesterday` always shown (locked)
-- [ ] Backward compatible defaults (all sections on)
+### Standup Templates ✅
+- [x] Per-daily `sections` config: toggle `blockers` and `unplanned` on/off
+- [x] `today_plans` and `yesterday` always shown (locked)
+- [x] Backward compatible defaults (all sections on)
 
 ### Weekly Personal Recap DM
 - [ ] Friday DM to each participant: completed, carried, dropped, merged PRs, blockers

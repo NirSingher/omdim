@@ -102,6 +102,11 @@ const DailySchema = z.object({
   max_plan_items: z.number().int().min(0).optional(),
   // Post a consolidated team summary to the daily channel at digest time
   team_summary: z.boolean().optional(),
+  // Which built-in sections to show in the standup modal (all default to true)
+  sections: z.object({
+    blockers: z.boolean().default(true),
+    unplanned: z.boolean().default(true),
+  }).optional(),
 });
 
 const ConfigSchema = z.object({
@@ -327,6 +332,14 @@ export function getReminderMinutesBefore(daily: Daily): number {
 /** Get nudge minutes before digest (defaults to 0 = disabled) */
 export function getNudgeMinutesBefore(daily: Daily): number {
   return daily.nudge_minutes_before ?? 0;
+}
+
+/** Get which sections are enabled for a daily (defaults both to true) */
+export function getDailySections(daily: Daily): { blockers: boolean; unplanned: boolean } {
+  return {
+    blockers: daily.sections?.blockers ?? true,
+    unplanned: daily.sections?.unplanned ?? true,
+  };
 }
 
 /** Get the digest time (UTC, HH:MM format, defaults to 14:00) */

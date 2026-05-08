@@ -886,4 +886,94 @@ describe('modal builder', () => {
       expect(warning?.text?.text).toContain('5 items');
     });
   });
+
+  describe('standup template sections', () => {
+    it('hides blockers block when sections.blockers is false', () => {
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: false, unplanned: true }
+      );
+
+      const blockersBlock = modal.blocks.find(b => b.block_id === 'blockers');
+      expect(blockersBlock).toBeUndefined();
+    });
+
+    it('hides unplanned block when sections.unplanned is false (first-time user)', () => {
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: true, unplanned: false }
+      );
+
+      const unplannedBlock = modal.blocks.find(b => b.block_id === 'unplanned');
+      expect(unplannedBlock).toBeUndefined();
+    });
+
+    it('hides unplanned block when sections.unplanned is false (returning user)', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Task A'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: true, unplanned: false }
+      );
+
+      const unplannedBlock = modal.blocks.find(b => b.block_id === 'unplanned');
+      expect(unplannedBlock).toBeUndefined();
+    });
+
+    it('hides both blockers and unplanned when both are false', () => {
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: false, unplanned: false }
+      );
+
+      expect(modal.blocks.find(b => b.block_id === 'blockers')).toBeUndefined();
+      expect(modal.blocks.find(b => b.block_id === 'unplanned')).toBeUndefined();
+    });
+
+    it('shows both by default when sections parameter is undefined', () => {
+      const modal = buildStandupModal('daily-il', null, []);
+
+      expect(modal.blocks.find(b => b.block_id === 'blockers')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'unplanned')).toBeDefined();
+    });
+
+    it('includes sections in private_metadata when provided', () => {
+      const sections = { blockers: false, unplanned: true };
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        sections
+      );
+
+      const metadata = JSON.parse(modal.private_metadata);
+      expect(metadata.sections).toEqual(sections);
+    });
+
+    it('omits sections from private_metadata when not provided', () => {
+      const modal = buildStandupModal('daily-il', null, []);
+
+      const metadata = JSON.parse(modal.private_metadata);
+      expect(metadata.sections).toBeUndefined();
+    });
+
+    it('still shows today_plans and custom questions when sections are disabled', () => {
+      const questions = [{ text: 'How are you?', required: false }];
+      const modal = buildStandupModal(
+        'daily-il', null, questions, undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: false, unplanned: false }
+      );
+
+      expect(modal.blocks.find(b => b.block_id === 'today_plans')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'custom_0')).toBeDefined();
+    });
+  });
 });
