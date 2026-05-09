@@ -1731,11 +1731,14 @@ async function handleTaskAddSubmission(
 
   await addWorkItem(ctx.db, userId, dailyName, text, date, submissionId);
   await updateSubmissionArrays(ctx.db, submissionId, userId, dailyName, date);
-  await refreshHome(userId, ctx);
 
-  const syncPromise = syncStandupPost(ctx.db, ctx.slackToken, userId, dailyName, date)
-    .catch(err => console.error('syncStandupPost failed:', err));
-  ctx.waitUntil?.(syncPromise);
+  // Refresh home and sync post in background so Slack gets a fast 200
+  const bgWork = Promise.all([
+    refreshHome(userId, ctx).catch(err => console.error('refreshHome failed:', err)),
+    syncStandupPost(ctx.db, ctx.slackToken, userId, dailyName, date)
+      .catch(err => console.error('syncStandupPost failed:', err)),
+  ]);
+  ctx.waitUntil?.(bgWork);
 
   return true;
 }
