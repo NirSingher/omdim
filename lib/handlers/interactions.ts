@@ -591,7 +591,8 @@ export async function handleStandupSubmission(
   // Queue if: tomorrow mode OR today mode but before scheduled posting time
   const scheduledTime = scheduleConfig?.default_time || '10:00';
   const isBeforeScheduledTime = !hasScheduledTimePassed(scheduledTime, userDate);
-  const shouldQueue = isTomorrowMode || isBeforeScheduledTime;
+  const devMode = ctx.env?.DEV_MODE === 'true';
+  const shouldQueue = isTomorrowMode || (!devMode && isBeforeScheduledTime);
 
   // Run the heavy work (DB saves, API calls) in the background so Slack
   // gets an immediate 200 response and doesn't show "trouble connecting".

@@ -187,7 +187,7 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
   await loadConfigOverrides(db);
 
   // Handle /daily command separately
-  if (payload.command === '/daily') {
+  if (payload.command === '/daily' || (env.DEV_MODE === 'true' && payload.command === '/dailyl')) {
     const args = payload.text.trim().split(/\s+/).filter(a => a);
     console.log('Command: /daily', { user_id: payload.user_id, args });
 

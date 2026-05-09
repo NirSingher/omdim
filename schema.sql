@@ -94,18 +94,21 @@ CREATE TABLE IF NOT EXISTS reminder_log (
   UNIQUE(daily_name, date)
 );
 
--- Migration for existing databases:
--- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS snoozed_until DATE;
--- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS posted BOOLEAN DEFAULT TRUE;
--- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;
--- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;
--- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS yesterday_in_progress JSONB;
--- ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS dm_standup BOOLEAN DEFAULT TRUE;
--- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
--- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_ref TEXT;
--- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_url TEXT;
--- ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'plan';
--- ALTER TABLE submissions ADD COLUMN IF NOT EXISTS items_normalized BOOLEAN NOT NULL DEFAULT FALSE;
+-- Migrations (safe to re-run: all use IF NOT EXISTS)
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS snoozed_until DATE;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS posted BOOLEAN DEFAULT TRUE;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS yesterday_in_progress JSONB;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS dm_standup BOOLEAN DEFAULT TRUE;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_ref TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'plan';
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS items_normalized BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS max_items INTEGER;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS stale_pr_days INTEGER;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_team_filter TEXT;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (
