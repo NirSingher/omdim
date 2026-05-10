@@ -391,7 +391,7 @@ describe('format utilities', () => {
         questions: [
           { text: 'Early question', order: 5 },
         ],
-        // No fieldOrder - should use defaults (yesterday:10, today:20, blockers:30)
+        // No fieldOrder - should use defaults (today:10, yesterday:20, blockers:30)
       });
 
       const sectionBlocks = blocks.filter(b => b.type === 'section');
@@ -402,9 +402,34 @@ describe('format utilities', () => {
       const yesterdayIdx = sectionBlocks.findIndex(b =>
         b.text?.text?.includes('Yesterday:')
       );
+      const todayIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('Today:')
+      );
 
-      // Question with order 5 should appear before yesterday (default order 10)
+      // Question with order 5 should appear before yesterday (default order 20)
       expect(questionIdx).toBeLessThan(yesterdayIdx);
+      // Today (default order 10) should appear before Yesterday (default order 20)
+      expect(todayIdx).toBeLessThan(yesterdayIdx);
+    });
+
+    it('renders Today section before Yesterday section by default', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['Done task'],
+        yesterdayIncomplete: [],
+        yesterdayDropped: [],
+        unplanned: [],
+        todayPlans: ['New task'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const sectionBlocks = blocks.filter(b => b.type === 'section');
+      const todayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Today:'));
+      const yesterdayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Yesterday:'));
+
+      expect(todayIdx).toBeGreaterThan(-1);
+      expect(yesterdayIdx).toBeGreaterThan(-1);
+      expect(todayIdx).toBeLessThan(yesterdayIdx);
     });
 
     it('includes footer with daily name', () => {

@@ -49,8 +49,8 @@ export interface StandupData {
 
 // Default field order values
 const DEFAULT_FIELD_ORDER = {
-  yesterday: 10,  // Combined completed + unplanned
-  today: 20,      // Combined carried + new plans
+  yesterday: 20,  // Combined completed + unplanned
+  today: 10,      // Combined carried + new plans
   blockers: 30,
 };
 
