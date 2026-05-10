@@ -57,6 +57,7 @@ export interface LinkedAccounts {
   maxItems: number | null;
   stalePrDays: number | null;
   linearTeamFilter: string[] | null;
+  linearSyncBack: boolean;
   oooStatus?: { startDate: string; endDate: string } | null;
 }
 
@@ -391,6 +392,22 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
       },
     });
 
+    // Linear sync-back toggle
+    const syncStatus = linkedAccounts.linearSyncBack ? '✅ On' : '❌ Off';
+    const syncButtonText = linkedAccounts.linearSyncBack ? 'Disable' : 'Enable';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Linear sync-back*\n${syncStatus} — mark tickets in-progress and comment blockers on submit`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: syncButtonText, emoji: true },
+        action_id: 'home_toggle_linear_sync',
+      },
+    });
+
     blocks.push({ type: 'divider' });
   }
 
@@ -705,6 +722,7 @@ export async function handleAppHomeOpened(
       maxItems: settings.maxItems,
       stalePrDays: settings.stalePrDays,
       linearTeamFilter: settings.linearTeamFilter,
+      linearSyncBack: settings.linearSyncBack,
       oooStatus,
     };
 

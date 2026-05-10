@@ -28,6 +28,8 @@ import {
   getRecentlyDoneLinearItems,
   getDmStandupPreference,
   setDmStandupPreference,
+  getLinearSyncBack,
+  setLinearSyncBack,
   updateUserSetting,
   getUserDailies,
   getParticipants,
@@ -720,11 +722,12 @@ export async function handleStandupSubmission(
       console.error('Failed to track work items:', error);
     }
 
-    // Mark selected Linear tickets as "In Progress" and comment blockers
+    // Mark selected Linear tickets as "In Progress" and comment blockers (if sync-back enabled)
     try {
+      const linearSyncEnabled = await getLinearSyncBack(ctx.db, userId);
       const linearConfig = daily ? getLinearConfig(daily) : null;
       const linearToken = linearConfig && ctx.env ? ctx.env[linearConfig.tokenEnvVar] : undefined;
-      if (linearToken) {
+      if (linearToken && linearSyncEnabled) {
         if (linearSelections && linearSelections.length > 0) {
           const teamId = daily ? getLinearTeamIdForUser(daily, userId) : undefined;
           if (teamId) {
@@ -1339,6 +1342,23 @@ export async function handleToggleDmStandup(
   }
 }
 
+export async function handleToggleLinearSync(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+
+  try {
+    const current = await getLinearSyncBack(ctx.db, userId);
+    await setLinearSyncBack(ctx.db, userId, !current);
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to toggle Linear sync-back preference:', error);
+    return false;
+  }
+}
+
 // ============================================================================
 // Settings Handlers
 // ============================================================================
@@ -1804,6 +1824,7 @@ export async function handleInteraction(
     if (actionId === 'home_set_max_items') return handleSetMaxItems(payload, ctx);
     if (actionId === 'home_set_stale_pr_days') return handleSetStalePrDays(payload, ctx);
     if (actionId === 'home_set_linear_teams') return handleSetLinearTeams(payload, ctx);
+    if (actionId === 'home_toggle_linear_sync') return handleToggleLinearSync(payload, ctx);
     if (actionId === 'home_edit_standup') return handleEditStandup(payload, ctx);
     if (actionId === 'task_action') return handleTaskAction(payload, ctx);
     if (actionId === 'task_add') return handleTaskAdd(payload, ctx);

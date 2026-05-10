@@ -28,6 +28,8 @@ vi.mock('../lib/db', () => ({
   getRecentlyDoneLinearItems: vi.fn(() => Promise.resolve([])),
   getDmStandupPreference: vi.fn(() => Promise.resolve(true)),
   setDmStandupPreference: vi.fn(),
+  getLinearSyncBack: vi.fn(() => Promise.resolve(true)),
+  setLinearSyncBack: vi.fn(),
   // New task management functions
   updateWorkItemStatus: vi.fn(() => Promise.resolve(true)),
   addWorkItem: vi.fn(() => Promise.resolve({ id: 1, text: 'New item', status: 'pending' })),
