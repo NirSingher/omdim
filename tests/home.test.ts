@@ -14,7 +14,7 @@ vi.mock('../lib/db', () => ({
   setGitHubUsername: vi.fn(),
   setLinearUserId: vi.fn(),
   getDmStandupPreference: vi.fn(() => Promise.resolve(false)),
-  getUserSettings: vi.fn(() => Promise.resolve({ dmStandup: false, maxItems: null, stalePrDays: null, linearTeamFilter: null })),
+  getUserSettings: vi.fn(() => Promise.resolve({ dmStandup: false, maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true, linearSyncBack: true })),
   getActiveOOO: vi.fn(() => Promise.resolve(null)),
   getActiveWorkItems: vi.fn(() => Promise.resolve([])),
 }));
@@ -58,7 +58,7 @@ import { publishHomeView } from '../lib/slack';
 
 describe('buildHomeView - linked accounts section', () => {
   it('shows Link buttons when accounts are not linked', () => {
-    const linkedAccounts: LinkedAccounts = { github: null, linear: null, dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null };
+    const linkedAccounts: LinkedAccounts = { github: null, linear: null, dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true, linearSyncBack: true };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     // Find linked accounts header
@@ -85,7 +85,7 @@ describe('buildHomeView - linked accounts section', () => {
   });
 
   it('shows Unlink buttons when accounts are linked', () => {
-    const linkedAccounts: LinkedAccounts = { github: 'octocat', linear: 'lin-user-123', dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null };
+    const linkedAccounts: LinkedAccounts = { github: 'octocat', linear: 'lin-user-123', dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true, linearSyncBack: true };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     // Find GitHub linked section
@@ -106,7 +106,7 @@ describe('buildHomeView - linked accounts section', () => {
   });
 
   it('shows mixed state (one linked, one not)', () => {
-    const linkedAccounts: LinkedAccounts = { github: 'myuser', linear: null, dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null };
+    const linkedAccounts: LinkedAccounts = { github: 'myuser', linear: null, dmStandup: true, maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true, linearSyncBack: true };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
     const githubSection = view.blocks.find(
@@ -136,7 +136,7 @@ describe('buildHomeView - Settings section', () => {
   it('shows OOO status with clear button when OOO is active', () => {
     const linkedAccounts: LinkedAccounts = {
       github: null, linear: null, dmStandup: false,
-      maxItems: null, stalePrDays: null, linearTeamFilter: null,
+      maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true,
       oooStatus: { startDate: '2025-12-22', endDate: '2025-12-25' },
     };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
@@ -153,7 +153,7 @@ describe('buildHomeView - Settings section', () => {
   it('shows Set OOO button when not OOO', () => {
     const linkedAccounts: LinkedAccounts = {
       github: null, linear: null, dmStandup: false,
-      maxItems: null, stalePrDays: null, linearTeamFilter: null,
+      maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true,
     };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
@@ -168,7 +168,7 @@ describe('buildHomeView - Settings section', () => {
   it('shows max items setting with current value', () => {
     const linkedAccounts: LinkedAccounts = {
       github: null, linear: null, dmStandup: false,
-      maxItems: 5, stalePrDays: null, linearTeamFilter: null,
+      maxItems: 5, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true,
     };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
@@ -182,7 +182,7 @@ describe('buildHomeView - Settings section', () => {
   it('shows stale PR days with custom value', () => {
     const linkedAccounts: LinkedAccounts = {
       github: null, linear: null, dmStandup: false,
-      maxItems: null, stalePrDays: 7, linearTeamFilter: null,
+      maxItems: null, stalePrDays: 7, linearTeamFilter: null, linearSyncBack: true,
     };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 
@@ -193,10 +193,41 @@ describe('buildHomeView - Settings section', () => {
     expect((stalePrBlock as any).text.text).toContain('7 days');
   });
 
+  it('shows Linear sync-back toggle enabled', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: true,
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const syncBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Linear sync-back')
+    );
+    expect(syncBlock).toBeDefined();
+    expect((syncBlock as any).text.text).toContain('✅ On');
+    expect((syncBlock as any).accessory.text.text).toBe('Disable');
+    expect((syncBlock as any).accessory.action_id).toBe('home_toggle_linear_sync');
+  });
+
+  it('shows Linear sync-back toggle disabled', () => {
+    const linkedAccounts: LinkedAccounts = {
+      github: null, linear: null, dmStandup: false,
+      maxItems: null, stalePrDays: null, linearTeamFilter: null, linearSyncBack: false,
+    };
+    const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
+
+    const syncBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Linear sync-back')
+    );
+    expect(syncBlock).toBeDefined();
+    expect((syncBlock as any).text.text).toContain('❌ Off');
+    expect((syncBlock as any).accessory.text.text).toBe('Enable');
+  });
+
   it('shows Linear team filter', () => {
     const linkedAccounts: LinkedAccounts = {
       github: null, linear: null, dmStandup: false,
-      maxItems: null, stalePrDays: null, linearTeamFilter: ['ENG', 'PLATFORM'],
+      maxItems: null, stalePrDays: null, linearTeamFilter: ['ENG', 'PLATFORM'], linearSyncBack: true,
     };
     const view = buildHomeView([], linkedAccounts) as { blocks: Array<Record<string, unknown>> };
 

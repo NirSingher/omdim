@@ -248,6 +248,7 @@ export interface UserSettings {
   maxItems: number | null;
   stalePrDays: number | null;
   linearTeamFilter: string[] | null;
+  linearSyncBack: boolean;
 }
 
 export async function getUserSettings(
@@ -259,8 +260,9 @@ export async function getUserSettings(
     max_items: number | null;
     stale_pr_days: number | null;
     linear_team_filter: string | null;
+    linear_sync_back: boolean | null;
   }>(
-    `SELECT dm_standup, max_items, stale_pr_days, linear_team_filter
+    `SELECT dm_standup, max_items, stale_pr_days, linear_team_filter, linear_sync_back
      FROM slack_users WHERE slack_user_id = $1`,
     [slackUserId]
   );
@@ -270,7 +272,33 @@ export async function getUserSettings(
     maxItems: row?.max_items ?? null,
     stalePrDays: row?.stale_pr_days ?? null,
     linearTeamFilter: row?.linear_team_filter ? row.linear_team_filter.split(',').map(s => s.trim()) : null,
+    linearSyncBack: row?.linear_sync_back ?? true,
   };
+}
+
+export async function getLinearSyncBack(
+  db: DbClient,
+  slackUserId: string
+): Promise<boolean> {
+  const result = await db.query<{ linear_sync_back: boolean | null }>(
+    `SELECT linear_sync_back FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  return result[0]?.linear_sync_back ?? true;
+}
+
+export async function setLinearSyncBack(
+  db: DbClient,
+  slackUserId: string,
+  enabled: boolean
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, linear_sync_back, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       linear_sync_back = $3`,
+    [slackUserId, enabled, enabled]
+  );
 }
 
 export async function updateUserSetting(

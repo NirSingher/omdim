@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS slack_users (
   max_items INTEGER,               -- Max PRs/Linear tickets shown in modal & post (NULL = no limit)
   stale_pr_days INTEGER,           -- Override stale PR threshold in days (NULL = use default 3)
   linear_team_filter TEXT,         -- Comma-separated Linear team IDs to include (NULL = all)
+  linear_sync_back BOOLEAN DEFAULT TRUE, -- Whether to sync standup actions back to Linear (mark in-progress, comment blockers)
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -109,6 +110,7 @@ ALTER TABLE submissions ADD COLUMN IF NOT EXISTS items_normalized BOOLEAN NOT NU
 ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS max_items INTEGER;
 ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS stale_pr_days INTEGER;
 ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_team_filter TEXT;
+ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_sync_back BOOLEAN DEFAULT TRUE;
 
 -- Out of Office periods
 CREATE TABLE IF NOT EXISTS ooo (
