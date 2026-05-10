@@ -116,7 +116,8 @@ export function buildStandupModal(
   doneIdentifiers?: Set<string>,
   autoCompletedIds?: Set<string>,
   mergedPRs?: MergedPR[],
-  sections?: { blockers: boolean; unplanned: boolean }
+  sections?: { blockers: boolean; unplanned: boolean },
+  expandedSections?: Set<string>
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -253,8 +254,9 @@ export function buildStandupModal(
       }
     });
 
-    // Render grouped items with section labels when there are mixed sources
-    const hasMixedSources = [manualItems, prItems, linearItems].filter(g => g.length > 0).length > 1;
+    // Render grouped items with section labels when there are mixed sources (and enough items to warrant it)
+    const totalYesterdayItems = manualItems.length + prItems.length + linearItems.length;
+    const hasMixedSources = [manualItems, prItems, linearItems].filter(g => g.length > 0).length > 1 && totalYesterdayItems >= 4;
 
     const renderYesterdayItem = (plan: string, index: number) => {
       const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
@@ -465,7 +467,8 @@ export function buildStandupModal(
       case 'today_plans':
         // Integration checkboxes go right above today's plans
         if (linearIssues && linearIssues.length > 0) {
-          const displayIssues = linearIssues.slice(0, 10);
+          const linearLimit = expandedSections?.has('linear') ? 10 : 3;
+          const displayIssues = linearIssues.slice(0, linearLimit);
           const linearOptions = displayIssues.map((issue) => ({
             text: {
               type: 'mrkdwn' as const,
@@ -493,12 +496,15 @@ export function buildStandupModal(
               emoji: true,
             },
           });
-          if (linearIssues.length > 10) {
+          if (linearIssues.length > linearLimit) {
             blocks.push({
-              type: 'context',
+              type: 'actions',
+              block_id: 'linear_show_all',
               elements: [{
-                type: 'mrkdwn',
-                text: `_Showing 10 of ${linearIssues.length} assigned tickets_`,
+                type: 'button',
+                action_id: 'show_all_linear',
+                text: { type: 'plain_text', text: `Show all ${linearIssues.length} tickets`, emoji: true },
+                value: 'expand',
               }],
             });
           }
@@ -536,7 +542,8 @@ export function buildStandupModal(
             type: 'context',
             elements: [{ type: 'mrkdwn', text: '_PRs from teammates that need your review_' }],
           });
-          const reviewPRs = prData.reviewRequests.slice(0, 10);
+          const reviewsLimit = expandedSections?.has('reviews') ? 10 : 3;
+          const reviewPRs = prData.reviewRequests.slice(0, reviewsLimit);
           const reviewOptions = reviewPRs.map((pr) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
@@ -568,12 +575,15 @@ export function buildStandupModal(
               emoji: true,
             },
           });
-          if (prData.reviewRequests.length > 10) {
+          if (prData.reviewRequests.length > reviewsLimit) {
             blocks.push({
-              type: 'context',
+              type: 'actions',
+              block_id: 'reviews_show_all',
               elements: [{
-                type: 'mrkdwn',
-                text: `_Showing 10 of ${prData.reviewRequests.length} review requests_`,
+                type: 'button',
+                action_id: 'show_all_reviews',
+                text: { type: 'plain_text', text: `Show all ${prData.reviewRequests.length} review requests`, emoji: true },
+                value: 'expand',
               }],
             });
           }
@@ -617,7 +627,8 @@ export function buildStandupModal(
             prCategories[`${repo}#${pr.number}`] = 'draft';
             myPRsCategorized.push({ pr, category: 'Draft' });
           }
-          const displayMyPRs = myPRsCategorized.slice(0, 10);
+          const myPRsLimit = expandedSections?.has('my_prs') ? 10 : 3;
+          const displayMyPRs = myPRsCategorized.slice(0, myPRsLimit);
           const myPROptions = displayMyPRs.map(({ pr, category, descSuffix }) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
@@ -651,12 +662,15 @@ export function buildStandupModal(
             },
           });
           const totalMyPRs = prData.awaitingReview.length + prData.readyToMerge.length + prData.draftPRs.length;
-          if (totalMyPRs > 10) {
+          if (totalMyPRs > myPRsLimit) {
             blocks.push({
-              type: 'context',
+              type: 'actions',
+              block_id: 'my_prs_show_all',
               elements: [{
-                type: 'mrkdwn',
-                text: `_Showing 10 of ${totalMyPRs} PRs_`,
+                type: 'button',
+                action_id: 'show_all_my_prs',
+                text: { type: 'plain_text', text: `Show all ${totalMyPRs} PRs`, emoji: true },
+                value: 'expand',
               }],
             });
           }

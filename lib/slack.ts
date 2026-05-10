@@ -303,6 +303,30 @@ export async function openModal(
 }
 
 /**
+ * Update an existing modal dialog
+ */
+export async function updateModal(
+  slackToken: string,
+  viewId: string,
+  view: unknown
+): Promise<boolean> {
+  const response = await fetch('https://slack.com/api/views.update', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${slackToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ view_id: viewId, view }),
+  });
+  const data = await response.json() as { ok: boolean; error?: string };
+  if (!data.ok) {
+    console.error('Failed to update modal:', data.error);
+    return false;
+  }
+  return true;
+}
+
+/**
  * Publish a view to App Home
  */
 export async function publishHomeView(

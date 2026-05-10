@@ -43,7 +43,7 @@ import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearDa
 import { postStandupToChannel, sendStandupDM, formatStandupBlocks, StandupData } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
-import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage, extractMentionedUserIds } from '../slack';
+import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage, extractMentionedUserIds, updateModal } from '../slack';
 import { StandupMode } from '../modal';
 
 // ============================================================================
@@ -73,6 +73,8 @@ export interface InteractionPayload {
   user: { id: string };
   actions?: Array<{ action_id: string; value: string; selected_option?: { value: string } }>;
   view?: {
+    id?: string;
+    hash?: string;
     callback_id: string;
     private_metadata: string;
     state: {
@@ -1783,6 +1785,12 @@ export async function handleInteraction(
     return handleHomeStartDaily(payload, ctx);
   }
 
+  // Handle "Show all" expand buttons in standup modal
+  if (payload.type === 'block_actions') {
+    const actionId = payload.actions?.[0]?.action_id;
+    if (actionId?.startsWith('show_all_')) return handleShowAllInModal(payload, ctx);
+  }
+
   // Handle link/unlink account buttons from App Home
   if (payload.type === 'block_actions') {
     const actionId = payload.actions?.[0]?.action_id;
@@ -1838,6 +1846,66 @@ export async function handleInteraction(
   }
 
   // Unknown interaction type
+  return true;
+}
+
+async function handleShowAllInModal(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const actionId = payload.actions?.[0]?.action_id;
+  if (!actionId || !payload.view?.id) return false;
+
+  const sectionMap: Record<string, string> = {
+    show_all_linear: 'linear',
+    show_all_reviews: 'reviews',
+    show_all_my_prs: 'my_prs',
+  };
+  const section = sectionMap[actionId];
+  if (!section) return false;
+
+  let metadata: { dailyName: string; yesterdayPlans?: string[]; mode?: string; targetDate?: string; sections?: { blockers: boolean; unplanned: boolean } };
+  try {
+    metadata = JSON.parse(payload.view.private_metadata);
+  } catch {
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const daily = getDaily(metadata.dailyName);
+  if (!daily) return false;
+
+  // Re-fetch integration data (same as modal open)
+  const [{ prData, reviewerMap }, linearResult] = await Promise.all([
+    fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchLinearIssuesForUser(daily, userId, ctx),
+  ]);
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const userDate = getUserDate(tzOffset);
+
+  const expandedSections = new Set([section]);
+
+  const modal = buildStandupModal(
+    metadata.dailyName,
+    null,
+    daily.questions || [],
+    daily.field_order,
+    userDate,
+    (metadata.mode as StandupMode) || 'today',
+    undefined,
+    linearResult.issues,
+    prData,
+    reviewerMap,
+    undefined,
+    undefined,
+    undefined,
+    metadata.sections || getDailySections(daily),
+    expandedSections,
+  );
+
+  await updateModal(ctx.slackToken, payload.view.id, modal);
   return true;
 }
 

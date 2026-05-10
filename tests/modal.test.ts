@@ -400,7 +400,7 @@ describe('modal builder', () => {
       expect(option?.text?.text).toContain('...');
     });
 
-    it('limits Linear issues to max 10 checkboxes', () => {
+    it('limits Linear issues to max 3 checkboxes', () => {
       const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
         id: `issue-${i}`,
         identifier: `ENG-${100 + i}`,
@@ -423,10 +423,10 @@ describe('modal builder', () => {
 
       const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
 
-      expect(linearBlock?.element?.options).toHaveLength(10);
+      expect(linearBlock?.element?.options).toHaveLength(3);
     });
 
-    it('shows context message when more than 10 issues available', () => {
+    it('shows Show all button when more than 3 issues available', () => {
       const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
         id: `issue-${i}`,
         identifier: `ENG-${100 + i}`,
@@ -447,12 +447,82 @@ describe('modal builder', () => {
         linearIssues
       );
 
-      const contextBlock = modal.blocks.find(
-        b => b.type === 'context' && b.elements?.[0]?.text?.includes('Showing 10 of')
+      const actionsBlock = modal.blocks.find(
+        b => b.type === 'actions' &&
+          (b.elements as any[])?.some((el: any) => el.action_id === 'show_all_linear')
       );
 
-      expect(contextBlock).toBeDefined();
-      expect(contextBlock?.elements?.[0]?.text).toContain('Showing 10 of 15 assigned tickets');
+      expect(actionsBlock).toBeDefined();
+      const showAllButton = (actionsBlock?.elements as any[])?.find(
+        (el: any) => el.action_id === 'show_all_linear'
+      );
+      expect(showAllButton).toBeDefined();
+    });
+
+    it('does not show Show all button when 3 or fewer linear issues', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 3 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const showAllButton = modal.blocks.find(
+        b => b.type === 'actions' &&
+          (b.elements as any[])?.some((el: any) => el.action_id === 'show_all_linear')
+      );
+      expect(showAllButton).toBeUndefined();
+    });
+
+    it('shows all items when section is in expandedSections', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 5 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new Set(['linear'])
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock?.element?.options).toHaveLength(5);
+
+      const showAllButton = modal.blocks.find(
+        b => b.type === 'actions' &&
+          (b.elements as any[])?.some((el: any) => el.action_id === 'show_all_linear')
+      );
+      expect(showAllButton).toBeUndefined();
     });
 
     it('does not store integration maps in private_metadata (titles extracted from option text on submission)', () => {
@@ -787,6 +857,63 @@ describe('modal builder', () => {
       expect(modal.blocks.find(b => b.block_id === 'yesterday_item_0')).toBeDefined();
       expect(modal.blocks.find(b => b.block_id === 'yesterday_item_1')).toBeDefined();
       expect(modal.blocks.find(b => b.block_id === 'yesterday_item_2')).toBeDefined();
+    });
+
+    it('skips source-group headers when fewer than 4 yesterday items', () => {
+      // 3 items from mixed sources: manual, PR, Linear
+      const yesterday: YesterdayData = {
+        plans: [
+          'Manual task',
+          '[repo#1] PR task',
+          '[ENG-1] Linear task',
+        ],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // No context blocks with group header emoji markers should appear
+      const groupHeaders = modal.blocks.filter(
+        (b: any) =>
+          b.type === 'context' &&
+          b.elements?.[0]?.text &&
+          (b.elements[0].text.includes('✍️') ||
+            b.elements[0].text.includes('📦') ||
+            b.elements[0].text.includes('🎫'))
+      );
+      expect(groupHeaders).toHaveLength(0);
+    });
+
+    it('shows source-group headers when 4 or more mixed-source yesterday items', () => {
+      // 4 items from mixed sources: 2 manual, 1 PR, 1 Linear
+      const yesterday: YesterdayData = {
+        plans: [
+          'Manual task A',
+          'Manual task B',
+          '[repo#1] PR task',
+          '[ENG-1] Linear task',
+        ],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      const groupHeaders = modal.blocks.filter(
+        (b: any) =>
+          b.type === 'context' &&
+          b.elements?.[0]?.text &&
+          (b.elements[0].text.includes('✍️') ||
+            b.elements[0].text.includes('📦') ||
+            b.elements[0].text.includes('🎫'))
+      );
+      expect(groupHeaders.length).toBeGreaterThanOrEqual(2);
+
+      const headerTexts = groupHeaders.map((b: any) => b.elements[0].text);
+      expect(headerTexts.some((t: string) => t.includes('✍️'))).toBe(true);
+      expect(headerTexts.some((t: string) => t.includes('📦'))).toBe(true);
+      expect(headerTexts.some((t: string) => t.includes('🎫'))).toBe(true);
     });
   });
 
