@@ -418,6 +418,7 @@ export async function handleStandupSubmission(
     sections?: { blockers: boolean; unplanned: boolean };
     unmappedReviewers?: string[];
     prReviewerTags?: Record<string, string>;
+    prCategories?: Record<string, string>;
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
@@ -506,12 +507,13 @@ export async function handleStandupSubmission(
   const reviewSelections = values.review_requests?.review_requests_input?.selected_options;
   if (reviewSelections && reviewSelections.length > 0) {
     for (const option of reviewSelections) {
-      const flatText = parseOptionText(option.text?.text || option.value);
-      todayPlans.push(flatText);
+      let planText = parseOptionText(option.text?.text || option.value);
+      planText += ' _(to review)_';
+      todayPlans.push(planText);
       const ref = option.value; // "repo#42"
       const [repo, num] = ref.split('#');
       structuredPlans.push({
-        text: flatText,
+        text: planText,
         source: 'github_pr',
         sourceRef: ref,
         sourceUrl: githubOrg ? `https://github.com/${githubOrg}/${repo}/pull/${num}` : undefined,
@@ -525,6 +527,10 @@ export async function handleStandupSubmission(
       const reviewers = metadata.prReviewerTags?.[option.value];
       if (reviewers) {
         planText += ` — waiting on ${reviewers}`;
+      }
+      const category = metadata.prCategories?.[option.value];
+      if (category) {
+        planText += ` _(${category})_`;
       }
       todayPlans.push(planText);
       const ref = option.value; // "repo#42"

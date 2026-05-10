@@ -424,6 +424,7 @@ export function buildStandupModal(
 
   let unmappedReviewerLogins: string[] = [];
   const prReviewerTags: Record<string, string> = {};
+  const prCategories: Record<string, string> = {};
 
   // Render fields in order
   orderedFields.forEach((field, idx) => {
@@ -600,9 +601,22 @@ export function buildStandupModal(
               const repo = repoMatch?.[1] || 'unknown';
               prReviewerTags[`${repo}#${pr.number}`] = reviewerNames.join(', ');
             }
+            const repoMatchCat = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repoCat = repoMatchCat?.[1] || 'unknown';
+            prCategories[`${repoCat}#${pr.number}`] = 'awaiting review';
           }
-          for (const pr of prData.readyToMerge) myPRsCategorized.push({ pr, category: 'Ready to Merge' });
-          for (const pr of prData.draftPRs) myPRsCategorized.push({ pr, category: 'Draft' });
+          for (const pr of prData.readyToMerge) {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            prCategories[`${repo}#${pr.number}`] = 'ready to merge';
+            myPRsCategorized.push({ pr, category: 'Ready to Merge' });
+          }
+          for (const pr of prData.draftPRs) {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            prCategories[`${repo}#${pr.number}`] = 'draft';
+            myPRsCategorized.push({ pr, category: 'Draft' });
+          }
           const displayMyPRs = myPRsCategorized.slice(0, 10);
           const myPROptions = displayMyPRs.map(({ pr, category, descSuffix }) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
@@ -745,6 +759,7 @@ export function buildStandupModal(
       ...(sections ? { sections } : {}),
       ...(unmappedReviewerLogins.length > 0 ? { unmappedReviewers: unmappedReviewerLogins } : {}),
       ...(Object.keys(prReviewerTags).length > 0 ? { prReviewerTags } : {}),
+      ...(Object.keys(prCategories).length > 0 ? { prCategories } : {}),
   });
   console.log(`private_metadata length: ${metadata.length}`);
 

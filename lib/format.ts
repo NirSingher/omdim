@@ -41,8 +41,6 @@ export interface StandupData {
   customAnswers: Record<string, string>;
   questions?: QuestionConfig[];
   fieldOrder?: FieldOrder;
-  prData?: UserPRData; // GitHub PR data for integration
-  reviewerSlackMap?: Map<string, string>; // GitHub login → Slack user ID
   inProgressCarryCounts?: Record<string, number>; // carry counts for attention warnings
   githubOrg?: string; // GitHub org for building clickable PR links
 }
@@ -195,14 +193,6 @@ export function formatStandupBlocks(
     const block = section.render();
     if (block) {
       blocks.push(block);
-    }
-  }
-
-  // PR section (if data available)
-  if (data.prData) {
-    const prBlock = formatPRSectionBlock(data.prData, data.reviewerSlackMap);
-    if (prBlock) {
-      blocks.push(prBlock);
     }
   }
 

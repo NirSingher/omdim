@@ -5,11 +5,10 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent, getDmStandupPreference, getMissingSubmissions } from './db';
-import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getReminderMinutesBefore, getNudgeMinutesBefore, getDigestTime } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, wasReminderSent, recordReminderSent, getDmStandupPreference, getMissingSubmissions } from './db';
+import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getReminderMinutesBefore, getNudgeMinutesBefore, getDigestTime } from './config';
 import { getUserInfo, postMessage } from './slack';
 import { postStandupToChannel, sendStandupDM } from './format';
-import { fetchUserPRData, UserPRData } from './github';
 
 // ============================================================================
 // User Timezone with Caching
@@ -488,30 +487,6 @@ export async function runScheduledPosts(
 }
 
 /**
- * Build a map from GitHub login (lowercase) → Slack user ID
- * Combines config mappings + DB self-linked accounts (config takes precedence)
- */
-async function buildGitHubUserMap(
-  daily: ReturnType<typeof getDaily>,
-  db: DbClient
-): Promise<Map<string, string>> {
-  if (!daily) return new Map();
-  const map = new Map<string, string>();
-
-  const dbLinks = await getUsersWithGitHubLinks(db);
-  for (const link of dbLinks) {
-    map.set(link.githubUsername.toLowerCase(), link.slackUserId);
-  }
-
-  const configMappings = getGitHubUserMappings(daily);
-  for (const mapping of configMappings) {
-    map.set(mapping.githubUsername.toLowerCase(), mapping.slackUserId);
-  }
-
-  return map;
-}
-
-/**
  * Process a single scheduled submission
  */
 async function processScheduledSubmission(
@@ -576,31 +551,7 @@ async function processScheduledSubmission(
     return Array.isArray(val) ? val : JSON.parse(val as unknown as string);
   };
 
-  // Fetch GitHub PR data if integration is enabled
-  let prData: UserPRData | undefined;
-  let reviewerSlackMap: Map<string, string> | undefined;
   const githubConfig = getGitHubConfig(daily);
-  if (githubConfig && env) {
-    const githubToken = env[githubConfig.tokenEnvVar];
-    if (githubToken) {
-      // Get GitHub username: config mapping takes precedence over DB
-      let githubUsername = getGitHubUsernameFromConfig(daily, userId);
-      if (!githubUsername) {
-        githubUsername = await getGitHubUsername(db, userId);
-      }
-
-      if (githubUsername) {
-        try {
-          [prData, reviewerSlackMap] = await Promise.all([
-            fetchUserPRData(githubToken, githubUsername, githubConfig.org),
-            buildGitHubUserMap(daily, db),
-          ]);
-        } catch (error) {
-          console.error('Failed to fetch PR data for scheduled post:', error);
-        }
-      }
-    }
-  }
 
   const yesterdayInProgress = parseJsonbArray(submission.yesterday_in_progress);
 
@@ -620,8 +571,6 @@ async function processScheduledSubmission(
       customAnswers: submission.custom_answers || {},
       questions: daily.questions,
       fieldOrder: daily.field_order,
-      prData,
-      reviewerSlackMap,
       githubOrg: githubConfig?.org,
     }
   );
@@ -650,8 +599,6 @@ async function processScheduledSubmission(
         customAnswers: submission.custom_answers || {},
         questions: daily.questions,
         fieldOrder: daily.field_order,
-        prData,
-        reviewerSlackMap,
         githubOrg: githubConfig?.org,
       });
     }

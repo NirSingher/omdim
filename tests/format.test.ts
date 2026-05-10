@@ -490,6 +490,27 @@ describe('format utilities', () => {
       expect(todayBlock?.text?.text).toContain('🎯 Ship the feature');
       expect(todayBlock?.text?.text).not.toContain('<http');
     });
+
+    it('shows PR status labels inline in Today section', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayDropped: [],
+        unplanned: [],
+        todayPlans: [
+          '[my-repo#42] Fix auth _(awaiting review)_',
+          '[other-repo#99] Add caching _(to review)_',
+          '[draft-repo#7] WIP feature _(draft)_',
+        ],
+        blockers: '',
+        customAnswers: {},
+        githubOrg: 'thenvoi',
+      });
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today'));
+      expect(todayBlock?.text?.text).toContain('_(awaiting review)_');
+      expect(todayBlock?.text?.text).toContain('_(to review)_');
+      expect(todayBlock?.text?.text).toContain('_(draft)_');
+    });
   });
 
   describe('formatDailyDigest', () => {

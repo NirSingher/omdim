@@ -484,6 +484,34 @@ describe('modal builder', () => {
       expect(metadata.prMap).toBeUndefined();
     });
 
+    it('stores prCategories in private_metadata when authored PRs are present', () => {
+      const prData: UserPRData = {
+        awaitingReview: [{
+          number: 42, title: 'Fix auth', url: 'https://github.com/org/my-repo/pull/42',
+          author: 'me', reviewsNeeded: 1, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false,
+        }],
+        readyToMerge: [{
+          number: 99, title: 'Add caching', url: 'https://github.com/org/other-repo/pull/99',
+          author: 'me', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false,
+        }],
+        draftPRs: [{
+          number: 7, title: 'WIP feature', url: 'https://github.com/org/draft-repo/pull/7',
+          author: 'me', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true,
+        }],
+        reviewRequests: [],
+      };
+
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined, undefined, prData
+      );
+
+      const metadata = JSON.parse(modal.private_metadata);
+      expect(metadata.prCategories).toBeDefined();
+      expect(metadata.prCategories['my-repo#42']).toBe('awaiting review');
+      expect(metadata.prCategories['other-repo#99']).toBe('ready to merge');
+      expect(metadata.prCategories['draft-repo#7']).toBe('draft');
+    });
+
     it('filters out Linear issues that already appear in yesterday plans', () => {
       const yesterday: YesterdayData = {
         plans: ['[ENG-123] Fix authentication bug', 'Write unit tests'],
