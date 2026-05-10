@@ -111,20 +111,20 @@ export function formatStandupBlocks(
   sections.push({
     order: yesterdayOrder,
     render: () => {
-      const yesterdayItems: string[] = [];
-      for (const item of data.yesterdayCompleted) {
-        yesterdayItems.push(`✅ ${enrich(item)}`);
-      }
-      for (const item of data.unplanned) {
-        yesterdayItems.push(`⚡ ${item} _(unplanned)_`);
-      }
-      for (const item of data.yesterdayDropped || []) {
-        yesterdayItems.push(`❌ ${enrich(item)} _(dropped)_`);
-      }
-      if (yesterdayItems.length === 0) return null;
+      const doneCount = data.yesterdayCompleted.length;
+      const unplannedCount = data.unplanned.length;
+      const droppedCount = (data.yesterdayDropped || []).length;
+
+      if (doneCount + unplannedCount + droppedCount === 0) return null;
+
+      const parts: string[] = [];
+      if (doneCount > 0) parts.push(`${doneCount} done`);
+      if (unplannedCount > 0) parts.push(`${unplannedCount} unplanned`);
+      if (droppedCount > 0) parts.push(`${droppedCount} dropped`);
+
       return {
         type: 'section',
-        text: { type: 'mrkdwn', text: '*Yesterday:*\n' + yesterdayItems.join('\n') },
+        text: { type: 'mrkdwn', text: `*Yesterday* — ${parts.join(' · ')}` },
       };
     },
   });

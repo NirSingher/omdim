@@ -54,9 +54,9 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('✅ Finished task A');
-      expect(yesterdayBlock?.text?.text).toContain('✅ Completed task B');
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday'));
+      expect(yesterdayBlock?.text?.text).toContain('*Yesterday*');
+      expect(yesterdayBlock?.text?.text).toContain('2 done');
     });
 
     it('marks unplanned items with unplanned label', () => {
@@ -69,8 +69,8 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('⚡ Fixed urgent bug _(unplanned)_');
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday'));
+      expect(yesterdayBlock?.text?.text).toContain('1 unplanned');
     });
 
     it('marks dropped items with red X in yesterday section', () => {
@@ -84,10 +84,9 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('✅ Finished task');
-      expect(yesterdayBlock?.text?.text).toContain('❌ Cancelled task _(dropped)_');
-      expect(yesterdayBlock?.text?.text).toContain('❌ No longer needed _(dropped)_');
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday'));
+      expect(yesterdayBlock?.text?.text).toContain('1 done');
+      expect(yesterdayBlock?.text?.text).toContain('2 dropped');
     });
 
     it('shows in-progress items with 🔄 emoji in today section', () => {
@@ -298,7 +297,7 @@ describe('format utilities', () => {
 
       const headerIdx = findIndex('submitted their standup');
       const questionStartIdx = findIndex('Question at start');
-      const yesterdayIdx = findIndex('Yesterday:');
+      const yesterdayIdx = findIndex('Yesterday');
       const todayIdx = findIndex('Today:');
       const questionMiddleIdx = findIndex('Question in middle');
       const blockersIdx = findIndex('Blockers:');
@@ -337,7 +336,7 @@ describe('format utilities', () => {
         b.text?.text?.includes("How're you feeling?")
       );
       const yesterdayIdx = sectionBlocks.findIndex(b =>
-        b.text?.text?.includes('Yesterday:')
+        b.text?.text?.includes('Yesterday')
       );
 
       // Question with order 5 should appear before yesterday (order 10)
@@ -400,7 +399,7 @@ describe('format utilities', () => {
         b.text?.text?.includes('Early question')
       );
       const yesterdayIdx = sectionBlocks.findIndex(b =>
-        b.text?.text?.includes('Yesterday:')
+        b.text?.text?.includes('Yesterday')
       );
       const todayIdx = sectionBlocks.findIndex(b =>
         b.text?.text?.includes('Today:')
@@ -425,7 +424,7 @@ describe('format utilities', () => {
 
       const sectionBlocks = blocks.filter(b => b.type === 'section');
       const todayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Today:'));
-      const yesterdayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Yesterday:'));
+      const yesterdayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Yesterday'));
 
       expect(todayIdx).toBeGreaterThan(-1);
       expect(yesterdayIdx).toBeGreaterThan(-1);
@@ -457,9 +456,6 @@ describe('format utilities', () => {
         customAnswers: {},
         githubOrg: 'thenvoi',
       });
-
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('<https://github.com/thenvoi/my-repo/pull/42|📦 my-repo#42>');
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
       expect(todayBlock?.text?.text).toContain('<https://github.com/thenvoi/other-repo/pull/99|📦 other-repo#99>');
