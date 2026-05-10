@@ -85,7 +85,7 @@ export function formatStandupBlocks(
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*<@${userId}>* submitted their standup`,
+      text: `*<@${userId}>*`,
     },
   });
 
@@ -147,9 +147,6 @@ export function formatStandupBlocks(
         todayItems.push(`➡️ ${enrich(item)}`);
       }
       const carryForwardCount = (data.yesterdayInProgress || []).length + data.yesterdayIncomplete.length;
-      if (carryForwardCount > 0 && data.todayPlans.length > 0) {
-        todayItems.push('───');
-      }
       for (const item of data.todayPlans) {
         todayItems.push(`🎯 ${enrich(item)}`);
       }
@@ -195,17 +192,6 @@ export function formatStandupBlocks(
       blocks.push(block);
     }
   }
-
-  // Context footer
-  blocks.push({
-    type: 'context',
-    elements: [
-      {
-        type: 'mrkdwn',
-        text: `_${dailyName} standup_`,
-      },
-    ],
-  });
 
   return blocks;
 }

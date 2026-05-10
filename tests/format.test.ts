@@ -40,8 +40,7 @@ describe('format utilities', () => {
 
       const header = blocks[0];
       expect(header.type).toBe('section');
-      expect(header.text?.text).toContain('<@U12345>');
-      expect(header.text?.text).toContain('submitted their standup');
+      expect(header.text?.text).toBe('*<@U12345>*');
     });
 
     it('formats completed items with checkbox emoji', () => {
@@ -174,7 +173,7 @@ describe('format utilities', () => {
       expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
-    it('adds separator between carried over and new items', () => {
+    it('does not add separator between carried over and new items', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],
         yesterdayIncomplete: ['Carried task'],
@@ -185,7 +184,7 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('───');
+      expect(todayBlock?.text?.text).not.toContain('───');
     });
 
     it('includes blockers section when present', () => {
@@ -297,7 +296,7 @@ describe('format utilities', () => {
       const findIndex = (text: string) =>
         sectionBlocks.findIndex(b => b.text?.text?.includes(text));
 
-      const headerIdx = findIndex('submitted their standup');
+      const headerIdx = findIndex('<@U12345>');
       const questionStartIdx = findIndex('Question at start');
       const yesterdayIdx = findIndex('Yesterday');
       const todayIdx = findIndex('Today:');
@@ -433,7 +432,7 @@ describe('format utilities', () => {
       expect(todayIdx).toBeLessThan(yesterdayIdx);
     });
 
-    it('includes footer with daily name', () => {
+    it('does not include a context footer block', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],
         yesterdayIncomplete: [],
@@ -443,9 +442,8 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const footer = blocks[blocks.length - 1];
-      expect(footer.type).toBe('context');
-      expect(footer.elements?.[0]?.text).toContain('daily-il standup');
+      const contextBlock = blocks.find(b => b.type === 'context');
+      expect(contextBlock).toBeUndefined();
     });
 
     it('enriches PR items with clickable GitHub links', () => {

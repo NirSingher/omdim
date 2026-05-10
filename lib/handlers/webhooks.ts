@@ -306,7 +306,7 @@ async function syncChannelPost(
   };
 
   const blocks = formatStandupBlocks(userId, dailyName, data);
-  const fallbackText = `*<@${userId}>* submitted their standup`;
+  const fallbackText = `*<@${userId}>*`;
 
   await updateMessage(slackToken, daily.channel, submission.slack_message_ts!, fallbackText, blocks);
 }
