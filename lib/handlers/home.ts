@@ -45,6 +45,7 @@ interface DailyStatus {
   submission?: Submission; // Today's submission for stats
   droppedCount?: number; // Items dropped from yesterday
   planItems?: PlanItem[]; // Today's plan items with status
+  tomorrowPlanItems?: PlanItem[]; // Tomorrow's scheduled plan items
   prData?: UserPRData; // GitHub PR data if integration enabled
   linearData?: UserLinearData; // Linear data if integration enabled
 }
@@ -170,62 +171,14 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
 
       // Today's Plans section — always visible when submitted
       if (status.planItems && status.planItems.length > 0) {
-        for (const item of status.planItems) {
-          const sourceTag = item.source ? ` · _${item.source}_` : '';
-          const isActive = item.status === 'planned' || item.status === 'in_progress' || item.status === 'carried';
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*Today*' }],
+        });
 
-          let itemText: string;
-          switch (item.status) {
-            case 'done':
-              itemText = `✅ ~${item.text}~${sourceTag}`;
-              break;
-            case 'in_progress':
-              itemText = `🔄 ${item.text}${sourceTag}`;
-              break;
-            case 'carried':
-              itemText = `➡️ ${item.text} _(carried)_${sourceTag}`;
-              break;
-            case 'dropped':
-              itemText = `❌ ~${item.text}~${sourceTag}`;
-              break;
-            default:
-              itemText = `🎯 ${item.text}${sourceTag}`;
-          }
+        blocks.push(...buildPlanItemBlocks(status.planItems, status.dailyName));
 
-          if (isActive && item.id !== undefined) {
-            // Interactive section with overflow menu for status changes
-            blocks.push({
-              type: 'section',
-              text: { type: 'mrkdwn', text: itemText },
-              accessory: {
-                type: 'overflow',
-                action_id: 'task_action',
-                options: [
-                  {
-                    text: { type: 'plain_text', text: '✅ Done', emoji: true },
-                    value: JSON.stringify({ itemId: item.id, dailyName: status.dailyName, action: 'done' }),
-                  },
-                  {
-                    text: { type: 'plain_text', text: '🔄 In Progress', emoji: true },
-                    value: JSON.stringify({ itemId: item.id, dailyName: status.dailyName, action: 'in_progress' }),
-                  },
-                  {
-                    text: { type: 'plain_text', text: '❌ Drop', emoji: true },
-                    value: JSON.stringify({ itemId: item.id, dailyName: status.dailyName, action: 'drop' }),
-                  },
-                ],
-              },
-            });
-          } else {
-            // Terminal state (done/dropped) or legacy item without an id — plain section
-            blocks.push({
-              type: 'section',
-              text: { type: 'mrkdwn', text: itemText },
-            });
-          }
-        }
-
-        // Action buttons at the end of each daily's task list
+        // Action buttons at the end of today's task list
         blocks.push({
           type: 'actions',
           elements: [
@@ -243,6 +196,16 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
             },
           ],
         });
+      }
+
+      // Tomorrow's scheduled plans
+      if (status.tomorrowPlanItems && status.tomorrowPlanItems.length > 0) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*Tomorrow (scheduled)*' }],
+        });
+
+        blocks.push(...buildPlanItemBlocks(status.tomorrowPlanItems, status.dailyName));
       }
     }
   }
@@ -448,6 +411,64 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
   };
 }
 
+/** Build Slack blocks for a list of plan items (reused for today and tomorrow) */
+function buildPlanItemBlocks(items: PlanItem[], dailyName: string): unknown[] {
+  const blocks: unknown[] = [];
+  for (const item of items) {
+    const sourceTag = item.source ? ` · _${item.source}_` : '';
+    const isActive = item.status === 'planned' || item.status === 'in_progress' || item.status === 'carried';
+
+    let itemText: string;
+    switch (item.status) {
+      case 'done':
+        itemText = `✅ ~${item.text}~${sourceTag}`;
+        break;
+      case 'in_progress':
+        itemText = `🔄 ${item.text}${sourceTag}`;
+        break;
+      case 'carried':
+        itemText = `➡️ ${item.text} _(carried)_${sourceTag}`;
+        break;
+      case 'dropped':
+        itemText = `❌ ~${item.text}~${sourceTag}`;
+        break;
+      default:
+        itemText = `🎯 ${item.text}${sourceTag}`;
+    }
+
+    if (isActive && item.id !== undefined) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: itemText },
+        accessory: {
+          type: 'overflow',
+          action_id: 'task_action',
+          options: [
+            {
+              text: { type: 'plain_text', text: '✅ Done', emoji: true },
+              value: JSON.stringify({ itemId: item.id, dailyName, action: 'done' }),
+            },
+            {
+              text: { type: 'plain_text', text: '🔄 In Progress', emoji: true },
+              value: JSON.stringify({ itemId: item.id, dailyName, action: 'in_progress' }),
+            },
+            {
+              text: { type: 'plain_text', text: '❌ Drop', emoji: true },
+              value: JSON.stringify({ itemId: item.id, dailyName, action: 'drop' }),
+            },
+          ],
+        },
+      });
+    } else {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: itemText },
+      });
+    }
+  }
+  return blocks;
+}
+
 /** Extract source context from a plan item text (e.g., "[LIN-123] ..." → "LIN-123", "[repo#45] ..." → "repo#45") */
 function extractSource(text: string): string | undefined {
   const match = text.match(/^\[([^\]]+)\]\s/);
@@ -511,11 +532,8 @@ export async function handleAppHomeOpened(
       const todaySubmitted = todaySubmission !== null;
 
       // Check tomorrow's scheduled submission
-      let tomorrowScheduled = false;
-      if (todaySubmitted) {
-        const tomorrowSubmission = await getSubmissionForDate(ctx.db, userId, dailyName, tomorrowStr);
-        tomorrowScheduled = tomorrowSubmission !== null && !tomorrowSubmission.posted;
-      }
+      const tomorrowSubmission = await getSubmissionForDate(ctx.db, userId, dailyName, tomorrowStr);
+      const tomorrowScheduled = tomorrowSubmission !== null && !tomorrowSubmission.posted;
 
       // Fetch GitHub PR data if integration is enabled
       let prData: UserPRData | undefined;
@@ -633,6 +651,24 @@ export async function handleAppHomeOpened(
         }
       }
 
+      // Build tomorrow's plan items from scheduled submission
+      let tomorrowPlanItems: PlanItem[] | undefined;
+      if (tomorrowSubmission && !tomorrowSubmission.posted) {
+        tomorrowPlanItems = [];
+        const tomorrowWorkItems = await getActiveWorkItems(ctx.db, userId, dailyName, tomorrowStr);
+
+        if (tomorrowWorkItems.length > 0) {
+          for (const wi of tomorrowWorkItems) {
+            tomorrowPlanItems.push({ id: wi.id, text: wi.text, status: 'planned', source: extractSource(wi.text) });
+          }
+        } else {
+          const tomorrowPlans = parseJsonArray(tomorrowSubmission.today_plans);
+          for (const item of tomorrowPlans) {
+            tomorrowPlanItems.push({ text: item, status: 'planned', source: extractSource(item) });
+          }
+        }
+      }
+
       dailyStatuses.push({
         dailyName,
         todaySubmitted,
@@ -640,6 +676,7 @@ export async function handleAppHomeOpened(
         submission: todaySubmission || undefined,
         droppedCount,
         planItems,
+        tomorrowPlanItems,
         prData,
         linearData,
       });

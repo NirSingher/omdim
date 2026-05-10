@@ -303,6 +303,115 @@ describe('buildHomeView - Today\'s Plans section', () => {
     );
     expect(planBlocks).toHaveLength(0);
   });
+
+  it('shows "Today" label above plan items', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { text: 'Some task', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const todayLabel = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text === '*Today*'
+    );
+    expect(todayLabel).toBeDefined();
+  });
+});
+
+describe('buildHomeView - Tomorrow\'s Plans section', () => {
+  it('shows tomorrow plans with label when tomorrowPlanItems exist', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: true,
+      planItems: [
+        { text: 'Today task', status: 'planned' as const },
+      ],
+      tomorrowPlanItems: [
+        { text: 'Tomorrow task 1', status: 'planned' as const },
+        { text: 'Tomorrow task 2', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const tomorrowLabel = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text === '*Tomorrow (scheduled)*'
+    );
+    expect(tomorrowLabel).toBeDefined();
+
+    const task1 = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Tomorrow task 1')
+    );
+    expect(task1).toBeDefined();
+    expect((task1 as any).text.text).toContain('🎯');
+
+    const task2 = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Tomorrow task 2')
+    );
+    expect(task2).toBeDefined();
+  });
+
+  it('does not show tomorrow section when no tomorrowPlanItems', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: false,
+      planItems: [
+        { text: 'Today task', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const tomorrowLabel = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text === '*Tomorrow (scheduled)*'
+    );
+    expect(tomorrowLabel).toBeUndefined();
+  });
+
+  it('shows tomorrow plans even when today has no plans', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: false,
+      tomorrowScheduled: true,
+      tomorrowPlanItems: [
+        { text: 'Pre-filled task', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const tomorrowLabel = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text === '*Tomorrow (scheduled)*'
+    );
+    expect(tomorrowLabel).toBeDefined();
+
+    const task = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Pre-filled task')
+    );
+    expect(task).toBeDefined();
+  });
+
+  it('tomorrow items with IDs get overflow menus', () => {
+    const dailyStatuses = [{
+      dailyName: 'daily-test',
+      todaySubmitted: true,
+      tomorrowScheduled: true,
+      planItems: [{ text: 'Today', status: 'planned' as const }],
+      tomorrowPlanItems: [
+        { id: 50, text: 'Tomorrow interactive', status: 'planned' as const },
+      ],
+    }];
+    const view = buildHomeView(dailyStatuses) as { blocks: Array<Record<string, unknown>> };
+
+    const block = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Tomorrow interactive')
+    );
+    expect(block).toBeDefined();
+    expect((block as any).accessory?.type).toBe('overflow');
+  });
 });
 
 describe('handleAppHomeOpened - fetches linked accounts', () => {
@@ -520,23 +629,25 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
       { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },
     ]);
     // Today's submission exists
-    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
-      id: 1,
-      slack_user_id: 'U12345',
-      daily_name: 'daily-test',
-      date: '2025-12-22',
-      submitted_at: new Date(),
-      yesterday_completed: ['Done task'],
-      yesterday_incomplete: ['Carried task'],
-      yesterday_in_progress: ['WIP task'],
-      unplanned: null,
-      today_plans: ['New plan'],
-      blockers: null,
-      custom_answers: null,
-      slack_message_ts: null,
-      posted: true,
-      items_normalized: true,
-    });
+    vi.mocked(getSubmissionForDate)
+      .mockResolvedValueOnce({
+        id: 1,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        date: '2025-12-22',
+        submitted_at: new Date(),
+        yesterday_completed: ['Done task'],
+        yesterday_incomplete: ['Carried task'],
+        yesterday_in_progress: ['WIP task'],
+        unplanned: null,
+        today_plans: ['New plan'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: null,
+        posted: true,
+        items_normalized: true,
+      })
+      .mockResolvedValueOnce(null); // No tomorrow submission
     // No previous submission (so no dropped items)
     vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
     // No work_items (triggers JSONB fallback path)
@@ -587,23 +698,25 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
     vi.mocked(getUserDailies).mockResolvedValueOnce([
       { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },
     ]);
-    vi.mocked(getSubmissionForDate).mockResolvedValueOnce({
-      id: 5,
-      slack_user_id: 'U12345',
-      daily_name: 'daily-test',
-      date: '2025-12-22',
-      submitted_at: new Date(),
-      yesterday_completed: [],
-      yesterday_incomplete: [],
-      yesterday_in_progress: [],
-      unplanned: null,
-      today_plans: ['Plan from DB'],
-      blockers: null,
-      custom_answers: null,
-      slack_message_ts: 'ts-abc',
-      posted: true,
-      items_normalized: true,
-    });
+    vi.mocked(getSubmissionForDate)
+      .mockResolvedValueOnce({
+        id: 5,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        date: '2025-12-22',
+        submitted_at: new Date(),
+        yesterday_completed: [],
+        yesterday_incomplete: [],
+        yesterday_in_progress: [],
+        unplanned: null,
+        today_plans: ['Plan from DB'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: 'ts-abc',
+        posted: true,
+        items_normalized: true,
+      })
+      .mockResolvedValueOnce(null); // No tomorrow submission
     vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
     // Return work_items with IDs — triggers primary path
     vi.mocked(getActiveWorkItems).mockResolvedValueOnce([
@@ -652,5 +765,116 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
       (b: any) => b.type === 'actions' && b.elements?.[0]?.action_id === 'task_add'
     );
     expect(addBlock).toBeDefined();
+  });
+
+  it('builds tomorrow plan items from scheduled submission', async () => {
+    vi.mocked(getUserDailies).mockResolvedValueOnce([
+      { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },
+    ]);
+    // Today's submission
+    vi.mocked(getSubmissionForDate)
+      .mockResolvedValueOnce({
+        id: 1,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        date: '2025-12-22',
+        submitted_at: new Date(),
+        yesterday_completed: [],
+        yesterday_incomplete: [],
+        yesterday_in_progress: [],
+        unplanned: null,
+        today_plans: ['Today task'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: 'ts-1',
+        posted: true,
+        items_normalized: true,
+      })
+      // Tomorrow's scheduled submission
+      .mockResolvedValueOnce({
+        id: 2,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        date: '2025-12-23',
+        submitted_at: new Date(),
+        yesterday_completed: [],
+        yesterday_incomplete: [],
+        yesterday_in_progress: [],
+        unplanned: null,
+        today_plans: ['Tomorrow task'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: null,
+        posted: false,
+        items_normalized: false,
+      });
+    vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    // Today's work items
+    vi.mocked(getActiveWorkItems)
+      .mockResolvedValueOnce([{
+        id: 100,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        text: 'Today task',
+        created_date: '2025-12-22',
+        status: 'pending',
+        carry_count: 0,
+        completed_date: null,
+        snoozed_until: null,
+        submission_id: 1,
+        source: 'manual',
+        source_ref: null,
+        source_url: null,
+        item_type: 'plan',
+      }])
+      // Tomorrow's work items
+      .mockResolvedValueOnce([{
+        id: 101,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        text: 'Tomorrow task',
+        created_date: '2025-12-23',
+        status: 'pending',
+        carry_count: 0,
+        completed_date: null,
+        snoozed_until: null,
+        submission_id: 2,
+        source: 'manual',
+        source_ref: null,
+        source_url: null,
+        item_type: 'plan',
+      }]);
+    vi.mocked(publishHomeView).mockResolvedValueOnce(true);
+
+    const event: AppHomeOpenedEvent = { type: 'app_home_opened', user: 'U12345', tab: 'home' };
+    const ctx: HomeContext = { db: {} as any, slackToken: 'xoxb-test' };
+
+    await handleAppHomeOpened(event, ctx);
+
+    const publishCall = vi.mocked(publishHomeView).mock.calls[0];
+    const view = publishCall[2] as { blocks: Array<Record<string, unknown>> };
+
+    // Today label and task
+    const todayLabel = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text === '*Today*'
+    );
+    expect(todayLabel).toBeDefined();
+
+    const todayTask = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Today task')
+    );
+    expect(todayTask).toBeDefined();
+
+    // Tomorrow label and task
+    const tomorrowLabel = view.blocks.find(
+      (b: any) => b.type === 'context' && b.elements?.[0]?.text === '*Tomorrow (scheduled)*'
+    );
+    expect(tomorrowLabel).toBeDefined();
+
+    const tomorrowTask = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Tomorrow task')
+    );
+    expect(tomorrowTask).toBeDefined();
+    expect((tomorrowTask as any).accessory?.type).toBe('overflow');
   });
 });
