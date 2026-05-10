@@ -163,9 +163,14 @@ export function formatStandupBlocks(
     order: blockersOrder,
     render: () => {
       if (!data.blockers || !data.blockers.trim()) return null;
+      const prefixed = data.blockers
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => `🚧 ${line.trim()}`)
+        .join('\n');
       return {
         type: 'section',
-        text: { type: 'mrkdwn', text: `*🚧 Blockers:*\n${data.blockers}` },
+        text: { type: 'mrkdwn', text: prefixed },
       };
     },
   });

@@ -197,8 +197,9 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const blockersBlock = blocks.find(b => b.text?.text?.includes('Blockers'));
-      expect(blockersBlock?.text?.text).toContain('Waiting on API access from <@U99999>');
+      const blockersBlock = blocks.find(b => b.text?.text?.includes('🚧'));
+      expect(blockersBlock).toBeDefined();
+      expect(blockersBlock!.text!.text).toBe('🚧 Waiting on API access from <@U99999>');
     });
 
     it('excludes blockers section when empty', () => {
@@ -213,6 +214,21 @@ describe('format utilities', () => {
 
       const blockersBlock = blocks.find(b => b.text?.text?.includes('Blockers'));
       expect(blockersBlock).toBeUndefined();
+    });
+
+    it('prefixes each blocker line with 🚧 emoji', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayDropped: [],
+        unplanned: [],
+        todayPlans: ['Task A'],
+        blockers: 'Issue A\nIssue B\n\nIssue C',
+        customAnswers: {},
+      });
+      const blockerBlock = blocks.find(b => b.text?.text?.includes('🚧'));
+      expect(blockerBlock).toBeDefined();
+      expect(blockerBlock!.text!.text).toBe('🚧 Issue A\n🚧 Issue B\n🚧 Issue C');
     });
 
     it('includes custom answers', () => {
@@ -301,7 +317,7 @@ describe('format utilities', () => {
       const yesterdayIdx = findIndex('Yesterday');
       const todayIdx = findIndex('Today:');
       const questionMiddleIdx = findIndex('Question in middle');
-      const blockersIdx = findIndex('Blockers:');
+      const blockersIdx = findIndex('🚧');
 
       // Verify order: header, question@5, yesterday@10, today@20, question@25, blockers@30
       expect(headerIdx).toBe(0);
@@ -371,7 +387,7 @@ describe('format utilities', () => {
         b.text?.text?.includes('PRs to review?')
       );
       const blockersIdx = sectionBlocks.findIndex(b =>
-        b.text?.text?.includes('Blockers:')
+        b.text?.text?.includes('🚧')
       );
 
       // Question with order 999 should appear after blockers (order 30)
