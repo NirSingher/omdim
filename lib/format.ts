@@ -136,15 +136,15 @@ export function formatStandupBlocks(
       for (const item of data.yesterdayInProgress || []) {
         const carryCount = data.inProgressCarryCounts?.[item] || 0;
         if (carryCount >= 3) {
-          todayItems.push(`⚠️ ${enrich(item)} _(Day ${carryCount} — needs attention)_`);
+          todayItems.push(`⚠️ ${enrich(item)} _(day ${carryCount})_`);
         } else if (carryCount >= 1) {
-          todayItems.push(`🔄 ${enrich(item)} _(Day ${carryCount})_`);
+          todayItems.push(`🔄 ${enrich(item)} _(day ${carryCount})_`);
         } else {
-          todayItems.push(`🔄 ${enrich(item)} _(in progress)_`);
+          todayItems.push(`🔄 ${enrich(item)}`);
         }
       }
       for (const item of data.yesterdayIncomplete) {
-        todayItems.push(`➡️ ${enrich(item)} _(carried over)_`);
+        todayItems.push(`➡️ ${enrich(item)}`);
       }
       const carryForwardCount = (data.yesterdayInProgress || []).length + data.yesterdayIncomplete.length;
       if (carryForwardCount > 0 && data.todayPlans.length > 0) {

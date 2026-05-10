@@ -101,7 +101,8 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(in progress)_');
+      expect(todayBlock?.text?.text).toContain('🔄 WIP task');
+      expect(todayBlock?.text?.text).not.toContain('_(in progress)_');
       expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
@@ -118,7 +119,7 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(Day 3 — needs attention)_');
+      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(day 3)_');
     });
 
     it('shows 🔄 Day X for in-progress items with carry_count 1-2', () => {
@@ -134,7 +135,7 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(Day 2)_');
+      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(day 2)_');
     });
 
     it('renders in-progress items before carried-over items', () => {
@@ -168,7 +169,8 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('➡️ Ongoing work _(carried over)_');
+      expect(todayBlock?.text?.text).toContain('➡️ Ongoing work');
+      expect(todayBlock?.text?.text).not.toContain('_(carried over)_');
       expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
