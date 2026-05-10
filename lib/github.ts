@@ -42,11 +42,16 @@ interface GitHubSearchItem {
   draft: boolean;
   requested_reviewers?: GitHubUser[];
   repository_url?: string; // e.g., "https://api.github.com/repos/org/repo"
+  pull_request?: {
+    merged_at: string | null;
+  };
 }
 
-interface GitHubReview {
+export interface GitHubReview {
   user: GitHubUser;
   submitted_at: string;
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING';
+  body: string;
 }
 
 interface GitHubSearchResponse {
@@ -153,7 +158,9 @@ export async function fetchApprovedPRs(
 }
 
 /**
- * Fetch PRs where the user is requested as a reviewer
+ * Fetch PRs where the user is requested as a reviewer.
+ * Fetches reviews for each PR and filters out those where the reviewer
+ * has already acted and the ball is back in the author's court.
  */
 export async function fetchReviewRequests(
   token: string,
@@ -182,7 +189,7 @@ export async function fetchReviewRequests(
 
     const data = await response.json() as GitHubSearchResponse;
 
-    return data.items.map((item) => ({
+    const prs: GitHubPR[] = data.items.map((item) => ({
       number: item.number,
       title: item.title,
       url: item.html_url,
@@ -193,6 +200,28 @@ export async function fetchReviewRequests(
       updatedAt: item.updated_at,
       draft: item.draft,
     }));
+
+    if (prs.length === 0) return [];
+
+    // Fetch reviews for all PRs in parallel; fail-open on errors
+    const reviewsMap = new Map<number, GitHubReview[]>();
+    await Promise.all(
+      prs.map(async (pr) => {
+        const repoMatch = pr.url.match(/github\.com\/([^/]+)\/([^/]+)\/pull/);
+        if (!repoMatch) return; // fail-open: no repo info, keep PR
+
+        const [, owner, repo] = repoMatch;
+        try {
+          const reviews = await fetchPRReviews(token, owner, repo, pr.number);
+          reviewsMap.set(pr.number, reviews);
+        } catch (err) {
+          // fail-open: if reviews fetch fails, keep PR visible (don't add to map)
+          console.warn(`Could not fetch reviews for PR #${pr.number}:`, err);
+        }
+      })
+    );
+
+    return filterReviewRequests(prs, reviewsMap, username);
   } catch (error) {
     console.error('Failed to fetch review requests:', error);
     return [];
@@ -248,6 +277,91 @@ export async function fetchAwaitingReviewPRs(
 }
 
 /**
+ * Fetch all reviews for a specific PR
+ */
+export async function fetchPRReviews(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<GitHubReview[]> {
+  const response = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+    {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'omdim-bot',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`GitHub API error fetching reviews for ${owner}/${repo}#${prNumber}: ${response.status} ${errorText}`);
+  }
+
+  return response.json() as Promise<GitHubReview[]>;
+}
+
+/**
+ * Filter review-requested PRs to only those where the reviewer still needs to act.
+ *
+ * Rules (fail-open: when in doubt, keep the PR visible):
+ * - Keep if reviewer has no reviews on this PR (fresh request)
+ * - Hide if reviewer's latest non-PENDING review was submitted at or after pr.updated_at
+ *   (reviewer acted, ball is in the author's court)
+ * - Hide if someone (non-author) submitted APPROVED and no CHANGES_REQUESTED came after it
+ * - PENDING reviews are ignored (not submitted yet)
+ * - Reviews by the PR author are ignored
+ */
+export function filterReviewRequests(
+  prs: GitHubPR[],
+  reviewsMap: Map<number, GitHubReview[]>,
+  username: string
+): GitHubPR[] {
+  return prs.filter((pr) => {
+    const allReviews = reviewsMap.get(pr.number);
+
+    // No review data available — fail-open, keep the PR
+    if (allReviews === undefined) return true;
+
+    // Ignore PENDING and reviews by the PR author
+    const submittedReviews = allReviews.filter(
+      (r) => r.state !== 'PENDING' && r.user.login.toLowerCase() !== pr.author.toLowerCase()
+    );
+
+    // Check if someone already approved and no CHANGES_REQUESTED supersedes it
+    const approvals = submittedReviews
+      .filter((r) => r.state === 'APPROVED')
+      .sort((a, b) => a.submitted_at.localeCompare(b.submitted_at));
+
+    if (approvals.length > 0) {
+      const lastApproval = approvals[approvals.length - 1];
+      const changesRequestedAfterApproval = submittedReviews.some(
+        (r) => r.state === 'CHANGES_REQUESTED' && r.submitted_at > lastApproval.submitted_at
+      );
+      if (!changesRequestedAfterApproval) return false;
+    }
+
+    // Reviewer's own reviews
+    const reviewerReviews = submittedReviews.filter(
+      (r) => r.user.login.toLowerCase() === username.toLowerCase()
+    );
+
+    if (reviewerReviews.length === 0) return true;
+
+    const latestReviewerReview = reviewerReviews[reviewerReviews.length - 1];
+
+    // If reviewer's latest review is at or after PR's last update,
+    // the ball is in the author's court — hide it
+    if (latestReviewerReview.submitted_at >= pr.updatedAt) return false;
+
+    return true;
+  });
+}
+
+/**
  * Fetch PRs where the user previously reviewed but new updates were pushed since.
  * These PRs no longer have the user in review-requested (author didn't re-request),
  * but the PR was updated after the user's last review — likely needs re-review.
@@ -284,27 +398,14 @@ export async function fetchPRsNeedingReReview(
 
     // For each PR, check if it was updated after the user's last review
     const prChecks = data.items.map(async (item): Promise<GitHubPR | null> => {
-      // Extract owner/repo from repository_url or html_url
+      // Extract owner/repo from html_url
       const repoMatch = item.html_url.match(/github\.com\/([^/]+)\/([^/]+)\/pull/);
       if (!repoMatch) return null;
 
       const [, owner, repo] = repoMatch;
 
       try {
-        const reviewsResponse = await fetch(
-          `https://api.github.com/repos/${owner}/${repo}/pulls/${item.number}/reviews`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'omdim-bot',
-            },
-          }
-        );
-
-        if (!reviewsResponse.ok) return null;
-
-        const reviews = await reviewsResponse.json() as GitHubReview[];
+        const reviews = await fetchPRReviews(token, owner, repo, item.number);
 
         // Find the user's latest review
         const userReviews = reviews.filter(
@@ -409,6 +510,108 @@ export async function fetchTeamPRData(
           slackUserId: user.slackUserId,
           githubUsername: user.githubUsername,
           data,
+        };
+      })
+    );
+
+    results.push(...batchResults);
+  }
+
+  return results;
+}
+
+// ============================================================================
+// Merged PR Fetching
+// ============================================================================
+
+export interface MergedPR {
+  number: number;
+  title: string;
+  repo: string;
+  url: string;
+  mergedAt: string;
+}
+
+/**
+ * Fetch PRs merged by a user in an org since a given date
+ */
+export async function fetchMergedPRs(
+  token: string,
+  username: string,
+  org: string,
+  since: string // ISO date string, e.g. "2026-05-07"
+): Promise<MergedPR[]> {
+  const query = `is:pr is:merged author:${username} org:${org} merged:>${since}`;
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&sort=updated&order=desc&per_page=100`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'omdim-bot',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`GitHub API error for merged PRs (${username}): ${response.status} ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json() as GitHubSearchResponse;
+
+    return data.items.map((item) => {
+      // Extract repo name from repository_url: "https://api.github.com/repos/{org}/{repo}"
+      const repoParts = (item.repository_url || '').split('/');
+      const repo = repoParts[repoParts.length - 1] || '';
+
+      return {
+        number: item.number,
+        title: item.title,
+        repo,
+        url: item.html_url,
+        mergedAt: item.pull_request?.merged_at || '',
+      };
+    });
+  } catch (error) {
+    console.error(`Failed to fetch merged PRs for ${username}:`, error);
+    return [];
+  }
+}
+
+export interface TeamMergedPRData {
+  slackUserId: string;
+  githubUsername: string;
+  mergedPRs: MergedPR[];
+}
+
+/**
+ * Fetch merged PRs for multiple users in an org since a given date
+ * Uses batching to avoid rate limits
+ */
+export async function fetchTeamMergedPRs(
+  token: string,
+  org: string,
+  users: Array<{ slackUserId: string; githubUsername: string }>,
+  since: string
+): Promise<TeamMergedPRData[]> {
+  const results: TeamMergedPRData[] = [];
+
+  // Process in batches of 5 to avoid rate limits
+  const batchSize = 5;
+  for (let i = 0; i < users.length; i += batchSize) {
+    const batch = users.slice(i, i + batchSize);
+
+    const batchResults = await Promise.all(
+      batch.map(async (user) => {
+        const mergedPRs = await fetchMergedPRs(token, user.githubUsername, org, since);
+        return {
+          slackUserId: user.slackUserId,
+          githubUsername: user.githubUsername,
+          mergedPRs,
         };
       })
     );

@@ -45,18 +45,33 @@ const IntegrationUserMappingSchema = z.object({
   team_id: z.string().optional(), // Per-user Linear team ID override
 });
 
+const GitHubIntelligenceSchema = z.object({
+  enabled: z.boolean().default(false),
+  work_alignment: z.boolean().default(true),
+  auto_populate: z.boolean().default(true),
+}).optional();
+
 const GitHubIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
   org: z.string().optional(),
   token: z.string().optional(), // Optional: env var name for token (defaults to GITHUB_TOKEN)
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
+  intelligence: GitHubIntelligenceSchema,
 });
+
+const LinearIntelligenceSchema = z.object({
+  enabled: z.boolean().default(false),
+  cross_reference: z.boolean().default(true),
+  auto_update: z.boolean().default(true),
+  priority_alignment: z.boolean().default(true),
+}).optional();
 
 const LinearIntegrationSchema = z.object({
   enabled: z.boolean().default(false),
   team_id: z.string().optional(),
   token: z.string().optional(), // Optional: env var name for token (defaults to LINEAR_API_KEY)
   user_mapping: z.array(IntegrationUserMappingSchema).optional(),
+  intelligence: LinearIntelligenceSchema,
 });
 
 const IntegrationsSchema = z.object({
@@ -81,6 +96,19 @@ const DailySchema = z.object({
   integrations: IntegrationsSchema.optional(),
   // Reminder: how many minutes before daily to send channel reminder (0 = disabled, default 90)
   reminder_minutes_before: z.number().min(0).optional(),
+  // Nudge: DM participants who haven't submitted N minutes before digest (0 = disabled, default 0)
+  nudge_minutes_before: z.number().min(0).optional(),
+  // Per-daily plan-size warning threshold (overrides global max_plan_items)
+  max_plan_items: z.number().int().min(0).optional(),
+  // Post a consolidated team summary to the daily channel at digest time
+  team_summary: z.boolean().optional(),
+  // Which built-in sections to show in the standup modal (all default to true)
+  sections: z.object({
+    blockers: z.boolean().default(true),
+    unplanned: z.boolean().default(true),
+  }).optional(),
+  // Send personal weekly recap DM to each participant on weekly digest day (default true)
+  weekly_recap: z.boolean().optional(),
 });
 
 const ConfigSchema = z.object({
@@ -89,6 +117,8 @@ const ConfigSchema = z.object({
   admins: z.array(z.string()).min(1, 'Must have at least one admin'),
   // Global digest time (UTC) - defaults to 14:00
   digest_time: z.string().regex(/^\d{2}:\d{2}$/, 'Must be in HH:MM format').optional(),
+  // Plan-size soft warning threshold. 0 disables the warning. Defaults to 5.
+  max_plan_items: z.number().int().min(0).optional(),
 });
 
 // ============================================================================
@@ -110,6 +140,41 @@ const EMPTY_CONFIG: Config = {
   schedules: [],
   admins: [],
 };
+
+// ============================================================================
+// Config Overrides (DB-backed, takes precedence over YAML)
+// ============================================================================
+
+let overridesCache: Map<string, unknown> | null = null;
+
+function overrideKey(scope: string, key: string): string {
+  return `${scope}::${key}`;
+}
+
+export async function loadConfigOverrides(db: { query: <T>(sql: string, params?: unknown[]) => Promise<T[]> }): Promise<void> {
+  const rows = await db.query<{ scope: string; key: string; value: unknown }>(
+    `SELECT scope, key, value FROM config_overrides`
+  );
+  overridesCache = new Map();
+  for (const row of rows) {
+    overridesCache.set(overrideKey(row.scope, row.key), row.value);
+  }
+}
+
+export function getOverride<T = unknown>(scope: string, key: string): T | undefined {
+  if (!overridesCache) return undefined;
+  return overridesCache.get(overrideKey(scope, key)) as T | undefined;
+}
+
+export function isDailyEnabled(dailyName: string): boolean {
+  const override = getOverride<boolean>(dailyName, 'enabled');
+  if (override !== undefined) return override;
+  return true;
+}
+
+export function clearOverridesCache(): void {
+  overridesCache = null;
+}
 
 // ============================================================================
 // Config Loading
@@ -190,12 +255,28 @@ export function getSchedule(name: string): Schedule | undefined {
   return config.schedules.find((s) => s.name === name);
 }
 
-export function isAdmin(userId: string): boolean {
+export function isSuperAdmin(userId: string): boolean {
   const config = loadConfig();
   return config.admins.includes(userId);
 }
 
+export function isAdmin(userId: string): boolean {
+  if (isSuperAdmin(userId)) return true;
+  const dbAdmins = getOverride<string[]>('global', 'admins');
+  return dbAdmins?.includes(userId) ?? false;
+}
+
+export function getAdmins(): { superAdmins: string[]; dbAdmins: string[] } {
+  const config = loadConfig();
+  const dbAdmins = getOverride<string[]>('global', 'admins') ?? [];
+  return { superAdmins: config.admins, dbAdmins };
+}
+
 export function getDailies(): Daily[] {
+  return loadConfig().dailies.filter(d => isDailyEnabled(d.name));
+}
+
+export function getAllDailiesIncludingDisabled(): Daily[] {
   return loadConfig().dailies;
 }
 
@@ -203,17 +284,16 @@ export function getSchedules(): Schedule[] {
   return loadConfig().schedules;
 }
 
-/** Get all managers for a daily (supports both legacy single manager and new managers array) */
+/** Get all managers for a daily (YAML + DB, deduplicated) */
 export function getDailyManagers(daily: Daily): string[] {
-  // New format takes precedence
+  const yamlManagers: string[] = [];
   if (daily.managers && daily.managers.length > 0) {
-    return daily.managers;
+    yamlManagers.push(...daily.managers);
+  } else if (daily.manager) {
+    yamlManagers.push(daily.manager);
   }
-  // Fallback to legacy single manager
-  if (daily.manager) {
-    return [daily.manager];
-  }
-  return [];
+  const dbManagers = getOverride<string[]>(daily.name, 'managers') ?? [];
+  return [...new Set([...yamlManagers, ...dbManagers])];
 }
 
 /** Get all dailies that have at least one manager configured */
@@ -251,15 +331,44 @@ export function getReminderMinutesBefore(daily: Daily): number {
   return daily.reminder_minutes_before ?? 90;
 }
 
+/** Get nudge minutes before digest (defaults to 0 = disabled) */
+export function getNudgeMinutesBefore(daily: Daily): number {
+  return daily.nudge_minutes_before ?? 0;
+}
+
+/** Get which sections are enabled for a daily (defaults both to true) */
+export function getDailySections(daily: Daily): { blockers: boolean; unplanned: boolean } {
+  return {
+    blockers: daily.sections?.blockers ?? true,
+    unplanned: daily.sections?.unplanned ?? true,
+  };
+}
+
+/** Whether to send weekly recap DMs to participants (default true) */
+export function getWeeklyRecap(daily: Daily): boolean {
+  return daily.weekly_recap ?? true;
+}
+
 /** Get the digest time (UTC, HH:MM format, defaults to 14:00) */
 export function getDigestTime(): string {
   return loadConfig().digest_time || '14:00';
 }
 
-// Clear cache (useful for testing or hot reload)
+/** Plan-size soft-warning threshold (0 = disabled, default 5). Per-daily overrides global. */
+export function getMaxPlanItems(dailyName?: string): number {
+  const config = loadConfig();
+  if (dailyName) {
+    const daily = config.dailies.find(d => d.name === dailyName);
+    if (daily?.max_plan_items !== undefined) return daily.max_plan_items;
+  }
+  return config.max_plan_items ?? 5;
+}
+
+// Clear all caches (useful for testing or hot reload)
 export function clearConfigCache(): void {
   cachedConfig = null;
   configError = null;
+  overridesCache = null;
 }
 
 // ============================================================================
@@ -355,6 +464,42 @@ export function getLinearUserIdFromConfig(daily: Daily, slackUserId: string): st
 
   const match = mapping.find((m) => m.slack_user_id === slackUserId);
   return match?.external_username || null;
+}
+
+export interface LinearIntelligenceConfig {
+  enabled: boolean;
+  cross_reference: boolean;
+  auto_update: boolean;
+  priority_alignment: boolean;
+}
+
+/** Get Linear intelligence config for a daily, returns null if not enabled */
+export function getLinearIntelligenceConfig(daily: Daily): LinearIntelligenceConfig | null {
+  const intel = daily.integrations?.linear?.intelligence;
+  if (!intel?.enabled) return null;
+  return {
+    enabled: true,
+    cross_reference: intel.cross_reference ?? true,
+    auto_update: intel.auto_update ?? true,
+    priority_alignment: intel.priority_alignment ?? true,
+  };
+}
+
+export interface GitHubIntelligenceConfig {
+  enabled: boolean;
+  work_alignment: boolean;
+  auto_populate: boolean;
+}
+
+/** Get GitHub intelligence config for a daily, returns null if not enabled */
+export function getGitHubIntelligenceConfig(daily: Daily): GitHubIntelligenceConfig | null {
+  const intel = daily.integrations?.github?.intelligence;
+  if (!intel?.enabled) return null;
+  return {
+    enabled: true,
+    work_alignment: intel.work_alignment ?? true,
+    auto_populate: intel.auto_populate ?? true,
+  };
 }
 
 /** Get all Linear user mappings for a daily */

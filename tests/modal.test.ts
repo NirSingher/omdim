@@ -9,6 +9,7 @@ vi.mock('../lib/config', () => ({
   getSchedule: vi.fn(),
   getDaily: vi.fn(),
   loadConfig: vi.fn(),
+  getMaxPlanItems: vi.fn(() => 5),
 }));
 
 // Mock slack module
@@ -399,7 +400,7 @@ describe('modal builder', () => {
       expect(option?.text?.text).toContain('...');
     });
 
-    it('limits Linear issues to max 10 checkboxes', () => {
+    it('limits Linear issues to max 3 checkboxes', () => {
       const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
         id: `issue-${i}`,
         identifier: `ENG-${100 + i}`,
@@ -422,10 +423,10 @@ describe('modal builder', () => {
 
       const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
 
-      expect(linearBlock?.element?.options).toHaveLength(10);
+      expect(linearBlock?.element?.options).toHaveLength(3);
     });
 
-    it('shows context message when more than 10 issues available', () => {
+    it('shows Show all button when more than 3 issues available', () => {
       const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
         id: `issue-${i}`,
         identifier: `ENG-${100 + i}`,
@@ -446,12 +447,82 @@ describe('modal builder', () => {
         linearIssues
       );
 
-      const contextBlock = modal.blocks.find(
-        b => b.type === 'context' && b.elements?.[0]?.text?.includes('Showing 10 of')
+      const actionsBlock = modal.blocks.find(
+        b => b.type === 'actions' &&
+          (b.elements as any[])?.some((el: any) => el.action_id === 'show_all_linear')
       );
 
-      expect(contextBlock).toBeDefined();
-      expect(contextBlock?.elements?.[0]?.text).toContain('Showing 10 of 15 assigned tickets');
+      expect(actionsBlock).toBeDefined();
+      const showAllButton = (actionsBlock?.elements as any[])?.find(
+        (el: any) => el.action_id === 'show_all_linear'
+      );
+      expect(showAllButton).toBeDefined();
+    });
+
+    it('does not show Show all button when 3 or fewer linear issues', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 3 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const showAllButton = modal.blocks.find(
+        b => b.type === 'actions' &&
+          (b.elements as any[])?.some((el: any) => el.action_id === 'show_all_linear')
+      );
+      expect(showAllButton).toBeUndefined();
+    });
+
+    it('shows all items when section is in expandedSections', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 5 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new Set(['linear'])
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock?.element?.options).toHaveLength(5);
+
+      const showAllButton = modal.blocks.find(
+        b => b.type === 'actions' &&
+          (b.elements as any[])?.some((el: any) => el.action_id === 'show_all_linear')
+      );
+      expect(showAllButton).toBeUndefined();
     });
 
     it('does not store integration maps in private_metadata (titles extracted from option text on submission)', () => {
@@ -481,6 +552,34 @@ describe('modal builder', () => {
 
       expect(metadata.linearIssueMap).toBeUndefined();
       expect(metadata.prMap).toBeUndefined();
+    });
+
+    it('stores prCategories in private_metadata when authored PRs are present', () => {
+      const prData: UserPRData = {
+        awaitingReview: [{
+          number: 42, title: 'Fix auth', url: 'https://github.com/org/my-repo/pull/42',
+          author: 'me', reviewsNeeded: 1, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false,
+        }],
+        readyToMerge: [{
+          number: 99, title: 'Add caching', url: 'https://github.com/org/other-repo/pull/99',
+          author: 'me', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: false,
+        }],
+        draftPRs: [{
+          number: 7, title: 'WIP feature', url: 'https://github.com/org/draft-repo/pull/7',
+          author: 'me', reviewsNeeded: 0, requestedReviewers: [], createdAt: '', updatedAt: '', draft: true,
+        }],
+        reviewRequests: [],
+      };
+
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined, undefined, prData
+      );
+
+      const metadata = JSON.parse(modal.private_metadata);
+      expect(metadata.prCategories).toBeDefined();
+      expect(metadata.prCategories['my-repo#42']).toBe('awaiting review');
+      expect(metadata.prCategories['other-repo#99']).toBe('ready to merge');
+      expect(metadata.prCategories['draft-repo#7']).toBe('draft');
     });
 
     it('filters out Linear issues that already appear in yesterday plans', () => {
@@ -698,6 +797,338 @@ describe('modal builder', () => {
       const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
 
       expect(linearBlock).toBeUndefined();
+    });
+  });
+
+  describe('yesterday items grouping by source', () => {
+    it('groups items by source when mixed (manual, PR, Linear)', () => {
+      const yesterday: YesterdayData = {
+        plans: [
+          'Manual task',
+          '[repo#42] Fix typo',
+          '[ENG-123] Auth refactor',
+          'Another manual task',
+        ],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // Should have group header context blocks when mixed
+      const contextBlocks = modal.blocks.filter(
+        (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('items')
+      );
+      expect(contextBlocks.length).toBe(3); // Manual, PR, Linear
+
+      // Verify headers exist
+      const headers = contextBlocks.map((b: any) => b.elements[0].text);
+      expect(headers).toContain('*✍️ Manual items*');
+      expect(headers).toContain('*📦 PR items*');
+      expect(headers).toContain('*🎫 Linear items*');
+    });
+
+    it('does not show group headers when all items are from one source', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Task A', 'Task B', 'Task C'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // Should NOT have source group headers
+      const groupHeaders = modal.blocks.filter(
+        (b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('items*')
+      );
+      expect(groupHeaders).toHaveLength(0);
+    });
+
+    it('preserves dropdown indices across groups', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Manual task', '[repo#42] PR task', '[ENG-123] Linear task'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // All three items should have their original indices
+      expect(modal.blocks.find(b => b.block_id === 'yesterday_item_0')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'yesterday_item_1')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'yesterday_item_2')).toBeDefined();
+    });
+
+    it('skips source-group headers when fewer than 4 yesterday items', () => {
+      // 3 items from mixed sources: manual, PR, Linear
+      const yesterday: YesterdayData = {
+        plans: [
+          'Manual task',
+          '[repo#1] PR task',
+          '[ENG-1] Linear task',
+        ],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      // No context blocks with group header emoji markers should appear
+      const groupHeaders = modal.blocks.filter(
+        (b: any) =>
+          b.type === 'context' &&
+          b.elements?.[0]?.text &&
+          (b.elements[0].text.includes('✍️') ||
+            b.elements[0].text.includes('📦') ||
+            b.elements[0].text.includes('🎫'))
+      );
+      expect(groupHeaders).toHaveLength(0);
+    });
+
+    it('shows source-group headers when 4 or more mixed-source yesterday items', () => {
+      // 4 items from mixed sources: 2 manual, 1 PR, 1 Linear
+      const yesterday: YesterdayData = {
+        plans: [
+          'Manual task A',
+          'Manual task B',
+          '[repo#1] PR task',
+          '[ENG-1] Linear task',
+        ],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      const groupHeaders = modal.blocks.filter(
+        (b: any) =>
+          b.type === 'context' &&
+          b.elements?.[0]?.text &&
+          (b.elements[0].text.includes('✍️') ||
+            b.elements[0].text.includes('📦') ||
+            b.elements[0].text.includes('🎫'))
+      );
+      expect(groupHeaders.length).toBeGreaterThanOrEqual(2);
+
+      const headerTexts = groupHeaders.map((b: any) => b.elements[0].text);
+      expect(headerTexts.some((t: string) => t.includes('✍️'))).toBe(true);
+      expect(headerTexts.some((t: string) => t.includes('📦'))).toBe(true);
+      expect(headerTexts.some((t: string) => t.includes('🎫'))).toBe(true);
+    });
+  });
+
+  describe('plan-size warning banner', () => {
+    const findWarning = (blocks: { type: string; text?: { text?: string } }[]) =>
+      blocks.find(b => b.type === 'section' && b.text?.text?.includes('Teams usually stay under'));
+
+    it('shows warning when carry-over count meets threshold', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B', 'C', 'D', 'E'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      const warning = findWarning(modal.blocks);
+      expect(warning).toBeDefined();
+      expect(warning?.text?.text).toContain("planning 5 items today");
+      expect(warning?.text?.text).toContain("under 5");
+    });
+
+    it('does not show warning when count is under threshold', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      expect(findWarning(modal.blocks)).toBeUndefined();
+    });
+
+    it('does not show warning when max_plan_items is 0 (disabled)', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(0);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal('daily-il', yesterday, []);
+
+      expect(findWarning(modal.blocks)).toBeUndefined();
+    });
+
+    it('excludes auto-completed items from the count', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['[LIN-1] A', '[LIN-2] B', 'C', 'D', 'E'],
+        completed: [],
+        incomplete: [],
+      };
+      // LIN-1 and LIN-2 are auto-completed → effective count = 3
+      const modal = buildStandupModal(
+        'daily-il',
+        yesterday,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        new Set(['LIN-1', 'LIN-2'])
+      );
+
+      expect(findWarning(modal.blocks)).toBeUndefined();
+    });
+
+    it('uses "for tomorrow" wording in tomorrow mode', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(3);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B', 'C'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal(
+        'daily-il',
+        yesterday,
+        [],
+        undefined,
+        undefined,
+        'tomorrow'
+      );
+
+      const warning = findWarning(modal.blocks);
+      expect(warning).toBeDefined();
+      expect(warning?.text?.text).toContain('for tomorrow');
+    });
+
+    it('includes prefill today_plans in the count', async () => {
+      const { getMaxPlanItems } = await import('../lib/config');
+      vi.mocked(getMaxPlanItems).mockReturnValue(5);
+
+      const yesterday: YesterdayData = {
+        plans: ['A', 'B'],
+        completed: [],
+        incomplete: [],
+      };
+      const modal = buildStandupModal(
+        'daily-il',
+        yesterday,
+        [],
+        undefined,
+        undefined,
+        'tomorrow',
+        { todayPlans: ['X', 'Y', 'Z'] }
+      );
+
+      const warning = findWarning(modal.blocks);
+      expect(warning).toBeDefined();
+      expect(warning?.text?.text).toContain('5 items');
+    });
+  });
+
+  describe('standup template sections', () => {
+    it('hides blockers block when sections.blockers is false', () => {
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: false, unplanned: true }
+      );
+
+      const blockersBlock = modal.blocks.find(b => b.block_id === 'blockers');
+      expect(blockersBlock).toBeUndefined();
+    });
+
+    it('hides unplanned block when sections.unplanned is false (first-time user)', () => {
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: true, unplanned: false }
+      );
+
+      const unplannedBlock = modal.blocks.find(b => b.block_id === 'unplanned');
+      expect(unplannedBlock).toBeUndefined();
+    });
+
+    it('hides unplanned block when sections.unplanned is false (returning user)', () => {
+      const yesterday: YesterdayData = {
+        plans: ['Task A'],
+        completed: [],
+        incomplete: [],
+      };
+
+      const modal = buildStandupModal(
+        'daily-il', yesterday, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: true, unplanned: false }
+      );
+
+      const unplannedBlock = modal.blocks.find(b => b.block_id === 'unplanned');
+      expect(unplannedBlock).toBeUndefined();
+    });
+
+    it('hides both blockers and unplanned when both are false', () => {
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: false, unplanned: false }
+      );
+
+      expect(modal.blocks.find(b => b.block_id === 'blockers')).toBeUndefined();
+      expect(modal.blocks.find(b => b.block_id === 'unplanned')).toBeUndefined();
+    });
+
+    it('shows both by default when sections parameter is undefined', () => {
+      const modal = buildStandupModal('daily-il', null, []);
+
+      expect(modal.blocks.find(b => b.block_id === 'blockers')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'unplanned')).toBeDefined();
+    });
+
+    it('includes sections in private_metadata when provided', () => {
+      const sections = { blockers: false, unplanned: true };
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        sections
+      );
+
+      const metadata = JSON.parse(modal.private_metadata);
+      expect(metadata.sections).toEqual(sections);
+    });
+
+    it('omits sections from private_metadata when not provided', () => {
+      const modal = buildStandupModal('daily-il', null, []);
+
+      const metadata = JSON.parse(modal.private_metadata);
+      expect(metadata.sections).toBeUndefined();
+    });
+
+    it('still shows today_plans and custom questions when sections are disabled', () => {
+      const questions = [{ text: 'How are you?', required: false }];
+      const modal = buildStandupModal(
+        'daily-il', null, questions, undefined, undefined, 'today', undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        { blockers: false, unplanned: false }
+      );
+
+      expect(modal.blocks.find(b => b.block_id === 'today_plans')).toBeDefined();
+      expect(modal.blocks.find(b => b.block_id === 'custom_0')).toBeDefined();
     });
   });
 });

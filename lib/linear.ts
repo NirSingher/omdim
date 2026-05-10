@@ -435,6 +435,155 @@ export async function fetchTeamCycleData(
   }
 }
 
+// ============================================================================
+// Mutations & Utilities
+// ============================================================================
+
+export function extractLinearReferences(text: string): string[] {
+  const matches = text.match(/\b([A-Z]+-\d+)\b/g);
+  if (!matches) return [];
+  return [...new Set(matches)];
+}
+
+interface WorkflowStatesResponse {
+  team: {
+    states: {
+      nodes: Array<{ id: string; name: string; type: string }>;
+    };
+  };
+}
+
+const WORKFLOW_STATES_QUERY = `
+  query WorkflowStates($teamId: String!) {
+    team(id: $teamId) {
+      states {
+        nodes { id name type }
+      }
+    }
+  }
+`;
+
+export async function fetchWorkflowStates(
+  token: string,
+  teamId: string
+): Promise<Map<string, { id: string; name: string }>> {
+  const data = await linearQuery<WorkflowStatesResponse>(
+    token,
+    WORKFLOW_STATES_QUERY,
+    { teamId }
+  );
+  const map = new Map<string, { id: string; name: string }>();
+  for (const state of data.team.states.nodes) {
+    map.set(state.type, { id: state.id, name: state.name });
+  }
+  return map;
+}
+
+interface IssueUpdateResponse {
+  issueUpdate: { success: boolean };
+}
+
+const ISSUE_UPDATE_MUTATION = `
+  mutation IssueUpdate($issueId: String!, $stateId: String!) {
+    issueUpdate(id: $issueId, input: { stateId: $stateId }) {
+      success
+    }
+  }
+`;
+
+export async function updateIssueState(
+  token: string,
+  issueId: string,
+  stateId: string
+): Promise<boolean> {
+  const data = await linearQuery<IssueUpdateResponse>(
+    token,
+    ISSUE_UPDATE_MUTATION,
+    { issueId, stateId }
+  );
+  return data.issueUpdate.success;
+}
+
+export async function markIssuesInProgress(
+  token: string,
+  issueIds: string[],
+  inProgressStateId: string
+): Promise<{ updated: number; skipped: number }> {
+  let updated = 0;
+  let skipped = 0;
+  for (const issueId of issueIds) {
+    try {
+      const success = await updateIssueState(token, issueId, inProgressStateId);
+      if (success) {
+        updated++;
+      } else {
+        skipped++;
+      }
+    } catch (error) {
+      console.error(`Failed to update issue ${issueId}:`, error);
+      skipped++;
+    }
+  }
+  return { updated, skipped };
+}
+
+interface CommentCreateResponse {
+  commentCreate: { success: boolean };
+}
+
+const COMMENT_CREATE_MUTATION = `
+  mutation CommentCreate($issueId: String!, $body: String!) {
+    commentCreate(input: { issueId: $issueId, body: $body }) {
+      success
+    }
+  }
+`;
+
+export async function commentOnIssue(
+  token: string,
+  issueId: string,
+  body: string
+): Promise<boolean> {
+  const data = await linearQuery<CommentCreateResponse>(
+    token,
+    COMMENT_CREATE_MUTATION,
+    { issueId, body }
+  );
+  return data.commentCreate.success;
+}
+
+interface IssueByIdentifierResponse {
+  issue: { id: string; identifier: string } | null;
+}
+
+const ISSUE_BY_IDENTIFIER_QUERY = `
+  query IssueByIdentifier($id: String!) {
+    issue(id: $id) { id identifier }
+  }
+`;
+
+export async function resolveIdentifiers(
+  token: string,
+  identifiers: string[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (const identifier of identifiers) {
+    try {
+      const data = await linearQuery<IssueByIdentifierResponse>(
+        token,
+        ISSUE_BY_IDENTIFIER_QUERY,
+        { id: identifier }
+      );
+      if (data.issue) {
+        map.set(data.issue.identifier, data.issue.id);
+      }
+    } catch (error) {
+      console.error(`Failed to resolve identifier ${identifier}:`, error);
+    }
+  }
+  return map;
+}
+
 /**
  * Calculate cycle progress from a list of issues
  */

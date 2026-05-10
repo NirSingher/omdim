@@ -5,11 +5,10 @@
  * - Tracks prompt status to avoid duplicate prompts
  */
 
-import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, getGitHubUsername, getUsersWithGitHubLinks, wasReminderSent, recordReminderSent, getDmStandupPreference } from './db';
-import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getReminderMinutesBefore } from './config';
+import { DbClient, Participant, getAllParticipants, getOrCreatePrompt, updatePromptSent, getCachedUser, upsertCachedUser, getActiveOOO, getUnpostedSubmissions, markSubmissionPosted, Submission, markItemsDone, markItemsDropped, incrementCarryCount, markItemsInProgress, createWorkItems, wasReminderSent, recordReminderSent, getDmStandupPreference, getMissingSubmissions } from './db';
+import { getSchedule, getConfigError, getDaily, getDailies, getGitHubConfig, getReminderMinutesBefore, getNudgeMinutesBefore, getDigestTime } from './config';
 import { getUserInfo, postMessage } from './slack';
 import { postStandupToChannel, sendStandupDM } from './format';
-import { fetchUserPRData, UserPRData } from './github';
 
 // ============================================================================
 // User Timezone with Caching
@@ -488,30 +487,6 @@ export async function runScheduledPosts(
 }
 
 /**
- * Build a map from GitHub login (lowercase) → Slack user ID
- * Combines config mappings + DB self-linked accounts (config takes precedence)
- */
-async function buildGitHubUserMap(
-  daily: ReturnType<typeof getDaily>,
-  db: DbClient
-): Promise<Map<string, string>> {
-  if (!daily) return new Map();
-  const map = new Map<string, string>();
-
-  const dbLinks = await getUsersWithGitHubLinks(db);
-  for (const link of dbLinks) {
-    map.set(link.githubUsername.toLowerCase(), link.slackUserId);
-  }
-
-  const configMappings = getGitHubUserMappings(daily);
-  for (const mapping of configMappings) {
-    map.set(mapping.githubUsername.toLowerCase(), mapping.slackUserId);
-  }
-
-  return map;
-}
-
-/**
  * Process a single scheduled submission
  */
 async function processScheduledSubmission(
@@ -530,36 +505,33 @@ async function processScheduledSubmission(
     return 'error';
   }
 
-  // Get schedule config
+  // Get schedule config. Anchor date/time decisions to the daily's schedule
+  // timezone (same frame used when the submission was written in
+  // interactions.ts). Using the user's personal Slack tz here causes scheduled
+  // posts to silently skip forever when the user travels across a day boundary
+  // relative to the schedule's timezone.
   const schedule = daily.schedule ? getSchedule(daily.schedule) : null;
   const scheduledTime = schedule?.default_time || '10:00';
+  const scheduleTz = schedule?.timezone || 'UTC';
 
-  // Get user timezone (from cache or Slack API)
-  const userInfo = await getCachedUserTimezone(db, slackToken, userId);
-  if (!userInfo) {
-    console.warn(`Could not get timezone for user ${userId}`);
-    return 'error';
-  }
+  // Current date/time in the schedule's timezone
+  const scheduleNow = getDateInTimezone(scheduleTz);
+  const todayStr = formatDate(scheduleNow);
 
-  // Calculate user's current date/time
-  const userDate = getUserDate(userInfo.tz_offset);
-  const userTodayStr = formatDate(userDate);
-
-  // Check if submission date matches user's "today"
-  if (submissionDate !== userTodayStr) {
-    // Not time yet (submission is for a future date in user's timezone)
-    // Or past date (shouldn't happen, but skip if so)
+  // Check if submission date matches "today" in the schedule's timezone
+  if (submissionDate !== todayStr) {
+    // Future date (not time yet) or stale past date — skip
     return 'skipped';
   }
 
   // Check if scheduled time has passed
-  if (!hasScheduledTimePassed(scheduledTime, userDate)) {
+  if (!hasScheduledTimePassed(scheduledTime, scheduleNow)) {
     console.log(`Skipping ${userId} submission ${submission.id}: scheduled time ${scheduledTime} hasn't passed yet`);
     return 'skipped';
   }
 
   // Check if user is OOO
-  const oooStatus = await getActiveOOO(db, userId, dailyName, userTodayStr);
+  const oooStatus = await getActiveOOO(db, userId, dailyName, todayStr);
   if (oooStatus) {
     console.log(`Skipping ${userId} submission ${submission.id}: user is OOO until ${oooStatus.end_date}`);
     // Mark as posted so we don't keep checking (OOO = cancelled)
@@ -579,31 +551,7 @@ async function processScheduledSubmission(
     return Array.isArray(val) ? val : JSON.parse(val as unknown as string);
   };
 
-  // Fetch GitHub PR data if integration is enabled
-  let prData: UserPRData | undefined;
-  let reviewerSlackMap: Map<string, string> | undefined;
   const githubConfig = getGitHubConfig(daily);
-  if (githubConfig && env) {
-    const githubToken = env[githubConfig.tokenEnvVar];
-    if (githubToken) {
-      // Get GitHub username: config mapping takes precedence over DB
-      let githubUsername = getGitHubUsernameFromConfig(daily, userId);
-      if (!githubUsername) {
-        githubUsername = await getGitHubUsername(db, userId);
-      }
-
-      if (githubUsername) {
-        try {
-          [prData, reviewerSlackMap] = await Promise.all([
-            fetchUserPRData(githubToken, githubUsername, githubConfig.org),
-            buildGitHubUserMap(daily, db),
-          ]);
-        } catch (error) {
-          console.error('Failed to fetch PR data for scheduled post:', error);
-        }
-      }
-    }
-  }
 
   const yesterdayInProgress = parseJsonbArray(submission.yesterday_in_progress);
 
@@ -623,8 +571,7 @@ async function processScheduledSubmission(
       customAnswers: submission.custom_answers || {},
       questions: daily.questions,
       fieldOrder: daily.field_order,
-      prData,
-      reviewerSlackMap,
+      githubOrg: githubConfig?.org,
     }
   );
 
@@ -652,8 +599,7 @@ async function processScheduledSubmission(
         customAnswers: submission.custom_answers || {},
         questions: daily.questions,
         fieldOrder: daily.field_order,
-        prData,
-        reviewerSlackMap,
+        githubOrg: githubConfig?.org,
       });
     }
   } catch (error) {
@@ -819,5 +765,89 @@ export async function runReminderCron(
   }
 
   console.log(`Reminder cron complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.errors} errors`);
+  return stats;
+}
+
+// ============================================================================
+// Nudge Cron (per-user DM before digest time)
+// ============================================================================
+
+export async function runNudgeCron(
+  db: DbClient,
+  slackToken: string
+): Promise<{ sent: number; skipped: number; errors: number }> {
+  const stats = { sent: 0, skipped: 0, errors: 0 };
+
+  const configErr = getConfigError();
+  if (configErr) {
+    console.error('Nudge cron aborted due to config error:', configErr);
+    return stats;
+  }
+
+  const digestTime = getDigestTime();
+  const [digestHour, digestMinute] = digestTime.split(':').map(Number);
+  const digestUTCMinutes = digestHour * 60 + digestMinute;
+
+  const now = new Date();
+  const nowUTCMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+
+  const dailies = getDailies();
+
+  for (const daily of dailies) {
+    try {
+      const nudgeMinutes = getNudgeMinutesBefore(daily);
+      if (nudgeMinutes === 0) {
+        stats.skipped++;
+        continue;
+      }
+
+      const schedule = getSchedule(daily.schedule);
+      if (!schedule?.timezone) {
+        stats.skipped++;
+        continue;
+      }
+
+      const localNow = getTimeInTimezone(schedule.timezone);
+      if (!isWorkday(schedule.days, localNow)) {
+        stats.skipped++;
+        continue;
+      }
+
+      const nudgeUTCMinutes = digestUTCMinutes - nudgeMinutes;
+      const diff = nowUTCMinutes - nudgeUTCMinutes;
+      if (diff < 0 || diff >= 30) {
+        stats.skipped++;
+        continue;
+      }
+
+      const todayStr = formatDate(localNow);
+      const missing = await getMissingSubmissions(db, daily.name, todayStr);
+      if (missing.length === 0) {
+        stats.skipped++;
+        continue;
+      }
+
+      for (const userId of missing) {
+        try {
+          const blocks = buildPromptBlocks(daily.name, 0);
+          const text = `⏰ The *${daily.name}* digest posts in ~${nudgeMinutes} minutes — don't forget your standup!`;
+          const sent = await postMessage(slackToken, userId, text, blocks);
+          if (sent) {
+            stats.sent++;
+          } else {
+            stats.errors++;
+          }
+        } catch (err) {
+          console.error(`Error sending nudge to ${userId} for ${daily.name}:`, err);
+          stats.errors++;
+        }
+      }
+    } catch (err) {
+      console.error(`Error in nudge cron for ${daily.name}:`, err);
+      stats.errors++;
+    }
+  }
+
+  console.log(`Nudge cron complete: ${stats.sent} sent, ${stats.skipped} skipped, ${stats.errors} errors`);
   return stats;
 }

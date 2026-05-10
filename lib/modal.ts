@@ -3,8 +3,8 @@
  * Builds the modal view structure - actual opening is done via lib/slack.ts
  */
 
-import { Question, FieldOrder } from './config';
-import { UserPRData, GitHubPR } from './github';
+import { Question, FieldOrder, getMaxPlanItems } from './config';
+import { UserPRData, GitHubPR, MergedPR } from './github';
 import { LinearIssue } from './linear';
 
 // Re-export openModal from slack.ts for backward compatibility
@@ -114,11 +114,15 @@ export function buildStandupModal(
   prData?: UserPRData,
   reviewerMap?: Map<string, string>,
   doneIdentifiers?: Set<string>,
-  autoCompletedIds?: Set<string>
+  autoCompletedIds?: Set<string>,
+  mergedPRs?: MergedPR[],
+  sections?: { blockers: boolean; unplanned: boolean },
+  expandedSections?: Set<string>
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
-  const yesterdayPlans = yesterday?.plans || [];
+  // We may append merged PR plan items to this array later; keep it mutable
+  const yesterdayPlans: string[] = [...(yesterday?.plans || [])];
 
   // Deduplicate: extract integration IDs from yesterday's plans so we don't
   // show the same Linear tickets or GitHub PRs as both "yesterday" items and
@@ -185,6 +189,30 @@ export function buildStandupModal(
 
   blocks.push({ type: 'divider' });
 
+  // Plan-size soft warning: count items that will become today's plans at open time.
+  // Sources: yesterday's carry-over/in-progress items (everything except auto-completed),
+  // pre-checked integration items (currently none), and prefill today-plans (edit mode).
+  // Free-text input in the plans textarea can't be observed here — the post-submit DM
+  // covers that path.
+  const maxPlanItems = getMaxPlanItems(dailyName);
+  if (maxPlanItems > 0) {
+    const carryForwardCount = yesterdayPlans.length - (autoCompletedIds?.size || 0);
+    const prefillCount = prefill?.todayPlans?.length || 0;
+    const openTimeCount = carryForwardCount + prefillCount;
+    if (openTimeCount >= maxPlanItems) {
+      const dayWord = mode === 'tomorrow' ? 'for tomorrow' : 'today';
+      const breakdown = carryForwardCount > 0 && prefillCount > 0 ? ` (${prefillCount} new + ${carryForwardCount} carried)` : '';
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `⚠️ You're planning ${openTimeCount} items${breakdown} ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`,
+        },
+      });
+      blocks.push({ type: 'divider' });
+    }
+  }
+
   // First-time user welcome message
   if (isFirstDay) {
     blocks.push({
@@ -198,6 +226,7 @@ export function buildStandupModal(
   }
 
   // Yesterday section: plans + unplanned (grouped as "what happened")
+  // Items are grouped by source: manual first, then PR items, then Linear items
   if (!isFirstDay && yesterdayPlans.length > 0) {
     blocks.push({
       type: 'section',
@@ -207,8 +236,29 @@ export function buildStandupModal(
       },
     });
 
-    // Add a dropdown for each yesterday's plan item
+    // Classify items by source for grouped display
+    const manualItems: Array<{ plan: string; index: number }> = [];
+    const prItems: Array<{ plan: string; index: number }> = [];
+    const linearItems: Array<{ plan: string; index: number }> = [];
+
     yesterdayPlans.forEach((plan, index) => {
+      const idMatch = plan.match(/^\[([^\]]+)\]\s/);
+      if (idMatch) {
+        if (idMatch[1].includes('#')) {
+          prItems.push({ plan, index });
+        } else {
+          linearItems.push({ plan, index });
+        }
+      } else {
+        manualItems.push({ plan, index });
+      }
+    });
+
+    // Render grouped items with section labels when there are mixed sources (and enough items to warrant it)
+    const totalYesterdayItems = manualItems.length + prItems.length + linearItems.length;
+    const hasMixedSources = [manualItems, prItems, linearItems].filter(g => g.length > 0).length > 1 && totalYesterdayItems >= 4;
+
+    const renderYesterdayItem = (plan: string, index: number) => {
       const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
       const linearId = plan.match(/^\[([^\]]+)\]\s/)?.[1];
       const isAutoCompleted = linearId && autoCompletedIds?.has(linearId);
@@ -231,33 +281,109 @@ export function buildStandupModal(
             : YESTERDAY_ITEM_OPTIONS[0],  // Carry over
         },
       });
-    });
+    };
+
+    // Manual items first
+    if (manualItems.length > 0) {
+      if (hasMixedSources) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*✍️ Manual items*' }],
+        });
+      }
+      for (const { plan, index } of manualItems) {
+        renderYesterdayItem(plan, index);
+      }
+    }
+
+    // PR items
+    if (prItems.length > 0) {
+      if (hasMixedSources) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*📦 PR items*' }],
+        });
+      }
+      for (const { plan, index } of prItems) {
+        renderYesterdayItem(plan, index);
+      }
+    }
+
+    // Linear items
+    if (linearItems.length > 0) {
+      if (hasMixedSources) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*🎫 Linear items*' }],
+        });
+      }
+      for (const { plan, index } of linearItems) {
+        renderYesterdayItem(plan, index);
+      }
+    }
+
+    // Merged PRs auto-populate: add up to 5 new (non-duplicate) merged PRs as yesterday items
+    if (mergedPRs && mergedPRs.length > 0) {
+      const newMergedPRs = mergedPRs
+        .filter(pr => !yesterdayIntegrationIds.has(`${pr.repo}#${pr.number}`))
+        .slice(0, 5);
+
+      if (newMergedPRs.length > 0) {
+        if ([manualItems, prItems, linearItems].filter(g => g.length > 0).length > 0) {
+          blocks.push({
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '*📦 Merged PRs*' }],
+          });
+        }
+        for (const pr of newMergedPRs) {
+          const planText = `[${pr.repo}#${pr.number}] ${pr.title}`;
+          // Append to yesterdayPlans so the submission handler can find it at this index
+          const index = yesterdayPlans.length;
+          yesterdayPlans.push(planText);
+          blocks.push({
+            type: 'section',
+            block_id: `yesterday_item_${index}`,
+            text: {
+              type: 'mrkdwn',
+              text: planText.length > 60 ? planText.substring(0, 57) + '...' : planText,
+            },
+            accessory: {
+              type: 'static_select',
+              action_id: `item_status_${index}`,
+              options: YESTERDAY_ITEM_OPTIONS,
+              initial_option: YESTERDAY_ITEM_OPTIONS[2], // Default to "Done" for merged PRs
+            },
+          });
+        }
+      }
+    }
 
     // Unplanned completions - grouped with yesterday (both are "what happened")
-    const unplannedYesterdayElement: Record<string, unknown> = {
-      type: 'plain_text_input',
-      action_id: 'unplanned_input',
-      multiline: true,
-      placeholder: {
-        type: 'plain_text',
-        text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
-      },
-    };
-    // Pre-fill if editing existing submission
-    if (prefill?.unplanned && prefill.unplanned.length > 0) {
-      unplannedYesterdayElement.initial_value = prefill.unplanned.join('\n');
+    if (sections?.unplanned ?? true) {
+      const unplannedYesterdayElement: Record<string, unknown> = {
+        type: 'plain_text_input',
+        action_id: 'unplanned_input',
+        multiline: true,
+        placeholder: {
+          type: 'plain_text',
+          text: 'Fixed urgent prod bug\nHelped teammate with code review\nUnblocked design team',
+        },
+      };
+      if (prefill?.unplanned && prefill.unplanned.length > 0) {
+        unplannedYesterdayElement.initial_value = prefill.unplanned.join('\n');
+      }
+      blocks.push({
+        type: 'input',
+        block_id: 'unplanned',
+        optional: true,
+        element: unplannedYesterdayElement,
+        label: {
+          type: 'plain_text',
+          text: '✨ Unplanned wins',
+          emoji: true,
+        },
+      });
     }
-    blocks.push({
-      type: 'input',
-      block_id: 'unplanned',
-      optional: true,
-      element: unplannedYesterdayElement,
-      label: {
-        type: 'plain_text',
-        text: '✨ Unplanned wins',
-        emoji: true,
-      },
-    });
 
     blocks.push({ type: 'divider' });
   }
@@ -265,8 +391,11 @@ export function buildStandupModal(
   // Build ordered list of remaining fields (exclude unplanned if already shown above)
   const orderedFields: OrderedField[] = [];
 
+  const showUnplanned = sections?.unplanned ?? true;
+  const showBlockers = sections?.blockers ?? true;
+
   // Only add unplanned to ordered fields if this is first day (wasn't shown above)
-  if (isFirstDay) {
+  if (isFirstDay && showUnplanned) {
     orderedFields.push({ type: 'unplanned', order: order.unplanned });
   }
 
@@ -277,7 +406,9 @@ export function buildStandupModal(
   if (prData && (prData.awaitingReview.length + prData.readyToMerge.length + prData.draftPRs.length > 0)) {
     orderedFields.push({ type: 'my_prs', order: order.my_prs });
   }
-  orderedFields.push({ type: 'blockers', order: order.blockers });
+  if (showBlockers) {
+    orderedFields.push({ type: 'blockers', order: order.blockers });
+  }
 
   // Add custom questions with their indices
   customQuestions.forEach((question, index) => {
@@ -295,6 +426,7 @@ export function buildStandupModal(
 
   let unmappedReviewerLogins: string[] = [];
   const prReviewerTags: Record<string, string> = {};
+  const prCategories: Record<string, string> = {};
 
   // Render fields in order
   orderedFields.forEach((field, idx) => {
@@ -335,7 +467,8 @@ export function buildStandupModal(
       case 'today_plans':
         // Integration checkboxes go right above today's plans
         if (linearIssues && linearIssues.length > 0) {
-          const displayIssues = linearIssues.slice(0, 10);
+          const linearLimit = expandedSections?.has('linear') ? 10 : 3;
+          const displayIssues = linearIssues.slice(0, linearLimit);
           const linearOptions = displayIssues.map((issue) => ({
             text: {
               type: 'mrkdwn' as const,
@@ -363,12 +496,15 @@ export function buildStandupModal(
               emoji: true,
             },
           });
-          if (linearIssues.length > 10) {
+          if (linearIssues.length > linearLimit) {
             blocks.push({
-              type: 'context',
+              type: 'actions',
+              block_id: 'linear_show_all',
               elements: [{
-                type: 'mrkdwn',
-                text: `_Showing 10 of ${linearIssues.length} assigned tickets_`,
+                type: 'button',
+                action_id: 'show_all_linear',
+                text: { type: 'plain_text', text: `Show all ${linearIssues.length} tickets`, emoji: true },
+                value: 'expand',
               }],
             });
           }
@@ -402,8 +538,12 @@ export function buildStandupModal(
 
       case 'review_requests':
         if (prData) {
-          // PRs where others are requesting my review
-          const reviewPRs = prData.reviewRequests.slice(0, 10);
+          blocks.push({
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '_PRs from teammates that need your review_' }],
+          });
+          const reviewsLimit = expandedSections?.has('reviews') ? 10 : 3;
+          const reviewPRs = prData.reviewRequests.slice(0, reviewsLimit);
           const reviewOptions = reviewPRs.map((pr) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
@@ -435,12 +575,15 @@ export function buildStandupModal(
               emoji: true,
             },
           });
-          if (prData.reviewRequests.length > 10) {
+          if (prData.reviewRequests.length > reviewsLimit) {
             blocks.push({
-              type: 'context',
+              type: 'actions',
+              block_id: 'reviews_show_all',
               elements: [{
-                type: 'mrkdwn',
-                text: `_Showing 10 of ${prData.reviewRequests.length} review requests_`,
+                type: 'button',
+                action_id: 'show_all_reviews',
+                text: { type: 'plain_text', text: `Show all ${prData.reviewRequests.length} review requests`, emoji: true },
+                value: 'expand',
               }],
             });
           }
@@ -449,6 +592,10 @@ export function buildStandupModal(
 
       case 'my_prs':
         if (prData) {
+          blocks.push({
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '_Your authored PRs — select to track in your standup_' }],
+          });
           // PRs I authored: awaiting review, ready to merge, draft
           const myPRsCategorized: Array<{ pr: GitHubPR; category: string; descSuffix?: string }> = [];
           for (const pr of prData.awaitingReview) {
@@ -464,10 +611,24 @@ export function buildStandupModal(
               const repo = repoMatch?.[1] || 'unknown';
               prReviewerTags[`${repo}#${pr.number}`] = reviewerNames.join(', ');
             }
+            const repoMatchCat = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repoCat = repoMatchCat?.[1] || 'unknown';
+            prCategories[`${repoCat}#${pr.number}`] = 'awaiting review';
           }
-          for (const pr of prData.readyToMerge) myPRsCategorized.push({ pr, category: 'Ready to Merge' });
-          for (const pr of prData.draftPRs) myPRsCategorized.push({ pr, category: 'Draft' });
-          const displayMyPRs = myPRsCategorized.slice(0, 10);
+          for (const pr of prData.readyToMerge) {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            prCategories[`${repo}#${pr.number}`] = 'ready to merge';
+            myPRsCategorized.push({ pr, category: 'Ready to Merge' });
+          }
+          for (const pr of prData.draftPRs) {
+            const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
+            const repo = repoMatch?.[1] || 'unknown';
+            prCategories[`${repo}#${pr.number}`] = 'draft';
+            myPRsCategorized.push({ pr, category: 'Draft' });
+          }
+          const myPRsLimit = expandedSections?.has('my_prs') ? 10 : 3;
+          const displayMyPRs = myPRsCategorized.slice(0, myPRsLimit);
           const myPROptions = displayMyPRs.map(({ pr, category, descSuffix }) => {
             const repoMatch = pr.url.match(/github\.com\/[^/]+\/([^/]+)/);
             const repo = repoMatch?.[1] || 'unknown';
@@ -501,12 +662,15 @@ export function buildStandupModal(
             },
           });
           const totalMyPRs = prData.awaitingReview.length + prData.readyToMerge.length + prData.draftPRs.length;
-          if (totalMyPRs > 10) {
+          if (totalMyPRs > myPRsLimit) {
             blocks.push({
-              type: 'context',
+              type: 'actions',
+              block_id: 'my_prs_show_all',
               elements: [{
-                type: 'mrkdwn',
-                text: `_Showing 10 of ${totalMyPRs} PRs_`,
+                type: 'button',
+                action_id: 'show_all_my_prs',
+                text: { type: 'plain_text', text: `Show all ${totalMyPRs} PRs`, emoji: true },
+                value: 'expand',
               }],
             });
           }
@@ -606,8 +770,10 @@ export function buildStandupModal(
       yesterdayPlans,
       mode,
       targetDate: targetDateStr,
+      ...(sections ? { sections } : {}),
       ...(unmappedReviewerLogins.length > 0 ? { unmappedReviewers: unmappedReviewerLogins } : {}),
       ...(Object.keys(prReviewerTags).length > 0 ? { prReviewerTags } : {}),
+      ...(Object.keys(prCategories).length > 0 ? { prCategories } : {}),
   });
   console.log(`private_metadata length: ${metadata.length}`);
 

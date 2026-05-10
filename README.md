@@ -37,6 +37,10 @@ Omdim handles the boring part — collecting and organizing updates — so your 
 - **Linear issue integration** - Current/previous cycle issues as checkboxes in the standup modal
 - **Self-service account linking** - Users link GitHub/Linear via slash commands or App Home buttons
 - **"In Progress" status** - Track actively-worked items separately from not-yet-started; staleness warnings after 3+ carries
+- **DM copy of standup** - Submitters get a private copy of their standup post; opt-out via App Home
+- **PR re-review detection** - Flags PRs updated since the last review, so reviewers know to look again
+- **Auto-complete Linear tickets** - Done tickets detected and suppressed automatically
+- **App Home stats** - See planned, carried over, and dropped item counts per daily
 - **Channel reminders** - Configurable heads-up message before daily standup time
 - **Zero cost** - Runs entirely on free tiers, no credit card required
 
@@ -234,10 +238,15 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "il-team"
-    # Control field order (lower numbers appear first)
+    manager: "U12345678"  # Receives automatic daily/weekly digests
+    reminder_minutes_before: 60  # Channel heads-up before daily (0 to disable, default 90)
+    # Field order: lower numbers appear first in the modal
+    # Standard fields: unplanned (10), review_requests (18), today_plans (20), my_prs (24), blockers (30)
     field_order:
       unplanned: 10
+      review_requests: 18
       today_plans: 20
+      my_prs: 24
       blockers: 30
     questions:
       - text: "How're you feeling?"
@@ -245,33 +254,23 @@ dailies:
         order: 5      # Appears before unplanned (10)
       - text: "Customer calls today?"
         required: false
-        order: 25     # Appears between today_plans (20) and blockers (30)
+        order: 25     # Appears between my_prs (24) and blockers (30)
 
 schedules:
   - name: "il-team"
     days: [sun, mon, tue, wed, thu]
     default_time: "09:00"
+    timezone: "Asia/Jerusalem"  # Required for channel reminders
   - name: "us-team"
     days: [mon, tue, wed, thu, fri]
     default_time: "09:00"
+    timezone: "America/New_York"
 
 admins:
   - "U12345678"  # Your Slack user ID
 ```
 
-**Field ordering**: Standard fields (`unplanned`, `review_requests`, `today_plans`, `my_prs`, `blockers`) and custom questions are sorted by their `order` value. Lower numbers appear earlier in the modal.
-
-**Channel reminders** (optional): Get a heads-up in the standup channel before the daily is due:
-
-```yaml
-dailies:
-  - name: "engineering"
-    reminder_minutes_before: 60  # minutes before daily, 0 to disable (default 90)
-```
-
-Requires `timezone` on the schedule.
-
-**Integrations** (optional): Add GitHub/Linear to surface PRs and issues in the standup modal:
+**Integrations** (optional): Add GitHub/Linear to surface PRs and issues as checkboxes in the standup modal:
 
 ```yaml
 dailies:
@@ -286,7 +285,7 @@ dailies:
             external_username: "github-handle"
       linear:
         enabled: true
-        team_id: "your-linear-team-id"   # Find in Linear team settings URL
+        team_id: "your-linear-team-id"   # Optional: omit to fetch from all teams
         user_mapping:                    # Optional: pre-link users
           - slack_user_id: "U12345678"
             external_username: "linear-user-id"
@@ -426,6 +425,9 @@ npx tsx scripts/migrate-snooze.ts
 # Add GitHub/Linear columns for integration linking (v1.2+)
 psql "$DATABASE_URL" -c "ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS github_username TEXT;"
 psql "$DATABASE_URL" -c "ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS linear_user_id TEXT;"
+
+# Add DM standup preference column (v1.3+)
+psql "$DATABASE_URL" -c "ALTER TABLE slack_users ADD COLUMN IF NOT EXISTS dm_standup BOOLEAN DEFAULT TRUE;"
 ```
 
 > **Note**: Migrations are idempotent - safe to run multiple times.

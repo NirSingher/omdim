@@ -3,16 +3,19 @@
  * Routes requests to appropriate handlers
  */
 
-import { loadConfig, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser } from '../lib/config';
-import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks } from '../lib/slack';
-import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks } from '../lib/db';
-import { fetchTeamPRData, TeamPRData } from '../lib/github';
+import { loadConfig, loadConfigOverrides, getDailies, getSchedules, getConfigError, getDailiesWithManagers, getDaily, getSchedule, getDailyManagers, getWeeklyDigestDay, getBottleneckThreshold, getIntegrationStatus, getDigestTime, getGitHubConfig, getGitHubUserMappings, getLinearConfig, getLinearUserMappings, getLinearTeamIdForUser, getMaxPlanItems, isDailyEnabled, getLinearIntelligenceConfig, getGitHubIntelligenceConfig, getWeeklyRecap } from '../lib/config';
+import { verifySlackSignature, parseCommandPayload, sendDM, sendDMWithBlocks, postMessage } from '../lib/slack';
+import { getDb, deleteOldSubmissions, deleteOldPrompts, getSubmissionsInRange, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getTeamRankings, getPeriodStats, getParticipants, getUsersWithGitHubLinks, getUsersWithLinearLinks, getActiveOOOForDaily, getOOOStartingOnDate, getBlockerStreaks, getUnplannedOverload, getActiveWorkItems } from '../lib/db';
+import { computeLinearAlignment, AlignmentResult } from '../lib/linear-intelligence';
+import { computeGitHubAlignment, GitHubAlignmentResult } from '../lib/github-intelligence';
+import { fetchTeamPRData, TeamPRData, fetchTeamMergedPRs } from '../lib/github';
 import { fetchTeamCycleData, TeamLinearData, CycleProgress } from '../lib/linear';
-import { runPromptCron, runScheduledPosts, runReminderCron, formatDate, getUserDate } from '../lib/prompt';
+import { runPromptCron, runScheduledPosts, runReminderCron, runNudgeCron, formatDate, getUserDate, isWorkday, getDateInTimezone } from '../lib/prompt';
 import { handleCommand, handleDaily } from '../lib/handlers/commands';
 import { handleInteraction, InteractionPayload } from '../lib/handlers/interactions';
 import { handleAppHomeOpened, AppHomeOpenedEvent } from '../lib/handlers/home';
-import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics } from '../lib/format';
+import { handleLinearWebhook } from '../lib/handlers/webhooks';
+import { formatManagerDigest, DigestPeriod, TrendData, buildBottleneckBlocks, formatPRDigestAnalytics, OOOInfo, formatTeamSummary, formatPersonalWeeklyRecap } from '../lib/format';
 
 // ============================================================================
 // Types
@@ -26,6 +29,7 @@ export interface Env {
   DEV_MODE?: string;
   GITHUB_TOKEN?: string;
   LINEAR_API_KEY?: string;
+  LINEAR_WEBHOOK_SECRET?: string;
   // Allow additional env vars for custom token names per daily
   [key: string]: string | undefined;
 }
@@ -75,6 +79,13 @@ export default {
         return handleDigestCron(url, env);
       }
 
+      // Linear webhook: issue status changes → auto-update standup items
+      if (path === '/api/webhooks/linear' && request.method === 'POST') {
+        const db = getDb(env.DATABASE_URL);
+        await loadConfigOverrides(db);
+        return handleLinearWebhook(request, env, db, ctx);
+      }
+
       return new Response('Not found', { status: 404 });
     } catch (error) {
       console.error('Error:', error);
@@ -89,6 +100,7 @@ export default {
     if (cronPattern === '*/30 * * * *') {
       console.log('Running prompt cron job');
       const db = getDb(env.DATABASE_URL);
+      await loadConfigOverrides(db);
 
       // Run prompt cron (send DM prompts to users)
       const promptStats = await runPromptCron(db, env.SLACK_BOT_TOKEN);
@@ -101,6 +113,10 @@ export default {
       // Run reminder cron (send channel reminders before daily standups)
       const reminderStats = await runReminderCron(db, env.SLACK_BOT_TOKEN);
       console.log('Reminder cron complete:', reminderStats);
+
+      // Run nudge cron (DM users who haven't submitted before digest)
+      const nudgeStats = await runNudgeCron(db, env.SLACK_BOT_TOKEN);
+      console.log('Nudge cron complete:', nudgeStats);
 
       // Check if it's time to send digests (based on configured digest_time)
       if (isDigestTime()) {
@@ -168,9 +184,10 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
 
   const payload = parseCommandPayload(body);
   const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
 
   // Handle /daily command separately
-  if (payload.command === '/daily') {
+  if (payload.command === '/daily' || (env.DEV_MODE === 'true' && payload.command === '/dailyl')) {
     const args = payload.text.trim().split(/\s+/).filter(a => a);
     console.log('Command: /daily', { user_id: payload.user_id, args });
 
@@ -241,6 +258,7 @@ async function handleSlackInteractions(request: Request, env: Env, ctx: Executio
   console.log('Interaction:', { type: payload.type, user: payload.user.id });
 
   const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
   const result = await handleInteraction(payload, {
     db,
     slackToken: env.SLACK_BOT_TOKEN,
@@ -301,6 +319,7 @@ async function handleSlackEvents(request: Request, env: Env): Promise<Response> 
     // Handle app_home_opened event
     if (event.type === 'app_home_opened') {
       const db = getDb(env.DATABASE_URL);
+      await loadConfigOverrides(db);
       await handleAppHomeOpened(event, {
         db,
         slackToken: env.SLACK_BOT_TOKEN,
@@ -325,6 +344,7 @@ async function handlePromptCron(url: URL, env: Env): Promise<Response> {
   const force = url.searchParams.get('force') === 'true';
 
   const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
   const stats = await runPromptCron(db, env.SLACK_BOT_TOKEN, force);
 
   return new Response(JSON.stringify({
@@ -395,6 +415,8 @@ async function handleDigestCron(url: URL, env: Env): Promise<Response> {
     return new Response('Invalid period. Use: daily, weekly, 4-week', { status: 400 });
   }
 
+  const db = getDb(env.DATABASE_URL);
+  await loadConfigOverrides(db);
   const result = await runDigestCron(env, period);
 
   return new Response(JSON.stringify({
@@ -463,10 +485,14 @@ async function runDigestCronUnified(env: Env): Promise<{
     }
 
     try {
-      // Always send daily digest
-      const dailyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'daily');
-      dailySent += dailyResult.sent;
-      errors += dailyResult.errors;
+      // Only send daily digest on workdays (check in schedule timezone)
+      const localNow = schedule.timezone ? getDateInTimezone(schedule.timezone) : new Date();
+      const isWorkdayToday = isWorkday(schedule.days, localNow);
+      if (isWorkdayToday) {
+        const dailyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'daily');
+        dailySent += dailyResult.sent;
+        errors += dailyResult.errors;
+      }
 
       // Check if today is the weekly digest day for this daily
       const weeklyDay = getWeeklyDigestDay(daily);
@@ -474,6 +500,69 @@ async function runDigestCronUnified(env: Env): Promise<{
         const weeklyResult = await sendDigestToManagers(env, db, daily, managers, schedule, 'weekly');
         weeklySent += weeklyResult.sent;
         errors += weeklyResult.errors;
+
+        // Personal weekly recap DMs
+        if (getWeeklyRecap(daily)) {
+          try {
+            const recapEnd = formatDate(new Date());
+            const recapStartObj = new Date();
+            recapStartObj.setDate(recapStartObj.getDate() - 6);
+            const recapStart = formatDate(recapStartObj);
+            const weeklySubs = await getSubmissionsInRange(db, daily.name, recapStart, recapEnd);
+            const participants = await getParticipants(db, daily.name);
+            for (const p of participants) {
+              const userSubs = weeklySubs.filter(s => s.slack_user_id === p.slack_user_id);
+              const recap = formatPersonalWeeklyRecap(daily.name, userSubs);
+              await sendDM(env.SLACK_BOT_TOKEN, p.slack_user_id, recap);
+            }
+          } catch (err) {
+            console.error(`Failed to send weekly recaps for "${daily.name}":`, err);
+            errors++;
+          }
+        }
+      }
+
+      // Post OOO notice to daily channel for users whose OOO starts today (workdays only)
+      const todayStr = formatDate(new Date());
+      const oooStarting = isWorkdayToday ? await getOOOStartingOnDate(db, daily.name, todayStr) : [];
+      if (oooStarting.length > 0) {
+        const formatShortDate = (d: string) => {
+          const date = new Date(d + 'T00:00:00');
+          return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        };
+        const oooLines = oooStarting.map(r => {
+          const back = r.start_date === r.end_date
+            ? 'back tomorrow'
+            : `back ${formatShortDate(r.end_date)}`;
+          return `<@${r.slack_user_id}> (${back})`;
+        });
+        const oooText = `🏖️ *Out today:* ${oooLines.join(' · ')}`;
+        try {
+          await postMessage(env.SLACK_BOT_TOKEN, daily.channel, oooText);
+        } catch (err) {
+          console.error(`Failed to post OOO notice to channel for "${daily.name}":`, err);
+        }
+      }
+
+      // Post team summary to channel (opt-in per-daily, workdays only)
+      if (isWorkdayToday && daily.team_summary) {
+        try {
+          const todaySubs = await getSubmissionsInRange(db, daily.name, todayStr, todayStr);
+          if (todaySubs.length > 0) {
+            const githubCfg = getGitHubConfig(daily);
+            const summaryText = formatTeamSummary({
+              dailyName: daily.name,
+              channel: daily.channel,
+              submissions: todaySubs,
+              githubOrg: githubCfg?.org,
+            });
+            if (summaryText) {
+              await postMessage(env.SLACK_BOT_TOKEN, daily.channel, summaryText);
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to post team summary for "${daily.name}":`, err);
+        }
       }
 
       processedDailies.push(daily.name);
@@ -528,6 +617,8 @@ async function sendDigestToManagers(
   const threshold = getBottleneckThreshold(daily);
   const bottlenecks = await getBottleneckItems(db, daily.name, threshold);
   const dropStats = await getHighDropUsers(db, daily.name, startDate, endDate, 30);
+  const blockerStreaks = await getBlockerStreaks(db, daily.name, startDate, endDate);
+  const unplannedOverloads = await getUnplannedOverload(db, daily.name, startDate, endDate, 70);
 
   // Get rankings (only for weekly and 4-week)
   let rankings;
@@ -663,6 +754,71 @@ async function sendDigestToManagers(
     }
   }
 
+  // Fetch OOO data for daily digest
+  let oooToday: OOOInfo[] | undefined;
+  if (period === 'daily') {
+    const oooRecords = await getActiveOOOForDaily(db, daily.name, endDate);
+    if (oooRecords.length > 0) {
+      oooToday = oooRecords.map(r => ({ slackUserId: r.slack_user_id, endDate: r.end_date }));
+    }
+  }
+
+  // Compute Linear intelligence alignment (Phase 1 & 2)
+  let linearAlignment: AlignmentResult[] | undefined;
+  const linearIntelConfig = getLinearIntelligenceConfig(daily);
+  if (linearIntelConfig && teamLinearData && teamLinearData.length > 0) {
+    try {
+      linearAlignment = [];
+      for (const member of teamLinearData) {
+        const workItems = await getActiveWorkItems(db, member.slackUserId, daily.name, endDate);
+        const result = computeLinearAlignment(member.slackUserId, workItems, member.data.issues);
+        linearAlignment.push(result);
+      }
+    } catch (error) {
+      console.error('Failed to compute Linear alignment for digest:', error);
+      linearAlignment = undefined;
+    }
+  }
+
+  // Compute GitHub intelligence alignment (Phase 4 & 5)
+  let githubAlignment: GitHubAlignmentResult[] | undefined;
+  const githubIntelConfig = getGitHubIntelligenceConfig(daily);
+  if (githubIntelConfig?.work_alignment && githubConfig) {
+    const githubToken = env[githubConfig.tokenEnvVar];
+    if (githubToken) {
+      try {
+        // Build combined user list (same logic as team PR data above)
+        const configMappings = getGitHubUserMappings(daily);
+        const participants = await getParticipants(db, daily.name);
+        const dbLinks = await getUsersWithGitHubLinks(db);
+        const dbLinksMap = new Map(dbLinks.map(l => [l.slackUserId, l.githubUsername]));
+        const configUserIds = new Set(configMappings.map(m => m.slackUserId));
+        const githubUsers: Array<{ slackUserId: string; githubUsername: string }> = [...configMappings];
+        for (const p of participants) {
+          if (!configUserIds.has(p.slack_user_id)) {
+            const githubUsername = dbLinksMap.get(p.slack_user_id);
+            if (githubUsername) {
+              githubUsers.push({ slackUserId: p.slack_user_id, githubUsername });
+            }
+          }
+        }
+
+        if (githubUsers.length > 0) {
+          const teamMergedPRs = await fetchTeamMergedPRs(githubToken, githubConfig.org, githubUsers, endDate);
+          githubAlignment = [];
+          for (const member of teamMergedPRs) {
+            const workItems = await getActiveWorkItems(db, member.slackUserId, daily.name, endDate);
+            const result = computeGitHubAlignment(member.slackUserId, workItems, member.mergedPRs);
+            githubAlignment.push(result);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to compute GitHub alignment for digest:', error);
+        githubAlignment = undefined;
+      }
+    }
+  }
+
   const digestText = formatManagerDigest({
     dailyName: daily.name,
     period,
@@ -672,6 +828,7 @@ async function sendDigestToManagers(
     stats,
     totalWorkdays,
     missingToday,
+    oooToday,
     bottlenecks,
     dropStats,
     rankings,
@@ -680,6 +837,11 @@ async function sendDigestToManagers(
     teamPRData,
     teamLinearData,
     cycleProgress,
+    maxPlanItems: getMaxPlanItems(daily.name),
+    blockerStreaks,
+    unplannedOverloads,
+    linearAlignment,
+    githubAlignment,
   });
 
   // Build bottleneck blocks with snooze buttons (only if there are bottlenecks)

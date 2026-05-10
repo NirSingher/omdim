@@ -7,10 +7,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock config module
 vi.mock('../lib/config', () => ({
   isAdmin: vi.fn(),
+  isSuperAdmin: vi.fn(),
+  getAdmins: vi.fn(() => ({ superAdmins: [], dbAdmins: [] })),
+  getOverride: vi.fn(() => undefined),
   getDaily: vi.fn(),
   getSchedule: vi.fn(),
   getDailies: vi.fn(),
+  getDailyManagers: vi.fn(() => []),
+  getAllDailiesIncludingDisabled: vi.fn(),
+  isDailyEnabled: vi.fn(() => true),
   getConfigError: vi.fn(() => null),
+  clearConfigCache: vi.fn(),
+  loadConfigOverrides: vi.fn(() => Promise.resolve()),
 }));
 
 // Mock db module
@@ -29,6 +37,10 @@ vi.mock('../lib/db', () => ({
   setOOO: vi.fn(),
   clearOOO: vi.fn(),
   getUserOOO: vi.fn(() => []),
+  setConfigOverride: vi.fn(),
+  deleteConfigOverride: vi.fn(),
+  getBlockerStreaks: vi.fn(() => []),
+  getUnplannedOverload: vi.fn(() => []),
 }));
 
 // Mock slack module
@@ -36,6 +48,7 @@ vi.mock('../lib/slack', () => ({
   parseUserId: vi.fn(),
   ephemeralResponse: vi.fn((text: string) => ({ response_type: 'ephemeral', text })),
   sendDM: vi.fn(),
+  openModal: vi.fn(() => Promise.resolve(true)),
 }));
 
 // Mock prompt module
@@ -66,9 +79,9 @@ import {
   CommandContext,
 } from '../lib/handlers/commands';
 
-import { isAdmin, getDaily, getSchedule, getDailies, getConfigError } from '../lib/config';
-import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO } from '../lib/db';
-import { parseUserId, sendDM } from '../lib/slack';
+import { isAdmin, isSuperAdmin, getAdmins, getOverride, getDaily, getSchedule, getDailies, getDailyManagers, getConfigError, getAllDailiesIncludingDisabled, isDailyEnabled, clearConfigCache, loadConfigOverrides } from '../lib/config';
+import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO, setConfigOverride, deleteConfigOverride } from '../lib/db';
+import { parseUserId, sendDM, openModal } from '../lib/slack';
 import { getUserTimezone, getUserDate, formatDate, sendPromptDM } from '../lib/prompt';
 import { formatManagerDigest } from '../lib/format';
 
@@ -183,7 +196,7 @@ describe('command handlers', () => {
 
   describe('handleList', () => {
     it('lists all dailies with participants when no name provided', async () => {
-      vi.mocked(getDailies).mockReturnValue([
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
         { name: 'daily-il', channel: '#il-standup' },
         { name: 'daily-us', channel: '#us-standup' },
       ] as any);
@@ -200,7 +213,7 @@ describe('command handlers', () => {
     });
 
     it('lists all dailies with participants when "all" provided', async () => {
-      vi.mocked(getDailies).mockReturnValue([
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
         { name: 'daily-il', channel: '#il-standup' },
       ] as any);
       vi.mocked(getParticipants).mockResolvedValue([{ slack_user_id: 'U111' }] as any);
@@ -493,7 +506,7 @@ describe('command handlers', () => {
     });
 
     it('routes list command', async () => {
-      vi.mocked(getDailies).mockReturnValue([]);
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([]);
       const response = await handleCommand('list', createContext(['list']));
       expect(response.text).toContain('dailies');
     });
@@ -512,6 +525,436 @@ describe('command handlers', () => {
     it('routes week command (deprecated)', async () => {
       const response = await handleCommand('week', createContext(['week']));
       expect(response.text).toContain('deprecated');
+    });
+
+    it('routes config reload command', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
+        { name: 'daily-il' },
+      ] as any);
+      const response = await handleCommand('config', createContext(['config', 'reload']));
+      expect(response.text).toContain('Config reloaded');
+    });
+
+    it('routes pause command', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(true);
+      const response = await handleCommand('pause', createContext(['pause', 'daily-il']));
+      expect(response.text).toContain('paused');
+      expect(setConfigOverride).toHaveBeenCalled();
+    });
+
+    it('routes resume command', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(false);
+      const response = await handleCommand('resume', createContext(['resume', 'daily-il']));
+      expect(response.text).toContain('active');
+      expect(deleteConfigOverride).toHaveBeenCalled();
+    });
+  });
+
+  describe('dynamic configuration commands', () => {
+    it('config reload requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('config', createContext(['config', 'reload']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('pause requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('pause', createContext(['pause', 'daily-il']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('resume requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('resume', createContext(['resume', 'daily-il']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('pause requires daily name', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      const response = await handleCommand('pause', createContext(['pause']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('pause validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+      const response = await handleCommand('pause', createContext(['pause', 'nonexistent']));
+      expect(response.text).toContain('Unknown daily');
+    });
+
+    it('pause shows message when already paused', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(false);
+      const response = await handleCommand('pause', createContext(['pause', 'daily-il']));
+      expect(response.text).toContain('already paused');
+    });
+
+    it('resume shows message when already active', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(true);
+      const response = await handleCommand('resume', createContext(['resume', 'daily-il']));
+      expect(response.text).toContain('already active');
+    });
+
+    it('list shows paused indicator', async () => {
+      vi.mocked(getAllDailiesIncludingDisabled).mockReturnValue([
+        { name: 'daily-il', channel: '#il-standup' },
+      ] as any);
+      vi.mocked(isDailyEnabled).mockReturnValue(false);
+      vi.mocked(getParticipants).mockResolvedValue([{ slack_user_id: 'U111' }] as any);
+
+      const response = await handleList(createContext(['list']));
+      expect(response.text).toContain('⏸️');
+    });
+  });
+
+  describe('admin management', () => {
+    it('admin list shows super-admins and db admins', async () => {
+      vi.mocked(getAdmins).mockReturnValue({ superAdmins: ['U_SUPER'], dbAdmins: ['U_DB1'] });
+      const response = await handleCommand('admin', createContext(['admin', 'list']));
+      expect(response.text).toContain('U_SUPER');
+      expect(response.text).toContain('U_DB1');
+      expect(response.text).toContain('Super-admins');
+    });
+
+    it('admin list omits DB admins section when there are none', async () => {
+      vi.mocked(getAdmins).mockReturnValue({ superAdmins: ['U_SUPER'], dbAdmins: [] });
+      const response = await handleCommand('admin', createContext(['admin', 'list']));
+      expect(response.text).toContain('U_SUPER');
+      expect(response.text).not.toContain('Admins (added)');
+    });
+
+    it('admin list works for non-super-admins', async () => {
+      vi.mocked(getAdmins).mockReturnValue({ superAdmins: ['U_SUPER'], dbAdmins: [] });
+      vi.mocked(isSuperAdmin).mockReturnValue(false);
+      const response = await handleCommand('admin', createContext(['admin', 'list']));
+      expect(response.text).toContain('U_SUPER');
+    });
+
+    it('admin add requires super-admin', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(false);
+      vi.mocked(parseUserId).mockReturnValue('U_NEW');
+      const response = await handleCommand('admin', createContext(['admin', 'add', '<@U_NEW>']));
+      expect(response.text).toContain('super-admin');
+    });
+
+    it('admin add succeeds for super-admin', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue('U_NEW');
+      vi.mocked(isAdmin).mockReturnValue(false);
+      vi.mocked(getOverride).mockReturnValue(undefined);
+      vi.mocked(setConfigOverride).mockResolvedValue();
+      vi.mocked(loadConfigOverrides).mockResolvedValue();
+
+      const response = await handleCommand('admin', createContext(['admin', 'add', '<@U_NEW>']));
+      expect(response.text).toContain('now an admin');
+      expect(setConfigOverride).toHaveBeenCalledWith(mockDb, 'global', 'admins', ['U_NEW'], 'U12345');
+    });
+
+    it('admin add appends to existing DB admins list', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue('U_NEW');
+      vi.mocked(isAdmin).mockReturnValue(false);
+      vi.mocked(getOverride).mockReturnValue(['U_EXISTING_DB']);
+      vi.mocked(setConfigOverride).mockResolvedValue();
+      vi.mocked(loadConfigOverrides).mockResolvedValue();
+
+      await handleCommand('admin', createContext(['admin', 'add', '<@U_NEW>']));
+      expect(setConfigOverride).toHaveBeenCalledWith(mockDb, 'global', 'admins', ['U_EXISTING_DB', 'U_NEW'], 'U12345');
+    });
+
+    it('admin add rejects if already admin', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue('U_EXISTING');
+      vi.mocked(isAdmin).mockReturnValue(true);
+
+      const response = await handleCommand('admin', createContext(['admin', 'add', '<@U_EXISTING>']));
+      expect(response.text).toContain('already an admin');
+    });
+
+    it('admin add requires user mention', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue(null);
+
+      const response = await handleCommand('admin', createContext(['admin', 'add']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('admin remove requires user mention', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue(null);
+
+      const response = await handleCommand('admin', createContext(['admin', 'remove']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('admin remove succeeds', async () => {
+      vi.mocked(isSuperAdmin).mockImplementation((id) => id === 'U12345');
+      vi.mocked(parseUserId).mockReturnValue('U_DB1');
+      vi.mocked(getOverride).mockReturnValue(['U_DB1', 'U_DB2']);
+      vi.mocked(setConfigOverride).mockResolvedValue();
+      vi.mocked(loadConfigOverrides).mockResolvedValue();
+
+      const response = await handleCommand('admin', createContext(['admin', 'remove', '<@U_DB1>']));
+      expect(response.text).toContain('no longer an admin');
+      expect(setConfigOverride).toHaveBeenCalledWith(mockDb, 'global', 'admins', ['U_DB2'], 'U12345');
+    });
+
+    it('admin remove rejects super-admin removal', async () => {
+      vi.mocked(isSuperAdmin).mockImplementation((id) => id === 'U_SUPER' || id === 'U12345');
+      vi.mocked(parseUserId).mockReturnValue('U_SUPER');
+
+      const response = await handleCommand('admin', createContext(['admin', 'remove', '<@U_SUPER>']));
+      expect(response.text).toContain('Cannot remove a super-admin');
+    });
+
+    it('admin remove rejects if not a DB admin', async () => {
+      vi.mocked(isSuperAdmin).mockImplementation((id) => id === 'U12345');
+      vi.mocked(parseUserId).mockReturnValue('U_UNKNOWN');
+      vi.mocked(getOverride).mockReturnValue([]);
+
+      const response = await handleCommand('admin', createContext(['admin', 'remove', '<@U_UNKNOWN>']));
+      expect(response.text).toContain('not a DB-added admin');
+    });
+
+    it('admin remove rejects if override list is undefined (no DB admins ever added)', async () => {
+      vi.mocked(isSuperAdmin).mockImplementation((id) => id === 'U12345');
+      vi.mocked(parseUserId).mockReturnValue('U_UNKNOWN');
+      vi.mocked(getOverride).mockReturnValue(undefined);
+
+      const response = await handleCommand('admin', createContext(['admin', 'remove', '<@U_UNKNOWN>']));
+      expect(response.text).toContain('not a DB-added admin');
+    });
+
+    it('admin with unknown action returns usage', async () => {
+      vi.mocked(isSuperAdmin).mockReturnValue(true);
+
+      const response = await handleCommand('admin', createContext(['admin', 'badaction']));
+      expect(response.text).toContain('Usage');
+      expect(response.text).toContain('admin');
+    });
+  });
+
+  describe('manager management', () => {
+    it('manager commands require admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handleCommand('manager', createContext(['manager', 'list', 'daily-il']));
+      expect(response.text).toContain('Only admins');
+    });
+
+    it('manager list shows managers for a daily as Slack mentions', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getDailyManagers).mockReturnValue(['U_MGR1', 'U_MGR2']);
+
+      const response = await handleCommand('manager', createContext(['manager', 'list', 'daily-il']));
+      expect(response.text).toContain('<@U_MGR1>');
+      expect(response.text).toContain('<@U_MGR2>');
+    });
+
+    it('manager list shows empty message', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getDailyManagers).mockReturnValue([]);
+
+      const response = await handleCommand('manager', createContext(['manager', 'list', 'daily-il']));
+      expect(response.text).toContain('no managers');
+    });
+
+    it('manager list requires daily name', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      const response = await handleCommand('manager', createContext(['manager', 'list']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('manager list validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+      const response = await handleCommand('manager', createContext(['manager', 'list', 'fake']));
+      expect(response.text).toContain('not found');
+    });
+
+    it('manager add succeeds', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockImplementation((text) => text.includes('<@') ? 'U_NEW_MGR' : null);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getDailyManagers).mockReturnValue([]);
+      vi.mocked(getOverride).mockReturnValue(undefined);
+      vi.mocked(setConfigOverride).mockResolvedValue();
+      vi.mocked(loadConfigOverrides).mockResolvedValue();
+
+      const response = await handleCommand('manager', createContext(['manager', 'add', 'daily-il', '<@U_NEW_MGR>']));
+      expect(response.text).toContain('now a manager');
+      expect(setConfigOverride).toHaveBeenCalledWith(mockDb, 'daily-il', 'managers', ['U_NEW_MGR'], 'U12345');
+    });
+
+    it('manager add appends to existing DB managers list', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockImplementation((text) => text.includes('<@') ? 'U_NEW_MGR' : null);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getDailyManagers).mockReturnValue(['U_YAML_MGR']);
+      vi.mocked(getOverride).mockReturnValue(['U_YAML_MGR']);
+      vi.mocked(setConfigOverride).mockResolvedValue();
+      vi.mocked(loadConfigOverrides).mockResolvedValue();
+
+      await handleCommand('manager', createContext(['manager', 'add', 'daily-il', '<@U_NEW_MGR>']));
+      expect(setConfigOverride).toHaveBeenCalledWith(mockDb, 'daily-il', 'managers', ['U_YAML_MGR', 'U_NEW_MGR'], 'U12345');
+    });
+
+    it('manager add rejects duplicate', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue('U_EXISTING_MGR');
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getDailyManagers).mockReturnValue(['U_EXISTING_MGR']);
+
+      const response = await handleCommand('manager', createContext(['manager', 'add', 'daily-il', '<@U_EXISTING_MGR>']));
+      expect(response.text).toContain('already a manager');
+    });
+
+    it('manager add requires daily name and user mention', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue(null);
+
+      const response = await handleCommand('manager', createContext(['manager', 'add']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('manager add validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockImplementation((text) => text.includes('<@') ? 'U_NEW_MGR' : null);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+
+      const response = await handleCommand('manager', createContext(['manager', 'add', 'nonexistent', '<@U_NEW_MGR>']));
+      expect(response.text).toContain('not found');
+    });
+
+    it('manager remove succeeds', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockImplementation((text) => text.includes('<@') ? 'U_MGR1' : null);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getOverride).mockReturnValue(['U_MGR1', 'U_MGR2']);
+      vi.mocked(setConfigOverride).mockResolvedValue();
+      vi.mocked(loadConfigOverrides).mockResolvedValue();
+
+      const response = await handleCommand('manager', createContext(['manager', 'remove', 'daily-il', '<@U_MGR1>']));
+      expect(response.text).toContain('no longer a manager');
+      expect(setConfigOverride).toHaveBeenCalledWith(mockDb, 'daily-il', 'managers', ['U_MGR2'], 'U12345');
+    });
+
+    it('manager remove rejects if not a DB manager', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue('U_YAML_MGR');
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getOverride).mockReturnValue([]);
+
+      const response = await handleCommand('manager', createContext(['manager', 'remove', 'daily-il', '<@U_YAML_MGR>']));
+      expect(response.text).toContain('not a DB-added manager');
+    });
+
+    it('manager remove rejects YAML-only managers (override undefined)', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockImplementation((text) => text.includes('<@') ? 'U_YAML_MGR' : null);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getOverride).mockReturnValue(undefined);
+
+      const response = await handleCommand('manager', createContext(['manager', 'remove', 'daily-il', '<@U_YAML_MGR>']));
+      expect(response.text).toContain('not a DB-added manager');
+      expect(response.text).toContain('YAML managers must be removed from config');
+    });
+
+    it('manager remove requires daily name and user mention', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockReturnValue(null);
+
+      const response = await handleCommand('manager', createContext(['manager', 'remove']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('manager remove validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(parseUserId).mockImplementation((text) => text.includes('<@') ? 'U_MGR1' : null);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+
+      const response = await handleCommand('manager', createContext(['manager', 'remove', 'nonexistent', '<@U_MGR1>']));
+      expect(response.text).toContain('not found');
+    });
+
+    it('manager with no action shows usage', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      const response = await handleCommand('manager', createContext(['manager']));
+      expect(response.text).toContain('Usage');
+    });
+
+    it('manager with unknown action shows usage', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      const response = await handleCommand('manager', createContext(['manager', 'badaction', 'daily-il']));
+      expect(response.text).toContain('Usage');
+    });
+  });
+
+  describe('mass prompt (prompt all <daily>)', () => {
+    const createContextWithTrigger = (args: string[]): CommandContext => ({
+      userId: 'U12345',
+      args,
+      db: mockDb,
+      slackToken: mockToken,
+      triggerId: 'test-trigger-id',
+    });
+
+    it('requires admin', async () => {
+      vi.mocked(isAdmin).mockReturnValue(false);
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'daily-il']));
+      expect(response.text).toContain('admin');
+    });
+
+    it('validates daily exists', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue(undefined);
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'nonexistent']));
+      expect(response.text).toContain('not found');
+    });
+
+    it('shows error when no participants', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getParticipants).mockResolvedValue([]);
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'daily-il']));
+      expect(response.text).toContain('No participants');
+    });
+
+    it('opens confirmation modal with participant count', async () => {
+      vi.mocked(isAdmin).mockReturnValue(true);
+      vi.mocked(getDaily).mockReturnValue({ name: 'daily-il' } as any);
+      vi.mocked(getParticipants).mockResolvedValue([
+        { slack_user_id: 'U111' },
+        { slack_user_id: 'U222' },
+        { slack_user_id: 'U333' },
+      ] as any);
+
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all', 'daily-il']));
+
+      expect(openModal).toHaveBeenCalled();
+      const modalCall = vi.mocked(openModal).mock.calls[0];
+      const view = modalCall[2] as any;
+      expect(view.callback_id).toBe('mass_prompt_confirm');
+      expect(view.blocks[0].text.text).toContain('3 participants');
+    });
+
+    it('falls through to self-prompt when only `prompt all` (no daily name)', async () => {
+      vi.mocked(getUserDailies).mockResolvedValue([
+        { daily_name: 'daily-il' },
+      ] as any);
+      vi.mocked(sendPromptDM).mockResolvedValue(true);
+
+      const response = await handlePrompt(createContextWithTrigger(['prompt', 'all']));
+      expect(response.text).toContain('Sent prompts for 1 dailies');
     });
   });
 });

@@ -19,6 +19,9 @@ import {
   formatPRDigestSection,
   formatLinearDigestSection,
   formatMemberPRSummary,
+  formatTeamSummary,
+  formatFullReport,
+  formatPersonalWeeklyRecap,
 } from '../lib/format';
 import type { TeamPRData } from '../lib/github';
 import type { TeamLinearData, CycleProgress } from '../lib/linear';
@@ -37,8 +40,7 @@ describe('format utilities', () => {
 
       const header = blocks[0];
       expect(header.type).toBe('section');
-      expect(header.text?.text).toContain('<@U12345>');
-      expect(header.text?.text).toContain('submitted their standup');
+      expect(header.text?.text).toBe('*<@U12345>*');
     });
 
     it('formats completed items with checkbox emoji', () => {
@@ -51,9 +53,9 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Finished task A');
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Completed task B');
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday'));
+      expect(yesterdayBlock?.text?.text).toContain('*Yesterday*');
+      expect(yesterdayBlock?.text?.text).toContain('2 done');
     });
 
     it('marks unplanned items with unplanned label', () => {
@@ -66,8 +68,8 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Fixed urgent bug _(unplanned)_');
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday'));
+      expect(yesterdayBlock?.text?.text).toContain('1 unplanned');
     });
 
     it('marks dropped items with red X in yesterday section', () => {
@@ -81,10 +83,9 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday:'));
-      expect(yesterdayBlock?.text?.text).toContain('☑️ Finished task');
-      expect(yesterdayBlock?.text?.text).toContain('❌ Cancelled task _(dropped)_');
-      expect(yesterdayBlock?.text?.text).toContain('❌ No longer needed _(dropped)_');
+      const yesterdayBlock = blocks.find(b => b.text?.text?.includes('Yesterday'));
+      expect(yesterdayBlock?.text?.text).toContain('1 done');
+      expect(yesterdayBlock?.text?.text).toContain('2 dropped');
     });
 
     it('shows in-progress items with 🔄 emoji in today section', () => {
@@ -99,8 +100,9 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(in progress)_');
-      expect(todayBlock?.text?.text).toContain('⬜ New task');
+      expect(todayBlock?.text?.text).toContain('🔄 WIP task');
+      expect(todayBlock?.text?.text).not.toContain('_(in progress)_');
+      expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
     it('shows ⚠️ for in-progress items with carry_count >= 3', () => {
@@ -116,7 +118,23 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(in progress)_');
+      expect(todayBlock?.text?.text).toContain('⚠️ Stuck task _(day 3)_');
+    });
+
+    it('shows 🔄 Day X for in-progress items with carry_count 1-2', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayInProgress: ['WIP task'],
+        unplanned: [],
+        todayPlans: [],
+        blockers: '',
+        customAnswers: {},
+        inProgressCarryCounts: { 'WIP task': 2 },
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('🔄 WIP task _(day 2)_');
     });
 
     it('renders in-progress items before carried-over items', () => {
@@ -150,11 +168,12 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('⬜ Ongoing work _(carried over)_');
-      expect(todayBlock?.text?.text).toContain('⬜ New task');
+      expect(todayBlock?.text?.text).toContain('➡️ Ongoing work');
+      expect(todayBlock?.text?.text).not.toContain('_(carried over)_');
+      expect(todayBlock?.text?.text).toContain('🎯 New task');
     });
 
-    it('adds separator between carried over and new items', () => {
+    it('does not add separator between carried over and new items', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],
         yesterdayIncomplete: ['Carried task'],
@@ -165,7 +184,7 @@ describe('format utilities', () => {
       });
 
       const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
-      expect(todayBlock?.text?.text).toContain('───');
+      expect(todayBlock?.text?.text).not.toContain('───');
     });
 
     it('includes blockers section when present', () => {
@@ -178,8 +197,9 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const blockersBlock = blocks.find(b => b.text?.text?.includes('Blockers'));
-      expect(blockersBlock?.text?.text).toContain('Waiting on API access from <@U99999>');
+      const blockersBlock = blocks.find(b => b.text?.text?.includes('🚧'));
+      expect(blockersBlock).toBeDefined();
+      expect(blockersBlock!.text!.text).toBe('🚧 Waiting on API access from <@U99999>');
     });
 
     it('excludes blockers section when empty', () => {
@@ -194,6 +214,21 @@ describe('format utilities', () => {
 
       const blockersBlock = blocks.find(b => b.text?.text?.includes('Blockers'));
       expect(blockersBlock).toBeUndefined();
+    });
+
+    it('prefixes each blocker line with 🚧 emoji', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayDropped: [],
+        unplanned: [],
+        todayPlans: ['Task A'],
+        blockers: 'Issue A\nIssue B\n\nIssue C',
+        customAnswers: {},
+      });
+      const blockerBlock = blocks.find(b => b.text?.text?.includes('🚧'));
+      expect(blockerBlock).toBeDefined();
+      expect(blockerBlock!.text!.text).toBe('🚧 Issue A\n🚧 Issue B\n🚧 Issue C');
     });
 
     it('includes custom answers', () => {
@@ -277,12 +312,12 @@ describe('format utilities', () => {
       const findIndex = (text: string) =>
         sectionBlocks.findIndex(b => b.text?.text?.includes(text));
 
-      const headerIdx = findIndex('submitted their standup');
+      const headerIdx = findIndex('<@U12345>');
       const questionStartIdx = findIndex('Question at start');
-      const yesterdayIdx = findIndex('Yesterday:');
+      const yesterdayIdx = findIndex('Yesterday');
       const todayIdx = findIndex('Today:');
       const questionMiddleIdx = findIndex('Question in middle');
-      const blockersIdx = findIndex('Blockers:');
+      const blockersIdx = findIndex('🚧');
 
       // Verify order: header, question@5, yesterday@10, today@20, question@25, blockers@30
       expect(headerIdx).toBe(0);
@@ -318,7 +353,7 @@ describe('format utilities', () => {
         b.text?.text?.includes("How're you feeling?")
       );
       const yesterdayIdx = sectionBlocks.findIndex(b =>
-        b.text?.text?.includes('Yesterday:')
+        b.text?.text?.includes('Yesterday')
       );
 
       // Question with order 5 should appear before yesterday (order 10)
@@ -352,7 +387,7 @@ describe('format utilities', () => {
         b.text?.text?.includes('PRs to review?')
       );
       const blockersIdx = sectionBlocks.findIndex(b =>
-        b.text?.text?.includes('Blockers:')
+        b.text?.text?.includes('🚧')
       );
 
       // Question with order 999 should appear after blockers (order 30)
@@ -372,7 +407,7 @@ describe('format utilities', () => {
         questions: [
           { text: 'Early question', order: 5 },
         ],
-        // No fieldOrder - should use defaults (yesterday:10, today:20, blockers:30)
+        // No fieldOrder - should use defaults (today:10, yesterday:20, blockers:30)
       });
 
       const sectionBlocks = blocks.filter(b => b.type === 'section');
@@ -381,14 +416,39 @@ describe('format utilities', () => {
         b.text?.text?.includes('Early question')
       );
       const yesterdayIdx = sectionBlocks.findIndex(b =>
-        b.text?.text?.includes('Yesterday:')
+        b.text?.text?.includes('Yesterday')
+      );
+      const todayIdx = sectionBlocks.findIndex(b =>
+        b.text?.text?.includes('Today:')
       );
 
-      // Question with order 5 should appear before yesterday (default order 10)
+      // Question with order 5 should appear before yesterday (default order 20)
       expect(questionIdx).toBeLessThan(yesterdayIdx);
+      // Today (default order 10) should appear before Yesterday (default order 20)
+      expect(todayIdx).toBeLessThan(yesterdayIdx);
     });
 
-    it('includes footer with daily name', () => {
+    it('renders Today section before Yesterday section by default', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['Done task'],
+        yesterdayIncomplete: [],
+        yesterdayDropped: [],
+        unplanned: [],
+        todayPlans: ['New task'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const sectionBlocks = blocks.filter(b => b.type === 'section');
+      const todayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Today:'));
+      const yesterdayIdx = sectionBlocks.findIndex(b => b.text?.text?.includes('Yesterday'));
+
+      expect(todayIdx).toBeGreaterThan(-1);
+      expect(yesterdayIdx).toBeGreaterThan(-1);
+      expect(todayIdx).toBeLessThan(yesterdayIdx);
+    });
+
+    it('does not include a context footer block', () => {
       const blocks = formatStandupBlocks('U12345', 'daily-il', {
         yesterdayCompleted: [],
         yesterdayIncomplete: [],
@@ -398,9 +458,74 @@ describe('format utilities', () => {
         customAnswers: {},
       });
 
-      const footer = blocks[blocks.length - 1];
-      expect(footer.type).toBe('context');
-      expect(footer.elements?.[0]?.text).toContain('daily-il standup');
+      const contextBlock = blocks.find(b => b.type === 'context');
+      expect(contextBlock).toBeUndefined();
+    });
+
+    it('enriches PR items with clickable GitHub links', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: ['[my-repo#42] Fix typo'],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['[other-repo#99] Add feature'],
+        blockers: '',
+        customAnswers: {},
+        githubOrg: 'thenvoi',
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('<https://github.com/thenvoi/other-repo/pull/99|📦 other-repo#99>');
+    });
+
+    it('enriches Linear items with clickable Linear links', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['[ENG-123] Fix auth bug'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('<https://linear.app/issue/ENG-123|🎫 ENG-123>');
+      expect(todayBlock?.text?.text).toContain('Fix auth bug');
+    });
+
+    it('leaves manual items unchanged (no enrichment)', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        unplanned: [],
+        todayPlans: ['Ship the feature'],
+        blockers: '',
+        customAnswers: {},
+      });
+
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today:'));
+      expect(todayBlock?.text?.text).toContain('🎯 Ship the feature');
+      expect(todayBlock?.text?.text).not.toContain('<http');
+    });
+
+    it('shows PR status labels inline in Today section', () => {
+      const blocks = formatStandupBlocks('U12345', 'daily-il', {
+        yesterdayCompleted: [],
+        yesterdayIncomplete: [],
+        yesterdayDropped: [],
+        unplanned: [],
+        todayPlans: [
+          '[my-repo#42] Fix auth _(awaiting review)_',
+          '[other-repo#99] Add caching _(to review)_',
+          '[draft-repo#7] WIP feature _(draft)_',
+        ],
+        blockers: '',
+        customAnswers: {},
+        githubOrg: 'thenvoi',
+      });
+      const todayBlock = blocks.find(b => b.text?.text?.includes('Today'));
+      expect(todayBlock?.text?.text).toContain('_(awaiting review)_');
+      expect(todayBlock?.text?.text).toContain('_(to review)_');
+      expect(todayBlock?.text?.text).toContain('_(draft)_');
     });
   });
 
@@ -787,8 +912,8 @@ describe('format utilities', () => {
         stats: [],
         totalWorkdays: 5,
         bottlenecks: [
-          { id: 1, text: 'Fix auth timeout issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' },
-          { id: 2, text: 'Update API docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' },
+          { id: 1, text: 'Fix auth timeout issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry', status: 'carried' },
+          { id: 2, text: 'Update API docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry', status: 'carried' },
         ],
       });
 
@@ -974,6 +1099,103 @@ describe('format utilities', () => {
 
       expect(result).not.toContain('Work Alignment');
     });
+
+    it('shows OOO users in daily digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 1,
+        oooToday: [
+          { slackUserId: 'U111', endDate: '2025-12-20' },
+          { slackUserId: 'U222', endDate: '2025-12-25' },
+        ],
+      });
+
+      expect(result).toContain('Out today');
+      expect(result).toContain('<@U111>');
+      expect(result).toContain('<@U222>');
+      expect(result).toContain('Dec 20');
+      expect(result).toContain('Dec 25');
+    });
+
+    it('does not show OOO section in weekly digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        oooToday: [
+          { slackUserId: 'U111', endDate: '2025-12-20' },
+        ],
+      });
+
+      expect(result).not.toContain('Out today');
+    });
+
+    it('does not show OOO section when no one is OOO', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 1,
+        oooToday: [],
+      });
+
+      expect(result).not.toContain('Out today');
+    });
+
+    it('flags users who routinely over-plan when maxPlanItems is set', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['a', 'b', 'c', 'd', 'e', 'f'], yesterday_incomplete: [], yesterday_in_progress: [] } as any,
+          { slack_user_id: 'U222', today_plans: ['a', 'b'], yesterday_incomplete: [], yesterday_in_progress: [] } as any,
+        ],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 1, total_completed: 2, avg_items_per_day: '6' } as any,
+          { slack_user_id: 'U222', submission_count: 1, total_completed: 1, avg_items_per_day: '2' } as any,
+        ],
+        totalWorkdays: 1,
+        maxPlanItems: 5,
+      });
+
+      expect(result).toContain('avg 6 plans');
+      // U222 appears in team but without over-plan flag
+      expect(result).toContain('<@U222>');
+      const u222Line = result.split('\n').find((l: string) => l.includes('U222'));
+      expect(u222Line).not.toContain('avg');
+    });
+
+    it('does not flag over-plan when maxPlanItems is not set', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'daily',
+        startDate: '2025-12-18',
+        endDate: '2025-12-18',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['a', 'b', 'c', 'd', 'e', 'f'], yesterday_incomplete: [], yesterday_in_progress: [] } as any,
+        ],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 1, total_completed: 2, avg_items_per_day: '6' } as any,
+        ],
+        totalWorkdays: 1,
+      });
+
+      expect(result).not.toContain('avg');
+    });
   });
 
   describe('buildBottleneckBlocks', () => {
@@ -984,7 +1206,7 @@ describe('format utilities', () => {
 
     it('creates header section for bottleneck items', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -997,8 +1219,8 @@ describe('format utilities', () => {
 
     it('creates section for each bottleneck item with snooze button', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
-        { id: 2, text: 'Update docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
+        { id: 2, text: 'Update docs', slack_user_id: 'U67890', carry_count: 3, days_pending: 3, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1010,7 +1232,7 @@ describe('format utilities', () => {
 
     it('includes item text and user mention in section', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1023,7 +1245,7 @@ describe('format utilities', () => {
 
     it('includes snooze button with correct action_id', () => {
       const bottlenecks = [
-        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 1, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1036,7 +1258,7 @@ describe('format utilities', () => {
 
     it('includes item id and daily name in button value', () => {
       const bottlenecks = [
-        { id: 42, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const },
+        { id: 42, text: 'Fix auth issue', slack_user_id: 'U12345', carry_count: 4, days_pending: 5, type: 'carry' as const, status: 'carried' as const },
       ];
 
       const blocks = buildBottleneckBlocks(bottlenecks, 'daily-il');
@@ -1425,6 +1647,506 @@ describe('format utilities', () => {
       const result = formatMemberPRSummary(prData);
 
       expect(result).toBe('3 draft');
+    });
+  });
+
+  describe('formatTeamSummary', () => {
+    it('shows one line per person with top plan items', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['Ship auth', 'Fix tests'], blockers: null, slack_message_ts: null } as any,
+          { slack_user_id: 'U222', today_plans: ['Review PR'], blockers: null, slack_message_ts: null } as any,
+        ],
+      });
+
+      expect(result).toContain('daily-il — Team Summary');
+      expect(result).toContain('<@U111>');
+      expect(result).toContain('Ship auth');
+      expect(result).toContain('Fix tests');
+      expect(result).toContain('<@U222>');
+      expect(result).toContain('Review PR');
+    });
+
+    it('shows blockers in a separate section', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['Ship auth'], blockers: 'Waiting on API key', slack_message_ts: null } as any,
+        ],
+      });
+
+      expect(result).toContain('Blockers');
+      expect(result).toContain('<@U111>: Waiting on API key');
+    });
+
+    it('includes message permalink when slack_message_ts is present', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [
+          { slack_user_id: 'U111', today_plans: ['Ship auth'], blockers: null, slack_message_ts: '1234567890.123456' } as any,
+        ],
+      });
+
+      expect(result).toContain('slack.com/archives/C123/p1234567890123456');
+      expect(result).toContain('↗');
+    });
+
+    it('returns empty string when no submissions', () => {
+      const result = formatTeamSummary({
+        dailyName: 'daily-il',
+        channel: 'C123',
+        submissions: [],
+      });
+
+      expect(result).toBe('');
+    });
+  });
+
+  describe('in-progress needs-attention in digest', () => {
+    it('shows 🔄 for in-progress bottleneck items in digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Long-running refactor', slack_user_id: 'U111', carry_count: 4, days_pending: 5, type: 'carry', status: 'in_progress' },
+        ],
+      });
+
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('🔄 <@U111>');
+      expect(result).toContain('in progress Day 4');
+      expect(result).not.toContain('stuck');
+    });
+
+    it('shows 🔥 for carried bottleneck items and 🔄 for in-progress in same digest', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Stuck task', slack_user_id: 'U111', carry_count: 3, days_pending: 4, type: 'carry', status: 'carried' },
+          { id: 2, text: 'WIP task', slack_user_id: 'U222', carry_count: 5, days_pending: 6, type: 'carry', status: 'in_progress' },
+        ],
+      });
+
+      expect(result).toContain('🔥 <@U111>');
+      expect(result).toContain('stuck 4 days');
+      expect(result).toContain('🔄 <@U222>');
+      expect(result).toContain('in progress Day 5');
+    });
+  });
+
+  describe('formatManagerDigest - blocker streaks and unplanned overload', () => {
+    it('shows 🚧 in Needs Attention when current_streak >= 3', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        blockerStreaks: [
+          { slack_user_id: 'U111', current_streak: 3, max_streak: 3, total_blocker_days: 3 },
+        ],
+      });
+
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('🚧 <@U111>');
+      expect(result).toContain('blocked 3 consecutive days');
+    });
+
+    it('does NOT show 🚧 streak warning when current_streak < 3', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        blockerStreaks: [
+          { slack_user_id: 'U222', current_streak: 2, max_streak: 4, total_blocker_days: 6 },
+        ],
+      });
+
+      // No 🚧 streak warning in action items (current_streak is only 2)
+      expect(result).not.toContain('consecutive days');
+    });
+
+    it('shows ⚡ in Needs Attention for unplanned overloads with correct percentages', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        unplannedOverloads: [
+          { slack_user_id: 'U333', unplanned_count: 7, completed_count: 10, unplanned_pct: 70 },
+        ],
+      });
+
+      expect(result).toContain('Needs Attention');
+      expect(result).toContain('⚡ <@U333>');
+      expect(result).toContain('70% unplanned work');
+      expect(result).toContain('7/10 items');
+    });
+
+    it('no crash and no Needs Attention section when blockerStreaks and unplannedOverloads are absent', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        // no blockerStreaks, no unplannedOverloads
+      });
+
+      expect(result).not.toContain('Needs Attention');
+    });
+
+    it('no crash and no Needs Attention when arrays are empty', () => {
+      const result = formatManagerDigest({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [],
+        totalWorkdays: 5,
+        blockerStreaks: [],
+        unplannedOverloads: [],
+      });
+
+      expect(result).not.toContain('Needs Attention');
+    });
+  });
+
+  describe('formatFullReport - blocker streaks and unplanned overload', () => {
+    const baseOptions = {
+      dailyName: 'daily-il',
+      period: 'weekly' as const,
+      startDate: '2025-12-12',
+      endDate: '2025-12-18',
+      submissions: [],
+      stats: [
+        { slack_user_id: 'U111', submission_count: 5, total_completed: 10, total_planned: 12, total_blockers: 3, avg_items_per_day: 2.4 },
+      ],
+      totalWorkdays: 5,
+    };
+
+    it('shows per-user blocker streak line when current_streak >= 3', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        blockerStreaks: [
+          { slack_user_id: 'U111', current_streak: 4, max_streak: 4, total_blocker_days: 4 },
+        ],
+      });
+
+      expect(result).toContain('🚧 Current blocker streak: 4 days');
+    });
+
+    it('does NOT show blocker streak line when current_streak < 3', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        blockerStreaks: [
+          { slack_user_id: 'U111', current_streak: 2, max_streak: 5, total_blocker_days: 7 },
+        ],
+      });
+
+      expect(result).not.toContain('Current blocker streak');
+    });
+
+    it('shows per-user unplanned overload line', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        unplannedOverloads: [
+          { slack_user_id: 'U111', unplanned_count: 8, completed_count: 10, unplanned_pct: 80 },
+        ],
+      });
+
+      expect(result).toContain('⚡ Unplanned work: 80%');
+      expect(result).toContain('8/10 items');
+    });
+
+    it('does not show overload line for users not in unplannedOverloads', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        unplannedOverloads: [], // U111 not in the list
+      });
+
+      expect(result).not.toContain('Unplanned work');
+    });
+
+    it('trend section includes unplanned_rate when present', () => {
+      const result = formatFullReport({
+        ...baseOptions,
+        trends: {
+          current: {
+            participation_rate: 80,
+            completion_rate: 75,
+            blocker_rate: 10,
+            unplanned_rate: 35,
+            total_submissions: 5,
+            total_participants: 1,
+            total_items_completed: 10,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.4,
+          },
+          previous: {
+            participation_rate: 70,
+            completion_rate: 65,
+            blocker_rate: 15,
+            unplanned_rate: 50,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 8,
+            total_items_dropped: 4,
+            avg_items_per_day: 2.0,
+          },
+        },
+      });
+
+      expect(result).toContain('Unplanned work');
+      expect(result).toContain('35%');
+    });
+
+    it('trend section omits unplanned_rate when it is 0 / undefined', () => {
+      // unplanned_rate = 0 is falsy, so the condition `!== undefined` matters
+      // The format.ts code checks: if (trends.current.unplanned_rate !== undefined)
+      const result = formatFullReport({
+        ...baseOptions,
+        trends: {
+          current: {
+            participation_rate: 80,
+            completion_rate: 75,
+            blocker_rate: 10,
+            unplanned_rate: 0,
+            total_submissions: 5,
+            total_participants: 1,
+            total_items_completed: 10,
+            total_items_dropped: 3,
+            avg_items_per_day: 2.4,
+          },
+          previous: {
+            participation_rate: 70,
+            completion_rate: 65,
+            blocker_rate: 15,
+            unplanned_rate: 0,
+            total_submissions: 4,
+            total_participants: 1,
+            total_items_completed: 8,
+            total_items_dropped: 4,
+            avg_items_per_day: 2.0,
+          },
+        },
+      });
+
+      // unplanned_rate is 0 (not undefined) so line should appear, showing "0%"
+      expect(result).toContain('Unplanned work');
+    });
+  });
+
+  describe('formatFullReport - in-progress flagging', () => {
+    it('shows in-progress needs-attention section per user', () => {
+      const result = formatFullReport({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 4, total_completed: 10, total_planned: 12, total_blockers: 0, avg_items_per_day: 3 },
+        ],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Long-running migration', slack_user_id: 'U111', carry_count: 4, days_pending: 5, type: 'carry', status: 'in_progress' },
+        ],
+      });
+
+      expect(result).toContain('In progress — needs attention');
+      expect(result).toContain('🔄 "Long-running migration" (Day 4)');
+    });
+
+    it('separates in-progress and carried stuck items in report', () => {
+      const result = formatFullReport({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 4, total_completed: 10, total_planned: 12, total_blockers: 0, avg_items_per_day: 3 },
+        ],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'WIP refactor', slack_user_id: 'U111', carry_count: 4, days_pending: 5, type: 'carry', status: 'in_progress' },
+          { id: 2, text: 'Abandoned PR', slack_user_id: 'U111', carry_count: 3, days_pending: 4, type: 'carry', status: 'carried' },
+        ],
+      });
+
+      expect(result).toContain('In progress — needs attention');
+      expect(result).toContain('🔄 "WIP refactor" (Day 4)');
+      expect(result).toContain('Stuck items');
+      expect(result).toContain('🔥 "Abandoned PR" (4 days, carried 3x)');
+    });
+
+    it('does not show in-progress section when no in-progress bottlenecks', () => {
+      const result = formatFullReport({
+        dailyName: 'daily-il',
+        period: 'weekly',
+        startDate: '2025-12-12',
+        endDate: '2025-12-18',
+        submissions: [],
+        stats: [
+          { slack_user_id: 'U111', submission_count: 4, total_completed: 10, total_planned: 12, total_blockers: 0, avg_items_per_day: 3 },
+        ],
+        totalWorkdays: 5,
+        bottlenecks: [
+          { id: 1, text: 'Old task', slack_user_id: 'U111', carry_count: 3, days_pending: 4, type: 'carry', status: 'carried' },
+        ],
+      });
+
+      expect(result).not.toContain('In progress — needs attention');
+      expect(result).toContain('Stuck items');
+    });
+  });
+
+  describe('formatPersonalWeeklyRecap', () => {
+    it('shows "no standups" message when submissions array is empty', () => {
+      const result = formatPersonalWeeklyRecap('daily-il', []);
+      expect(result).toContain('No standups submitted this week');
+      expect(result).toContain('daily-il');
+    });
+
+    it('includes completed items from submissions', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: ['Fix auth bug', 'Write tests'],
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: ['Deploy'], blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('✅ *Completed* (2)');
+      expect(result).toContain('Fix auth bug');
+      expect(result).toContain('Write tests');
+    });
+
+    it('includes carried items', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: null,
+          yesterday_incomplete: ['Stuck task'], yesterday_in_progress: null,
+          unplanned: null, today_plans: ['Deploy'], blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('➡️ *Still carrying* (1)');
+      expect(result).toContain('Stuck task');
+    });
+
+    it('includes blockers', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: null,
+          yesterday_incomplete: null, yesterday_in_progress: null,
+          unplanned: null, today_plans: ['Deploy'], blockers: 'Waiting on API access',
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('🚧 *Blockers reported* (1)');
+      expect(result).toContain('Waiting on API access');
+    });
+
+    it('deduplicates items across multiple submissions', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: ['Task A'],
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: null, blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+        {
+          id: 2, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-05',
+          submitted_at: new Date(), yesterday_completed: ['Task A', 'Task B'],
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: null, blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('✅ *Completed* (2)');
+    });
+
+    it('shows submission count in header', () => {
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: ['A'], yesterday_incomplete: null,
+          yesterday_in_progress: null, unplanned: null, today_plans: null, blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+        {
+          id: 2, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-05',
+          submitted_at: new Date(), yesterday_completed: null, yesterday_incomplete: null,
+          yesterday_in_progress: null, unplanned: null, today_plans: null, blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+        {
+          id: 3, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-06',
+          submitted_at: new Date(), yesterday_completed: null, yesterday_incomplete: null,
+          yesterday_in_progress: null, unplanned: null, today_plans: null, blockers: null,
+          custom_answers: null, slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('3 standups submitted this week');
+    });
+
+    it('caps completed items at 10', () => {
+      const completed = Array.from({ length: 15 }, (_, i) => `Task ${i + 1}`);
+      const submissions = [
+        {
+          id: 1, slack_user_id: 'U1', daily_name: 'daily-il', date: '2026-05-04',
+          submitted_at: new Date(), yesterday_completed: completed,
+          yesterday_incomplete: null, yesterday_in_progress: null, unplanned: null,
+          today_plans: null, blockers: null, custom_answers: null,
+          slack_message_ts: null, posted: true, items_normalized: true,
+        },
+      ];
+
+      const result = formatPersonalWeeklyRecap('daily-il', submissions as any);
+      expect(result).toContain('…and 5 more');
     });
   });
 });

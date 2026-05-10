@@ -3,7 +3,7 @@
  * Shows user's dailies with "Start Daily" buttons
  */
 
-import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference } from '../db';
+import { DbClient, getUserDailies, getSubmissionForDate, getPreviousSubmission, Submission, getGitHubUsername, getLinearUserId, setGitHubUsername, setLinearUserId, getDmStandupPreference, getUserSettings, getActiveOOO, getActiveWorkItems } from '../db';
 import { getDaily, getGitHubConfig, getGitHubUsernameFromConfig, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
 import { publishHomeView } from '../slack';
 import { formatDate, getUserDate, getUserTimezone } from '../prompt';
@@ -31,20 +31,34 @@ export interface AppHomeOpenedEvent {
 // Home View Builder
 // ============================================================================
 
+interface PlanItem {
+  id?: number;      // work_item.id — needed for overflow menus
+  text: string;
+  status: 'done' | 'in_progress' | 'carried' | 'planned' | 'dropped';
+  source?: string; // e.g. "PR #123", "LIN-456"
+}
+
 interface DailyStatus {
   dailyName: string;
   todaySubmitted: boolean;
   tomorrowScheduled: boolean;
   submission?: Submission; // Today's submission for stats
   droppedCount?: number; // Items dropped from yesterday
+  planItems?: PlanItem[]; // Today's plan items with status
+  tomorrowPlanItems?: PlanItem[]; // Tomorrow's scheduled plan items
   prData?: UserPRData; // GitHub PR data if integration enabled
   linearData?: UserLinearData; // Linear data if integration enabled
 }
 
 export interface LinkedAccounts {
-  github: string | null;  // username or null
-  linear: string | null;  // user ID or null
-  dmStandup: boolean;     // whether DM standup copies are enabled
+  github: string | null;
+  linear: string | null;
+  dmStandup: boolean;
+  maxItems: number | null;
+  stalePrDays: number | null;
+  linearTeamFilter: string[] | null;
+  linearSyncBack: boolean;
+  oooStatus?: { startDate: string; endDate: string } | null;
 }
 
 /**
@@ -155,6 +169,45 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
           value: status.dailyName,
         },
       });
+
+      // Today's Plans section — always visible when submitted
+      if (status.planItems && status.planItems.length > 0) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*Today*' }],
+        });
+
+        blocks.push(...buildPlanItemBlocks(status.planItems, status.dailyName));
+
+        // Action buttons at the end of today's task list
+        blocks.push({
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '➕ Add Item', emoji: true },
+              action_id: 'task_add',
+              value: status.dailyName,
+            },
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '✏️ Edit Standup', emoji: true },
+              action_id: 'home_edit_standup',
+              value: status.dailyName,
+            },
+          ],
+        });
+      }
+
+      // Tomorrow's scheduled plans
+      if (status.tomorrowPlanItems && status.tomorrowPlanItems.length > 0) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: '*Tomorrow (scheduled)*' }],
+        });
+
+        blocks.push(...buildPlanItemBlocks(status.tomorrowPlanItems, status.dailyName));
+      }
     }
   }
 
@@ -229,28 +282,129 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
       });
     }
 
-    // DM preferences
+    // Settings section
     blocks.push({
       type: 'header',
       text: {
         type: 'plain_text',
-        text: '⚙️ Preferences',
+        text: '⚙️ Settings',
         emoji: true,
       },
     });
 
-    const dmStatus = linkedAccounts.dmStandup ? '✅ Enabled' : '❌ Disabled';
+    // OOO management
+    if (linkedAccounts.oooStatus) {
+      const formatShort = (d: string) => {
+        const date = new Date(d + 'T00:00:00');
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      };
+      const rangeText = linkedAccounts.oooStatus.startDate === linkedAccounts.oooStatus.endDate
+        ? formatShort(linkedAccounts.oooStatus.startDate)
+        : `${formatShort(linkedAccounts.oooStatus.startDate)} – ${formatShort(linkedAccounts.oooStatus.endDate)}`;
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Out of Office*\n🏖️ ${rangeText}`,
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Clear OOO', emoji: true },
+          action_id: 'home_clear_ooo',
+          style: 'danger',
+        },
+      });
+    } else {
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Out of Office*\nNot set',
+        },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Set OOO', emoji: true },
+          action_id: 'home_set_ooo',
+        },
+      });
+    }
+
+    // DM standup copy
+    const dmStatus = linkedAccounts.dmStandup ? '✅ On' : '❌ Off';
     const dmButtonText = linkedAccounts.dmStandup ? 'Disable' : 'Enable';
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*DM standup copy*\n${dmStatus} — get a private copy of your standup when it posts to the channel`,
+        text: `*DM standup copy*\n${dmStatus} — your plan is shown above; enable this for an extra DM copy`,
       },
       accessory: {
         type: 'button',
         text: { type: 'plain_text', text: dmButtonText, emoji: true },
         action_id: 'home_toggle_dm_standup',
+      },
+    });
+
+    // Max items per list
+    const maxItemsLabel = linkedAccounts.maxItems ? `${linkedAccounts.maxItems} items` : 'No limit';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Max items per list*\n${maxItemsLabel} — PRs and Linear tickets shown in modal and post`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Change', emoji: true },
+        action_id: 'home_set_max_items',
+      },
+    });
+
+    // Stale PR threshold
+    const stalePrLabel = linkedAccounts.stalePrDays ? `${linkedAccounts.stalePrDays} days` : '3 days (default)';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Stale PR threshold*\n${stalePrLabel} — reviews older than this are flagged`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Change', emoji: true },
+        action_id: 'home_set_stale_pr_days',
+      },
+    });
+
+    // Linear team filter
+    const linearFilterLabel = linkedAccounts.linearTeamFilter
+      ? linkedAccounts.linearTeamFilter.join(', ')
+      : 'All teams';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Linear teams*\n${linearFilterLabel} — which teams' cycles to include`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Change', emoji: true },
+        action_id: 'home_set_linear_teams',
+      },
+    });
+
+    // Linear sync-back toggle
+    const syncStatus = linkedAccounts.linearSyncBack ? '✅ On' : '❌ Off';
+    const syncButtonText = linkedAccounts.linearSyncBack ? 'Disable' : 'Enable';
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Linear sync-back*\n${syncStatus} — mark tickets in-progress and comment blockers on submit`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: syncButtonText, emoji: true },
+        action_id: 'home_toggle_linear_sync',
       },
     });
 
@@ -272,6 +426,70 @@ export function buildHomeView(dailyStatuses: DailyStatus[], linkedAccounts?: Lin
     type: 'home',
     blocks,
   };
+}
+
+/** Build Slack blocks for a list of plan items (reused for today and tomorrow) */
+function buildPlanItemBlocks(items: PlanItem[], dailyName: string): unknown[] {
+  const blocks: unknown[] = [];
+  for (const item of items) {
+    const sourceTag = item.source ? ` · _${item.source}_` : '';
+    const isActive = item.status === 'planned' || item.status === 'in_progress' || item.status === 'carried';
+
+    let itemText: string;
+    switch (item.status) {
+      case 'done':
+        itemText = `✅ ~${item.text}~${sourceTag}`;
+        break;
+      case 'in_progress':
+        itemText = `🔄 ${item.text}${sourceTag}`;
+        break;
+      case 'carried':
+        itemText = `➡️ ${item.text} _(carried)_${sourceTag}`;
+        break;
+      case 'dropped':
+        itemText = `❌ ~${item.text}~${sourceTag}`;
+        break;
+      default:
+        itemText = `🎯 ${item.text}${sourceTag}`;
+    }
+
+    if (isActive && item.id !== undefined) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: itemText },
+        accessory: {
+          type: 'overflow',
+          action_id: 'task_action',
+          options: [
+            {
+              text: { type: 'plain_text', text: '✅ Done', emoji: true },
+              value: JSON.stringify({ itemId: item.id, dailyName, action: 'done' }),
+            },
+            {
+              text: { type: 'plain_text', text: '🔄 In Progress', emoji: true },
+              value: JSON.stringify({ itemId: item.id, dailyName, action: 'in_progress' }),
+            },
+            {
+              text: { type: 'plain_text', text: '❌ Drop', emoji: true },
+              value: JSON.stringify({ itemId: item.id, dailyName, action: 'drop' }),
+            },
+          ],
+        },
+      });
+    } else {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: itemText },
+      });
+    }
+  }
+  return blocks;
+}
+
+/** Extract source context from a plan item text (e.g., "[LIN-123] ..." → "LIN-123", "[repo#45] ..." → "repo#45") */
+function extractSource(text: string): string | undefined {
+  const match = text.match(/^\[([^\]]+)\]\s/);
+  return match ? match[1] : undefined;
 }
 
 /** Parse JSONB arrays from database (handles both array and string formats) */
@@ -331,11 +549,8 @@ export async function handleAppHomeOpened(
       const todaySubmitted = todaySubmission !== null;
 
       // Check tomorrow's scheduled submission
-      let tomorrowScheduled = false;
-      if (todaySubmitted) {
-        const tomorrowSubmission = await getSubmissionForDate(ctx.db, userId, dailyName, tomorrowStr);
-        tomorrowScheduled = tomorrowSubmission !== null && !tomorrowSubmission.posted;
-      }
+      const tomorrowSubmission = await getSubmissionForDate(ctx.db, userId, dailyName, tomorrowStr);
+      const tomorrowScheduled = tomorrowSubmission !== null && !tomorrowSubmission.posted;
 
       // Fetch GitHub PR data if integration is enabled
       let prData: UserPRData | undefined;
@@ -385,10 +600,14 @@ export async function handleAppHomeOpened(
         }
       }
 
-      // Compute dropped count from previous submission
+      // Build plan items and compute dropped count from previous submission
       let droppedCount: number | undefined;
+      let planItems: PlanItem[] | undefined;
       if (todaySubmission) {
         const prevSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
+
+        // Build dropped set from previous submission
+        const droppedItems: string[] = [];
         if (prevSubmission) {
           const prevPlans = new Set([
             ...parseJsonArray(prevSubmission.today_plans),
@@ -400,7 +619,70 @@ export async function handleAppHomeOpened(
             ...parseJsonArray(todaySubmission.yesterday_incomplete),
             ...parseJsonArray(todaySubmission.yesterday_in_progress),
           ]);
-          droppedCount = [...prevPlans].filter(item => !accountedFor.has(item)).length;
+          for (const item of prevPlans) {
+            if (!accountedFor.has(item)) droppedItems.push(item);
+          }
+          droppedCount = droppedItems.length;
+        }
+
+        // Build plan items list from work_items (with IDs for interactivity),
+        // falling back to JSONB arrays for older submissions without work_item records.
+        planItems = [];
+        const workItems = await getActiveWorkItems(ctx.db, userId, dailyName, todayStr);
+
+        if (workItems.length > 0) {
+          // Primary path: map work_items rows (has IDs for overflow menus)
+          for (const wi of workItems) {
+            let mappedStatus: PlanItem['status'];
+            switch (wi.status) {
+              case 'done':       mappedStatus = 'done';        break;
+              case 'in_progress': mappedStatus = 'in_progress'; break;
+              case 'carried':    mappedStatus = 'carried';     break;
+              case 'dropped':    mappedStatus = 'dropped';     break;
+              default:           mappedStatus = 'planned';     break; // 'pending'
+            }
+            planItems.push({ id: wi.id, text: wi.text, status: mappedStatus, source: extractSource(wi.text) });
+          }
+        } else {
+          // Fallback: parse JSONB arrays (backwards compatibility for submissions without work_item records)
+          const completed = parseJsonArray(todaySubmission.yesterday_completed);
+          const incomplete = parseJsonArray(todaySubmission.yesterday_incomplete);
+          const inProgress = parseJsonArray(todaySubmission.yesterday_in_progress);
+          const plans = parseJsonArray(todaySubmission.today_plans);
+
+          for (const item of inProgress) {
+            planItems.push({ text: item, status: 'in_progress', source: extractSource(item) });
+          }
+          for (const item of incomplete) {
+            planItems.push({ text: item, status: 'carried', source: extractSource(item) });
+          }
+          for (const item of plans) {
+            planItems.push({ text: item, status: 'planned', source: extractSource(item) });
+          }
+          for (const item of completed) {
+            planItems.push({ text: item, status: 'done', source: extractSource(item) });
+          }
+          for (const item of droppedItems) {
+            planItems.push({ text: item, status: 'dropped', source: extractSource(item) });
+          }
+        }
+      }
+
+      // Build tomorrow's plan items from scheduled submission
+      let tomorrowPlanItems: PlanItem[] | undefined;
+      if (tomorrowSubmission && !tomorrowSubmission.posted) {
+        tomorrowPlanItems = [];
+        const tomorrowWorkItems = await getActiveWorkItems(ctx.db, userId, dailyName, tomorrowStr);
+
+        if (tomorrowWorkItems.length > 0) {
+          for (const wi of tomorrowWorkItems) {
+            tomorrowPlanItems.push({ id: wi.id, text: wi.text, status: 'planned', source: extractSource(wi.text) });
+          }
+        } else {
+          const tomorrowPlans = parseJsonArray(tomorrowSubmission.today_plans);
+          for (const item of tomorrowPlans) {
+            tomorrowPlanItems.push({ text: item, status: 'planned', source: extractSource(item) });
+          }
         }
       }
 
@@ -410,21 +692,38 @@ export async function handleAppHomeOpened(
         tomorrowScheduled,
         submission: todaySubmission || undefined,
         droppedCount,
+        planItems,
+        tomorrowPlanItems,
         prData,
         linearData,
       });
     }
 
-    // Fetch linked accounts and preferences
-    const [githubUsername, linearUserId, dmStandup] = await Promise.all([
+    // Fetch linked accounts, preferences, and OOO status
+    const [githubUsername, linearUserId, settings] = await Promise.all([
       getGitHubUsername(ctx.db, userId),
       getLinearUserId(ctx.db, userId),
-      getDmStandupPreference(ctx.db, userId),
+      getUserSettings(ctx.db, userId),
     ]);
+
+    // Check OOO for the first daily (shows earliest active OOO)
+    let oooStatus: { startDate: string; endDate: string } | null = null;
+    if (userDailies.length > 0) {
+      const ooo = await getActiveOOO(ctx.db, userId, userDailies[0].daily_name, todayStr);
+      if (ooo) {
+        oooStatus = { startDate: ooo.start_date, endDate: ooo.end_date };
+      }
+    }
+
     const linkedAccounts: LinkedAccounts = {
       github: githubUsername,
       linear: linearUserId,
-      dmStandup,
+      dmStandup: settings.dmStandup,
+      maxItems: settings.maxItems,
+      stalePrDays: settings.stalePrDays,
+      linearTeamFilter: settings.linearTeamFilter,
+      linearSyncBack: settings.linearSyncBack,
+      oooStatus,
     };
 
     // Build and publish the home view

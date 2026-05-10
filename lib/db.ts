@@ -207,17 +207,21 @@ export async function getUsersWithLinearLinks(
 // DM Standup Preference
 // ============================================================================
 
-/** Get whether user wants DM copies of standup posts (default: true) */
+/** Get whether user wants DM copies of standup posts (default: false — App Home shows plans) */
 export async function getDmStandupPreference(
   db: DbClient,
   slackUserId: string
 ): Promise<boolean> {
-  const result = await db.query<{ dm_standup: boolean | null }>(
-    `SELECT dm_standup FROM slack_users WHERE slack_user_id = $1`,
-    [slackUserId]
-  );
-  // Default to true if no row or null
-  return result[0]?.dm_standup ?? true;
+  try {
+    const result = await db.query<{ dm_standup: boolean | null }>(
+      `SELECT dm_standup FROM slack_users WHERE slack_user_id = $1`,
+      [slackUserId]
+    );
+    // Default to false — App Home is the primary place to review your plan
+    return result[0]?.dm_standup ?? false;
+  } catch {
+    return false;
+  }
 }
 
 /** Set whether user wants DM copies of standup posts */
@@ -236,8 +240,88 @@ export async function setDmStandupPreference(
 }
 
 // ============================================================================
+// User Settings
+// ============================================================================
+
+export interface UserSettings {
+  dmStandup: boolean;
+  maxItems: number | null;
+  stalePrDays: number | null;
+  linearTeamFilter: string[] | null;
+  linearSyncBack: boolean;
+}
+
+export async function getUserSettings(
+  db: DbClient,
+  slackUserId: string
+): Promise<UserSettings> {
+  const result = await db.query<{
+    dm_standup: boolean | null;
+    max_items: number | null;
+    stale_pr_days: number | null;
+    linear_team_filter: string | null;
+    linear_sync_back: boolean | null;
+  }>(
+    `SELECT dm_standup, max_items, stale_pr_days, linear_team_filter, linear_sync_back
+     FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  const row = result[0];
+  return {
+    dmStandup: row?.dm_standup ?? false,
+    maxItems: row?.max_items ?? null,
+    stalePrDays: row?.stale_pr_days ?? null,
+    linearTeamFilter: row?.linear_team_filter ? row.linear_team_filter.split(',').map(s => s.trim()) : null,
+    linearSyncBack: row?.linear_sync_back ?? true,
+  };
+}
+
+export async function getLinearSyncBack(
+  db: DbClient,
+  slackUserId: string
+): Promise<boolean> {
+  const result = await db.query<{ linear_sync_back: boolean | null }>(
+    `SELECT linear_sync_back FROM slack_users WHERE slack_user_id = $1`,
+    [slackUserId]
+  );
+  return result[0]?.linear_sync_back ?? true;
+}
+
+export async function setLinearSyncBack(
+  db: DbClient,
+  slackUserId: string,
+  enabled: boolean
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, linear_sync_back, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       linear_sync_back = $3`,
+    [slackUserId, enabled, enabled]
+  );
+}
+
+export async function updateUserSetting(
+  db: DbClient,
+  slackUserId: string,
+  key: 'max_items' | 'stale_pr_days' | 'linear_team_filter',
+  value: number | string | null
+): Promise<void> {
+  await db.query(
+    `INSERT INTO slack_users (slack_user_id, ${key}, tz_offset)
+     VALUES ($1, $2, 0)
+     ON CONFLICT (slack_user_id) DO UPDATE SET
+       ${key} = $3`,
+    [slackUserId, value, value]
+  );
+}
+
+// ============================================================================
 // Work Items (for analytics)
 // ============================================================================
+
+export type ItemSource = 'manual' | 'github_pr' | 'linear_ticket';
+export type ItemType = 'plan' | 'unplanned';
 
 export interface WorkItem {
   id: number;
@@ -250,6 +334,186 @@ export interface WorkItem {
   completed_date: string | null;
   snoozed_until: string | null;
   submission_id: number | null;
+  source: ItemSource;
+  source_ref: string | null;
+  source_url: string | null;
+  item_type: ItemType;
+}
+
+export type SubmissionItemRole =
+  | 'today_plan'
+  | 'unplanned'
+  | 'yesterday_completed'
+  | 'yesterday_incomplete'
+  | 'yesterday_in_progress'
+  | 'yesterday_dropped';
+
+export interface SubmissionItem {
+  id: number;
+  submission_id: number;
+  work_item_id: number;
+  role: SubmissionItemRole;
+  position: number;
+}
+
+/** Get active Linear-sourced work items for a user/daily on a specific date */
+export async function getActiveLinearWorkItems(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3
+       AND source = 'linear_ticket'
+       AND status IN ('pending', 'carried', 'in_progress')
+     ORDER BY id ASC`,
+    [slackUserId, dailyName, date]
+  );
+}
+
+/**
+ * Get active work items across all users/dailies by source_ref (Linear identifier).
+ * Used by the webhook handler to find items that need auto-update.
+ */
+export async function getActiveWorkItemsBySourceRef(
+  db: DbClient,
+  sourceRef: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE source_ref = $1
+       AND source = 'linear_ticket'
+       AND status IN ('pending', 'carried', 'in_progress')
+     ORDER BY created_date DESC`,
+    [sourceRef]
+  );
+}
+
+/** Get active work items for a user/daily on a specific date, ordered by status priority */
+export async function getActiveWorkItems(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<WorkItem[]> {
+  return db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3
+     ORDER BY
+       CASE status
+         WHEN 'in_progress' THEN 1
+         WHEN 'carried'     THEN 2
+         WHEN 'pending'     THEN 3
+         WHEN 'done'        THEN 4
+         WHEN 'dropped'     THEN 5
+         ELSE 6
+       END,
+       id ASC`,
+    [slackUserId, dailyName, date]
+  );
+}
+
+/** Update a single work item's status by ID */
+export async function updateWorkItemStatus(
+  db: DbClient,
+  itemId: number,
+  status: 'done' | 'dropped' | 'in_progress' | 'pending' | 'carried',
+  completedDate?: string
+): Promise<boolean> {
+  let sql: string;
+  let params: unknown[];
+
+  if (status === 'done') {
+    sql = `UPDATE work_items SET status = 'done', completed_date = $1 WHERE id = $2 RETURNING id`;
+    params = [completedDate ?? null, itemId];
+  } else {
+    sql = `UPDATE work_items SET status = $1 WHERE id = $2 RETURNING id`;
+    params = [status, itemId];
+  }
+
+  const result = await db.query<{ id: number }>(sql, params);
+  return result.length > 0;
+}
+
+/** Insert a single work item (source='manual', item_type='plan') */
+export async function addWorkItem(
+  db: DbClient,
+  slackUserId: string,
+  dailyName: string,
+  text: string,
+  date: string,
+  submissionId: number
+): Promise<WorkItem | null> {
+  const result = await db.query<WorkItem>(
+    `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id, source, item_type)
+     VALUES ($1, $2, $3, $4, 'pending', $5, 'manual', 'plan')
+     RETURNING *`,
+    [slackUserId, dailyName, text, date, submissionId]
+  );
+  return result[0] || null;
+}
+
+/**
+ * Rebuild the submission's JSONB arrays from the current work_items state.
+ * Call this after any App Home mutation to keep the submission record in sync.
+ */
+export async function updateSubmissionArrays(
+  db: DbClient,
+  submissionId: number,
+  slackUserId: string,
+  dailyName: string,
+  date: string
+): Promise<void> {
+  const items = await db.query<WorkItem>(
+    `SELECT * FROM work_items
+     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3`,
+    [slackUserId, dailyName, date]
+  );
+
+  const todayPlans: string[] = [];
+  const yesterdayCompleted: string[] = [];
+  const yesterdayIncomplete: string[] = [];
+  const yesterdayInProgress: string[] = [];
+
+  for (const item of items) {
+    if (item.item_type === 'unplanned') continue; // unplanned items managed separately
+    switch (item.status) {
+      case 'pending':
+      case 'carried':
+        // These are "today's plan" items that haven't changed state
+        if (item.carry_count === 0) {
+          todayPlans.push(item.text);
+        } else {
+          yesterdayIncomplete.push(item.text);
+        }
+        break;
+      case 'in_progress':
+        yesterdayInProgress.push(item.text);
+        break;
+      case 'done':
+        yesterdayCompleted.push(item.text);
+        break;
+      // dropped items are omitted from all arrays
+    }
+  }
+
+  await db.query(
+    `UPDATE submissions
+     SET today_plans = $1,
+         yesterday_completed = $2,
+         yesterday_incomplete = $3,
+         yesterday_in_progress = $4
+     WHERE id = $5`,
+    [
+      JSON.stringify(todayPlans),
+      JSON.stringify(yesterdayCompleted),
+      JSON.stringify(yesterdayIncomplete),
+      JSON.stringify(yesterdayInProgress),
+      submissionId,
+    ]
+  );
 }
 
 /** Create work items from today's plans */
@@ -261,21 +525,63 @@ export async function createWorkItems(
     text: string;
     date: string;
     submissionId: number;
+    source?: ItemSource;
+    sourceRef?: string;
+    sourceUrl?: string;
+    itemType?: ItemType;
   }>
 ): Promise<WorkItem[]> {
   if (items.length === 0) return [];
 
   const results: WorkItem[] = [];
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const source = item.source ?? 'manual';
+    const itemType = item.itemType ?? 'plan';
     const result = await db.query<WorkItem>(
-      `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5)
+      `INSERT INTO work_items (slack_user_id, daily_name, text, created_date, status, submission_id, source, source_ref, source_url, item_type)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
        RETURNING *`,
-      [item.slackUserId, item.dailyName, item.text, item.date, item.submissionId]
+      [item.slackUserId, item.dailyName, item.text, item.date, item.submissionId, source, item.sourceRef ?? null, item.sourceUrl ?? null, itemType]
     );
-    if (result[0]) results.push(result[0]);
+    if (result[0]) {
+      results.push(result[0]);
+      await db.query(
+        `INSERT INTO submission_items (submission_id, work_item_id, role, position)
+         VALUES ($1, $2, $3, $4)`,
+        [item.submissionId, result[0].id, itemType === 'unplanned' ? 'unplanned' : 'today_plan', i + 1]
+      );
+    }
   }
   return results;
+}
+
+/** Link existing work items to a submission with a role (for yesterday status transitions) */
+export async function linkItemsToSubmission(
+  db: DbClient,
+  submissionId: number,
+  slackUserId: string,
+  dailyName: string,
+  itemTexts: string[],
+  role: SubmissionItemRole
+): Promise<void> {
+  for (let i = 0; i < itemTexts.length; i++) {
+    const items = await db.query<{ id: number }>(
+      `SELECT id FROM work_items
+       WHERE slack_user_id = $1 AND daily_name = $2 AND text = $3
+         AND status IN ('pending', 'carried', 'in_progress')
+       ORDER BY created_date DESC LIMIT 1`,
+      [slackUserId, dailyName, itemTexts[i]]
+    );
+    if (items[0]) {
+      await db.query(
+        `INSERT INTO submission_items (submission_id, work_item_id, role, position)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (submission_id, work_item_id, role) DO NOTHING`,
+        [submissionId, items[0].id, role, i + 1]
+      );
+    }
+  }
 }
 
 /** Mark items as done */
@@ -371,7 +677,7 @@ export async function markItemsInProgress(
   return updated;
 }
 
-/** Get recently done Linear items (items with [IDENTIFIER] prefix marked done within N days) */
+/** Get recently done Linear items (uses source column for new items, falls back to text pattern for old) */
 export async function getRecentlyDoneLinearItems(
   db: DbClient,
   slackUserId: string,
@@ -383,7 +689,7 @@ export async function getRecentlyDoneLinearItems(
      WHERE slack_user_id = $1
        AND daily_name = $2
        AND status = 'done'
-       AND text LIKE '[%]%'
+       AND (source = 'linear_ticket' OR (source = 'manual' AND text LIKE '[%]%'))
        AND completed_date >= CURRENT_DATE - ($3 || ' days')::INTERVAL
      ORDER BY completed_date DESC`,
     [slackUserId, dailyName, days]
@@ -625,6 +931,7 @@ export interface Submission {
   custom_answers: Record<string, string> | null;
   slack_message_ts: string | null;
   posted: boolean;
+  items_normalized: boolean;
 }
 
 // Get the most recent previous submission for a user (regardless of how many days ago)
@@ -669,8 +976,8 @@ export async function saveSubmission(
     `INSERT INTO submissions (
        slack_user_id, daily_name, date,
        yesterday_completed, yesterday_incomplete, yesterday_in_progress, unplanned,
-       today_plans, blockers, custom_answers, posted
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       today_plans, blockers, custom_answers, posted, items_normalized
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE)
      ON CONFLICT (slack_user_id, daily_name, date) DO UPDATE SET
        yesterday_completed = $12,
        yesterday_incomplete = $13,
@@ -680,6 +987,7 @@ export async function saveSubmission(
        blockers = $17,
        custom_answers = $18,
        posted = $19,
+       items_normalized = TRUE,
        submitted_at = NOW()
      RETURNING *`,
     [
@@ -945,6 +1253,7 @@ export interface BottleneckItem {
   carry_count: number;
   days_pending: number;
   type: 'carry' | 'dropped';
+  status: 'pending' | 'carried' | 'in_progress';
 }
 
 /** Get bottleneck items (carried at/above threshold, not snoozed) */
@@ -959,6 +1268,7 @@ export async function getBottleneckItems(
        text,
        slack_user_id,
        carry_count,
+       status,
        (CURRENT_DATE - created_date) as days_pending,
        'carry' as type
      FROM work_items
@@ -1040,6 +1350,7 @@ export interface PeriodStats {
   participation_rate: number;   // % of possible submissions received
   completion_rate: number;      // % of items completed vs dropped/carried
   blocker_rate: number;         // % of submissions with blockers
+  unplanned_rate: number;       // % of completed items that were unplanned
   total_submissions: number;
   total_participants: number;
   total_items_completed: number;
@@ -1063,12 +1374,14 @@ export async function getPeriodStats(
     total_completed: number;
     total_planned: number;
     blocker_count: number;
+    total_unplanned: number;
   }>(
     `SELECT
        COUNT(s.id) as submission_count,
-       COALESCE(SUM(jsonb_array_length(s.yesterday_completed::jsonb) + jsonb_array_length(s.unplanned::jsonb)), 0) as total_completed,
-       COALESCE(SUM(jsonb_array_length(s.today_plans::jsonb)), 0) as total_planned,
-       SUM(CASE WHEN s.blockers IS NOT NULL AND s.blockers != '' THEN 1 ELSE 0 END) as blocker_count
+       COALESCE(SUM(jsonb_array_length(COALESCE(s.yesterday_completed, '[]')::jsonb) + jsonb_array_length(COALESCE(s.unplanned, '[]')::jsonb)), 0) as total_completed,
+       COALESCE(SUM(jsonb_array_length(COALESCE(s.today_plans, '[]')::jsonb)), 0) as total_planned,
+       SUM(CASE WHEN s.blockers IS NOT NULL AND s.blockers != '' THEN 1 ELSE 0 END) as blocker_count,
+       COALESCE(SUM(jsonb_array_length(COALESCE(s.unplanned, '[]')::jsonb)), 0) as total_unplanned
      FROM submissions s
      WHERE s.daily_name = $1 AND s.date >= $2 AND s.date <= $3`,
     [dailyName, startDate, endDate]
@@ -1097,6 +1410,7 @@ export async function getPeriodStats(
   const totalCompleted = Number(submissionResult[0]?.total_completed) || 0;
   const totalPlanned = Number(submissionResult[0]?.total_planned) || 0;
   const blockerCount = Number(submissionResult[0]?.blocker_count) || 0;
+  const totalUnplanned = Number(submissionResult[0]?.total_unplanned) || 0;
   const participantCount = Number(participantResult[0]?.count) || 0;
   const itemsDone = Number(itemResult[0]?.total_done) || 0;
   const itemsDropped = Number(itemResult[0]?.total_dropped) || 0;
@@ -1119,10 +1433,15 @@ export async function getPeriodStats(
     ? Math.round((totalPlanned / submissionCount) * 10) / 10
     : 0;
 
+  const unplannedRate = totalCompleted > 0
+    ? Math.round((totalUnplanned / totalCompleted) * 100)
+    : 0;
+
   return {
     participation_rate: participationRate,
     completion_rate: completionRate,
     blocker_rate: blockerRate,
+    unplanned_rate: unplannedRate,
     total_submissions: submissionCount,
     total_participants: participantCount,
     total_items_completed: itemsDone,
@@ -1339,6 +1658,20 @@ export async function getActiveOOOForDaily(
   );
 }
 
+/** Get OOO records starting on a specific date for a daily (for channel notifications) */
+export async function getOOOStartingOnDate(
+  db: DbClient,
+  dailyName: string,
+  date: string
+): Promise<OOORecord[]> {
+  return db.query<OOORecord>(
+    `SELECT * FROM ooo
+     WHERE daily_name = $1
+       AND start_date = $2`,
+    [dailyName, date]
+  );
+}
+
 // ============================================================================
 // Reminder Log (dedup channel reminders)
 // ============================================================================
@@ -1368,4 +1701,177 @@ export async function recordReminderSent(
      ON CONFLICT (daily_name, date) DO NOTHING`,
     [dailyName, date]
   );
+}
+
+// ============================================================================
+// Config Overrides
+// ============================================================================
+
+export interface ConfigOverride {
+  scope: string;
+  key: string;
+  value: unknown;
+}
+
+export async function getAllConfigOverrides(db: DbClient): Promise<ConfigOverride[]> {
+  return db.query<ConfigOverride>(
+    `SELECT scope, key, value FROM config_overrides ORDER BY scope, key`
+  );
+}
+
+export async function setConfigOverride(
+  db: DbClient,
+  scope: string,
+  key: string,
+  value: unknown,
+  updatedBy?: string
+): Promise<void> {
+  await db.query(
+    `INSERT INTO config_overrides (scope, key, value, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (scope, key) DO UPDATE SET value = $3, updated_by = $4, updated_at = NOW()`,
+    [scope, key, JSON.stringify(value), updatedBy]
+  );
+}
+
+export async function deleteConfigOverride(
+  db: DbClient,
+  scope: string,
+  key: string
+): Promise<void> {
+  await db.query(
+    `DELETE FROM config_overrides WHERE scope = $1 AND key = $2`,
+    [scope, key]
+  );
+}
+
+// ============================================================================
+// Blocker Streak Tracking
+// ============================================================================
+
+export interface BlockerStreak {
+  slack_user_id: string;
+  current_streak: number;
+  max_streak: number;
+  total_blocker_days: number;
+}
+
+/**
+ * Pure function — computes blocker streaks from ordered submission rows.
+ * current_streak: consecutive blocker days up to (and including) the user's last submission.
+ * max_streak: longest consecutive blocker run in the data.
+ * Only users with at least one blocker day are returned.
+ */
+export function computeBlockerStreaks(
+  rows: Array<{ slack_user_id: string; date: string; has_blocker: boolean }>
+): BlockerStreak[] {
+  const byUser = new Map<string, Array<{ date: string; has_blocker: boolean }>>();
+  for (const row of rows) {
+    if (!byUser.has(row.slack_user_id)) byUser.set(row.slack_user_id, []);
+    byUser.get(row.slack_user_id)!.push({ date: row.date, has_blocker: row.has_blocker });
+  }
+
+  const results: BlockerStreak[] = [];
+
+  for (const [userId, entries] of byUser) {
+    // entries are already ordered by date ASC from the query
+    let maxStreak = 0;
+    let runningStreak = 0;
+    let totalBlockerDays = 0;
+
+    for (const entry of entries) {
+      if (entry.has_blocker) {
+        runningStreak++;
+        totalBlockerDays++;
+        if (runningStreak > maxStreak) maxStreak = runningStreak;
+      } else {
+        runningStreak = 0;
+      }
+    }
+
+    // current_streak is the streak at the tail of the sorted entries
+    const currentStreak = runningStreak;
+
+    if (totalBlockerDays > 0) {
+      results.push({
+        slack_user_id: userId,
+        current_streak: currentStreak,
+        max_streak: maxStreak,
+        total_blocker_days: totalBlockerDays,
+      });
+    }
+  }
+
+  return results;
+}
+
+/** Get blocker streaks for all users in a daily within a date range */
+export async function getBlockerStreaks(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string
+): Promise<BlockerStreak[]> {
+  const rows = await db.query<{ slack_user_id: string; date: string; has_blocker: boolean }>(
+    `SELECT slack_user_id, date, (blockers IS NOT NULL AND blockers != '') as has_blocker
+     FROM submissions
+     WHERE daily_name = $1 AND date >= $2 AND date <= $3
+     ORDER BY slack_user_id, date`,
+    [dailyName, startDate, endDate]
+  );
+  return computeBlockerStreaks(rows);
+}
+
+// ============================================================================
+// Unplanned Work Overload Detection
+// ============================================================================
+
+export interface UnplannedOverload {
+  slack_user_id: string;
+  unplanned_count: number;
+  completed_count: number;
+  unplanned_pct: number;
+}
+
+/** Get users whose unplanned work exceeds the given percentage threshold */
+export async function getUnplannedOverload(
+  db: DbClient,
+  dailyName: string,
+  startDate: string,
+  endDate: string,
+  threshold: number = 70
+): Promise<UnplannedOverload[]> {
+  const rows = await db.query<{
+    slack_user_id: string;
+    unplanned_count: number;
+    completed_count: number;
+  }>(
+    `SELECT
+       slack_user_id,
+       COALESCE(SUM(jsonb_array_length(COALESCE(unplanned, '[]')::jsonb)), 0) as unplanned_count,
+       COALESCE(SUM(
+         jsonb_array_length(COALESCE(yesterday_completed, '[]')::jsonb) +
+         jsonb_array_length(COALESCE(unplanned, '[]')::jsonb)
+       ), 0) as completed_count
+     FROM submissions
+     WHERE daily_name = $1 AND date >= $2 AND date <= $3
+     GROUP BY slack_user_id`,
+    [dailyName, startDate, endDate]
+  );
+
+  return rows
+    .map(row => {
+      const unplannedCount = Number(row.unplanned_count) || 0;
+      const completedCount = Number(row.completed_count) || 0;
+      const unplannedPct = completedCount > 0
+        ? Math.round((unplannedCount / completedCount) * 100)
+        : 0;
+      return {
+        slack_user_id: row.slack_user_id,
+        unplanned_count: unplannedCount,
+        completed_count: completedCount,
+        unplanned_pct: unplannedPct,
+      };
+    })
+    .filter(row => row.unplanned_pct >= threshold);
 }

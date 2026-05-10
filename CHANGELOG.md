@@ -7,14 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.2.1] - 2026-02-16
-
-### Fixed
-- **PR checkbox selections respected at post time** — stop re-fetching all PRs when submitting; use the user's actual checkbox selections
-- **Deduplicate integration items** — Linear tickets and GitHub PRs already in yesterday's plans no longer appear twice
+### Added
+- **DM copy of standup posts** — submitters receive a private DM copy after submission. Opt-out via App Home toggle
+- **PR re-review detection** — flags PRs updated since the last review so reviewers know to look again
+- **Auto-detect completed Linear tickets** — done tickets are suppressed from the standup modal automatically
+- **Enriched App Home stats** — planned, carried over, and dropped item counts shown per daily
+- **PR reviewer tagging** — standup posts mention reviewers by `@name` when Slack-GitHub mappings exist
 
 ### Changed
-- Refactored `/daily` command to reuse shared fetch helpers from interactions handler, fetching Linear issues and GitHub PRs in parallel
+- In-progress status now persists across sessions (stored in DB)
+- Integration items (PRs, Linear tickets) are no longer auto-selected on re-prompt
+
+### Fixed
+- Duplicate integration items when yesterday's plans already included them
+- Redundant PR re-fetching at post time — respects checkbox selections from the modal
 
 ## [1.2.0] - 2026-02-12
 
@@ -60,8 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Admin commands: add/remove users, list participants
 - Compact digest format and `/standup report` command
 
-[Unreleased]: https://github.com/NirSingher/omdim/compare/v1.2.1...HEAD
-[1.2.1]: https://github.com/NirSingher/omdim/compare/v1.2.0...v1.2.1
+[Unreleased]: https://github.com/NirSingher/omdim/compare/v1.2.0...HEAD
 [1.2.0]: https://github.com/NirSingher/omdim/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/NirSingher/omdim/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/NirSingher/omdim/releases/tag/v1.0.0

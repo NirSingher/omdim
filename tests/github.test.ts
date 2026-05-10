@@ -16,7 +16,9 @@ import {
   fetchUserPRData,
   extractPRSlug,
   formatPRRef,
+  filterReviewRequests,
   GitHubPR,
+  GitHubReview,
 } from '../lib/github';
 
 describe('github client', () => {
@@ -604,20 +606,21 @@ describe('github client', () => {
       };
 
       const mockReviews789 = [
-        { user: { login: 'alice' }, submitted_at: '2025-01-16T10:00:00Z' },
+        { user: { login: 'alice' }, submitted_at: '2025-01-16T10:00:00Z', state: 'COMMENTED', body: 'looks good' },
       ];
       const mockReviews790 = [
-        { user: { login: 'alice' }, submitted_at: '2025-01-16T10:00:00Z' },
+        { user: { login: 'alice' }, submitted_at: '2025-01-16T10:00:00Z', state: 'COMMENTED', body: 'lgtm' },
       ];
 
       (global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ok: true, json: async () => emptyResponse }) // drafts
         .mockResolvedValueOnce({ ok: true, json: async () => emptyResponse }) // approved
         .mockResolvedValueOnce({ ok: true, json: async () => emptyResponse }) // awaiting
-        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews }) // review requests
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews }) // review requests search
         .mockResolvedValueOnce({ ok: true, json: async () => mockReReviewSearch }) // re-review search
-        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews789 }) // reviews for #789
-        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews790 }); // reviews for #790
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews789 }) // reviews for #789 (filter step)
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews789 }) // reviews for #789 (re-review)
+        .mockResolvedValueOnce({ ok: true, json: async () => mockReviews790 }); // reviews for #790 (re-review)
 
       const result = await fetchUserPRData('token', 'alice', 'myorg');
 
@@ -695,6 +698,200 @@ describe('github client', () => {
       };
 
       expect(formatPRRef(pr)).toBe('#456');
+    });
+  });
+
+  // ============================================================================
+  // filterReviewRequests
+  // ============================================================================
+
+  describe('filterReviewRequests', () => {
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    function makePR(overrides: Partial<GitHubPR> & { number: number }): GitHubPR {
+      return {
+        title: `PR #${overrides.number}`,
+        url: `https://github.com/myorg/repo/pull/${overrides.number}`,
+        author: 'bob',
+        reviewsNeeded: 0,
+        requestedReviewers: ['alice'],
+        createdAt: '2025-01-10T00:00:00Z',
+        updatedAt: '2025-01-15T12:00:00Z',
+        draft: false,
+        ...overrides,
+      };
+    }
+
+    function makeReview(
+      login: string,
+      state: GitHubReview['state'],
+      submitted_at: string,
+      body = ''
+    ): GitHubReview {
+      return {
+        user: { login },
+        submitted_at,
+        state,
+        body,
+      };
+    }
+
+    function makeMap(entries: [number, GitHubReview[]][]): Map<number, GitHubReview[]> {
+      return new Map(entries);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Test cases
+    // ---------------------------------------------------------------------------
+
+    it('keeps PR when reviewer has no reviews', () => {
+      const pr = makePR({ number: 1, updatedAt: '2025-01-15T12:00:00Z' });
+      const reviewsMap = makeMap([[1, []]]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(1);
+    });
+
+    it('hides PR when reviewer already commented and PR not updated since', () => {
+      const pr = makePR({ number: 2, updatedAt: '2025-01-15T12:00:00Z' });
+      // Comment submitted AFTER (or at same time as) the PR's updatedAt — no author response
+      const reviewsMap = makeMap([
+        [2, [makeReview('alice', 'COMMENTED', '2025-01-15T13:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('hides PR when reviewer left CHANGES_REQUESTED and PR not updated since', () => {
+      const pr = makePR({ number: 3, updatedAt: '2025-01-15T12:00:00Z' });
+      const reviewsMap = makeMap([
+        [3, [makeReview('alice', 'CHANGES_REQUESTED', '2025-01-15T13:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('keeps PR when reviewer commented but PR was updated after', () => {
+      // Reviewer commented, then author pushed → updatedAt is newer than last review
+      const pr = makePR({ number: 4, updatedAt: '2025-01-16T10:00:00Z' });
+      const reviewsMap = makeMap([
+        [4, [makeReview('alice', 'COMMENTED', '2025-01-15T09:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(4);
+    });
+
+    it('hides PR when already approved by someone else', () => {
+      // A non-author reviewer has approved and there's no subsequent CHANGES_REQUESTED
+      const pr = makePR({ number: 5, author: 'bob', updatedAt: '2025-01-15T12:00:00Z' });
+      const reviewsMap = makeMap([
+        [5, [makeReview('charlie', 'APPROVED', '2025-01-15T11:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('keeps PR when approved then changes requested after', () => {
+      // reviewer-A approved, then reviewer-B requested changes — still needs work
+      const pr = makePR({ number: 6, author: 'bob', updatedAt: '2025-01-15T08:00:00Z' });
+      const reviewsMap = makeMap([
+        [
+          6,
+          [
+            makeReview('reviewerA', 'APPROVED', '2025-01-15T09:00:00Z'),
+            makeReview('reviewerB', 'CHANGES_REQUESTED', '2025-01-15T10:00:00Z'),
+          ],
+        ],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(6);
+    });
+
+    it("hides PR when reviewer's last review is newer than PR update", () => {
+      // General heuristic: reviewer's latest submitted_at >= updatedAt → nothing new to review
+      const pr = makePR({ number: 7, updatedAt: '2025-01-14T00:00:00Z' });
+      const reviewsMap = makeMap([
+        [7, [makeReview('alice', 'COMMENTED', '2025-01-15T00:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(0);
+    });
+
+    it("keeps PR when PR updated after reviewer's last review", () => {
+      const pr = makePR({ number: 8, updatedAt: '2025-01-16T00:00:00Z' });
+      const reviewsMap = makeMap([
+        [8, [makeReview('alice', 'CHANGES_REQUESTED', '2025-01-14T00:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(8);
+    });
+
+    it('ignores PENDING reviews', () => {
+      // PENDING means the reviewer opened a review but hasn't submitted it yet — treated as no review
+      const pr = makePR({ number: 9, updatedAt: '2025-01-15T12:00:00Z' });
+      const reviewsMap = makeMap([
+        [9, [makeReview('alice', 'PENDING', '2025-01-15T13:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(9);
+    });
+
+    it('ignores reviews from PR author', () => {
+      // Author self-reviewed (edge case) — should not count as an approval/block
+      const pr = makePR({ number: 10, author: 'bob', updatedAt: '2025-01-15T12:00:00Z' });
+      const reviewsMap = makeMap([
+        [10, [makeReview('bob', 'APPROVED', '2025-01-15T13:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr], reviewsMap, 'alice');
+
+      // Author's self-review doesn't count → reviewer still needs to act → PR kept
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(10);
+    });
+
+    it('handles multiple PRs with mixed filtering', () => {
+      // PR 11: no reviews → keep
+      // PR 12: reviewer already commented after last update → hide
+      // PR 13: non-author approved → hide
+      const pr11 = makePR({ number: 11, updatedAt: '2025-01-15T12:00:00Z' });
+      const pr12 = makePR({ number: 12, updatedAt: '2025-01-15T12:00:00Z' });
+      const pr13 = makePR({ number: 13, author: 'bob', updatedAt: '2025-01-15T12:00:00Z' });
+
+      const reviewsMap = makeMap([
+        [11, []],
+        [12, [makeReview('alice', 'COMMENTED', '2025-01-15T14:00:00Z')]],
+        [13, [makeReview('charlie', 'APPROVED', '2025-01-15T11:00:00Z')]],
+      ]);
+
+      const result = filterReviewRequests([pr11, pr12, pr13], reviewsMap, 'alice');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].number).toBe(11);
     });
   });
 });

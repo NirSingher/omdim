@@ -9,6 +9,7 @@ dailies:
   - name: "engineering"
     channel: "#eng-standup"
     schedule: "i-team"
+    manager: "U12345678"  # Receives automatic daily/weekly digests
     # Channel reminder: minutes before daily to post a heads-up (0 to disable, default 90)
     reminder_minutes_before: 60
     # Field order: lower numbers appear first in the modal
@@ -31,14 +32,21 @@ dailies:
 
     # GitHub/Linear integrations (optional)
     # PRs and issues appear as checkboxes in the standup modal
-    # Users can self-link via /standup github link or App Home
+    # Users can self-link via /standup github link or App Home buttons
+    # Admin can also pre-link users with user_mapping below
     # integrations:
     #   github:
     #     enabled: true
     #     org: "your-github-org"
+    #     user_mapping:                    # Optional: pre-link users
+    #       - slack_user_id: "U12345678"
+    #         external_username: "github-handle"
     #   linear:
     #     enabled: true
-    #     team_id: "your-linear-team-id"
+    #     team_id: "your-linear-team-id"   # Optional: omit to fetch from all teams
+    #     user_mapping:
+    #       - slack_user_id: "U12345678"
+    #         external_username: "linear-user-uuid"
 
   # Example: second daily for a different team
   # - name: "product"
@@ -69,4 +77,9 @@ schedules:
 # Slack user IDs who can manage the bot
 # Find your ID: Slack profile → ⋮ menu → "Copy member ID"
 admins:
+  - "U12345678"
+
+# Super admins can manage other admins (add/remove)
+# Optional: if not set, admin list can only be changed by editing config
+super_admins:
   - "U12345678"

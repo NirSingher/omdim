@@ -3,7 +3,7 @@
  * Handles: open_standup button, standup_submission modal
  */
 
-import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser } from '../config';
+import { getDaily, getConfigError, getSchedule, getGitHubConfig, getGitHubUsernameFromConfig, getGitHubUserMappings, getLinearConfig, getLinearUserIdFromConfig, getLinearTeamIdForUser, getMaxPlanItems, isAdmin, getGitHubIntelligenceConfig, getDailySections } from '../config';
 import {
   DbClient,
   getPreviousSubmission,
@@ -16,6 +16,8 @@ import {
   markItemsInProgress,
   getInProgressCarryCounts,
   createWorkItems,
+  linkItemsToSubmission,
+  ItemSource,
   snoozeItem,
   getSubmissionForDate,
   getGitHubUsername,
@@ -26,14 +28,24 @@ import {
   getRecentlyDoneLinearItems,
   getDmStandupPreference,
   setDmStandupPreference,
+  getLinearSyncBack,
+  setLinearSyncBack,
+  updateUserSetting,
+  getUserDailies,
+  getParticipants,
+  setOOO,
+  clearOOO,
+  updateWorkItemStatus,
+  addWorkItem,
+  updateSubmissionArrays,
 } from '../db';
 import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
-import { fetchUserPRData, UserPRData } from '../github';
-import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData } from '../linear';
-import { postStandupToChannel, sendStandupDM } from '../format';
+import { fetchUserPRData, UserPRData, fetchMergedPRs, MergedPR } from '../github';
+import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData, extractLinearReferences, fetchWorkflowStates, markIssuesInProgress as markLinearIssuesInProgress, commentOnIssue, resolveIdentifiers } from '../linear';
+import { postStandupToChannel, sendStandupDM, formatStandupBlocks, StandupData } from '../format';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
-import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed } from '../prompt';
-import { openModal, parseRichText, RichTextBlock, sendDM } from '../slack';
+import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
+import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage, extractMentionedUserIds, updateModal } from '../slack';
 import { StandupMode } from '../modal';
 
 // ============================================================================
@@ -61,15 +73,18 @@ export interface InteractionPayload {
   type: string;
   trigger_id: string;
   user: { id: string };
-  actions?: Array<{ action_id: string; value: string }>;
+  actions?: Array<{ action_id: string; value: string; selected_option?: { value: string } }>;
   view?: {
+    id?: string;
+    hash?: string;
     callback_id: string;
     private_metadata: string;
     state: {
       values: Record<string, Record<string, {
         value?: string;
         selected_option?: { value: string };
-        selected_options?: Array<{ value: string }>;
+        selected_options?: Array<{ value: string; text?: { type: string; text: string } }>;
+        selected_date?: string;
         rich_text_value?: RichTextBlock;  // Slack uses rich_text_value, not rich_text
       }>>;
     };
@@ -212,6 +227,46 @@ export async function fetchGitHubPRsForUser(
   }
 }
 
+/**
+ * Fetch merged PRs for a user if GitHub intelligence auto_populate is enabled
+ */
+async function fetchMergedPRsForUser(
+  daily: ReturnType<typeof getDaily>,
+  userId: string,
+  ctx: InteractionContext,
+  since: string
+): Promise<MergedPR[]> {
+  if (!daily) return [];
+
+  const githubIntelConfig = getGitHubIntelligenceConfig(daily);
+  if (!githubIntelConfig?.auto_populate) return [];
+
+  const githubConfig = getGitHubConfig(daily);
+  if (!githubConfig || !ctx.env) return [];
+
+  const githubToken = ctx.env[githubConfig.tokenEnvVar];
+  if (!githubToken) return [];
+
+  // Get GitHub username: config mapping takes precedence over DB
+  let githubUsername = getGitHubUsernameFromConfig(daily, userId);
+  if (!githubUsername) {
+    githubUsername = await getGitHubUsername(ctx.db, userId);
+  }
+
+  if (!githubUsername) return [];
+
+  try {
+    const mergedPRs = await withTimeout(
+      fetchMergedPRs(githubToken, githubUsername, githubConfig.org, since),
+      INTEGRATION_TIMEOUT_MS, 'GitHub merged PRs API'
+    );
+    return mergedPRs;
+  } catch (error) {
+    console.error('Failed to fetch merged PRs:', error);
+    return [];
+  }
+}
+
 // ============================================================================
 // Button Handler: Open Standup
 // ============================================================================
@@ -285,10 +340,16 @@ export async function handleOpenStandup(
     }
   }
 
-  // Fetch Linear issues and GitHub PRs in parallel
-  const [linearResult, githubResult] = await Promise.all([
+  // Compute "since" date for merged PRs: use previous submission date, or yesterday
+  const yesterdayDate = new Date(userDate);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const sinceDate = previousSubmission?.date || formatDate(yesterdayDate);
+
+  // Fetch Linear issues, GitHub PRs, and merged PRs in parallel
+  const [linearResult, githubResult, mergedPRs] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchMergedPRsForUser(daily, userId, ctx, sinceDate),
   ]);
 
   // Compute done suppression and auto-completed sets
@@ -326,7 +387,8 @@ export async function handleOpenStandup(
   }
 
   // Build and open modal
-  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds);
+  const sects = getDailySections(daily);
+  const modal = buildStandupModal(dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate, 'today', undefined, linearResult.issues, githubResult.prData, githubResult.reviewerMap, doneIdentifiers, autoCompletedIds, mergedPRs.length > 0 ? mergedPRs : undefined, sects);
   return openModal(ctx.slackToken, triggerId, modal);
 }
 
@@ -357,8 +419,10 @@ export async function handleStandupSubmission(
     yesterdayPlans?: string[];
     mode?: StandupMode;
     targetDate?: string;
+    sections?: { blockers: boolean; unplanned: boolean };
     unmappedReviewers?: string[];
     prReviewerTags?: Record<string, string>;
+    prCategories?: Record<string, string>;
   };
   const dailyName = metadata.dailyName;
   const yesterdayPlanItems = metadata.yesterdayPlans || [];
@@ -399,20 +463,47 @@ export async function handleStandupSubmission(
     }
   });
 
-  // Parse text inputs
-  const unplanned = parseLines(values.unplanned?.unplanned_input?.value);
+  // Parse text inputs (gate by sections config from metadata)
+  const sectionsCfg = metadata.sections ?? { blockers: true, unplanned: true };
+  const unplanned = sectionsCfg.unplanned ? parseLines(values.unplanned?.unplanned_input?.value) : [];
   const todayPlans = parseLines(values.today_plans?.plans_input?.value);
-  const blockers = parseRichText(values.blockers?.blockers_input?.rich_text_value) || '';
+  const blockers = sectionsCfg.blockers ? (parseRichText(values.blockers?.blockers_input?.rich_text_value) || '') : '';
 
-  // Parse Linear ticket selections and append to todayPlans
-  // Parse integration checkbox selections — extract display text from the option's text field
-  // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers
+  // Parse integration checkbox selections — extract display text and structured source info
+  // Format is "*IDENTIFIER* Title" in mrkdwn, so strip the bold markers for flat text
   const parseOptionText = (text: string): string => text.replace(/^\*([^*]+)\*\s*/, '[$1] ');
+  const extractIdentifier = (text: string): string | undefined => {
+    const m = text.match(/^\*([^*]+)\*\s*/);
+    return m ? m[1] : undefined;
+  };
+
+  interface StructuredItem {
+    text: string;
+    source: ItemSource;
+    sourceRef?: string;
+    sourceUrl?: string;
+  }
+  const structuredPlans: StructuredItem[] = [];
+
+  // Manual text plans
+  for (const plan of todayPlans) {
+    structuredPlans.push({ text: plan, source: 'manual' });
+  }
+
+  const githubOrg = daily ? getGitHubConfig(daily)?.org : undefined;
 
   const linearSelections = values.linear_tickets?.linear_tickets_input?.selected_options;
   if (linearSelections && linearSelections.length > 0) {
     for (const option of linearSelections) {
-      todayPlans.push(parseOptionText(option.text?.text || option.value));
+      const flatText = parseOptionText(option.text?.text || option.value);
+      todayPlans.push(flatText);
+      const identifier = extractIdentifier(option.text?.text || '');
+      structuredPlans.push({
+        text: flatText,
+        source: 'linear_ticket',
+        sourceRef: identifier,
+        sourceUrl: identifier ? `https://linear.app/issue/${identifier}` : undefined,
+      });
     }
   }
 
@@ -420,7 +511,17 @@ export async function handleStandupSubmission(
   const reviewSelections = values.review_requests?.review_requests_input?.selected_options;
   if (reviewSelections && reviewSelections.length > 0) {
     for (const option of reviewSelections) {
-      todayPlans.push(parseOptionText(option.text?.text || option.value));
+      let planText = parseOptionText(option.text?.text || option.value);
+      planText += ' _(to review)_';
+      todayPlans.push(planText);
+      const ref = option.value; // "repo#42"
+      const [repo, num] = ref.split('#');
+      structuredPlans.push({
+        text: planText,
+        source: 'github_pr',
+        sourceRef: ref,
+        sourceUrl: githubOrg ? `https://github.com/${githubOrg}/${repo}/pull/${num}` : undefined,
+      });
     }
   }
   const myPrSelections = values.my_prs?.my_prs_input?.selected_options;
@@ -431,7 +532,19 @@ export async function handleStandupSubmission(
       if (reviewers) {
         planText += ` — waiting on ${reviewers}`;
       }
+      const category = metadata.prCategories?.[option.value];
+      if (category) {
+        planText += ` _(${category})_`;
+      }
       todayPlans.push(planText);
+      const ref = option.value; // "repo#42"
+      const [repo, num] = ref.split('#');
+      structuredPlans.push({
+        text: planText,
+        source: 'github_pr',
+        sourceRef: ref,
+        sourceUrl: githubOrg ? `https://github.com/${githubOrg}/${repo}/pull/${num}` : undefined,
+      });
     }
   }
 
@@ -488,7 +601,8 @@ export async function handleStandupSubmission(
   // Queue if: tomorrow mode OR today mode but before scheduled posting time
   const scheduledTime = scheduleConfig?.default_time || '10:00';
   const isBeforeScheduledTime = !hasScheduledTimePassed(scheduledTime, userDate);
-  const shouldQueue = isTomorrowMode || isBeforeScheduledTime;
+  const devMode = ctx.env?.DEV_MODE === 'true';
+  const shouldQueue = isTomorrowMode || (!devMode && isBeforeScheduledTime);
 
   // Run the heavy work (DB saves, API calls) in the background so Slack
   // gets an immediate 200 response and doesn't show "trouble connecting".
@@ -509,6 +623,26 @@ export async function handleStandupSubmission(
     });
 
     console.log('Submission saved:', { userId, dailyName, date: submissionDate, mode, shouldQueue, todayPlans: todayPlans.length });
+
+    // Plan-size soft warning: send a DM if the submitted plan count exceeds the threshold.
+    // Counts everything that lands in today's plans: typed items + checked integrations
+    // (already merged into todayPlans) + yesterday's carry-over + in-progress.
+    const maxPlanItems = getMaxPlanItems(dailyName);
+    if (maxPlanItems > 0) {
+      const newPlanCount = todayPlans.length;
+      const carriedCount = yesterdayIncomplete.length + yesterdayInProgress.length;
+      const submittedPlanCount = newPlanCount + carriedCount;
+      if (submittedPlanCount >= maxPlanItems) {
+        const dayWord = isTomorrowMode ? 'for tomorrow' : 'today';
+        const breakdown = carriedCount > 0 ? ` (${newPlanCount} new + ${carriedCount} carried)` : '';
+        const warningMsg = `⚠️ You're planning ${submittedPlanCount} items${breakdown} ${dayWord}. Teams usually stay under ${maxPlanItems} to keep the day focused.`;
+        try {
+          await sendDM(ctx.slackToken, userId, warningMsg);
+        } catch (error) {
+          console.error('Failed to send plan-size warning DM:', error);
+        }
+      }
+    }
 
     // Queued mode: send confirmation DM, skip channel post and work item tracking
     if (shouldQueue) {
@@ -535,33 +669,112 @@ export async function handleStandupSubmission(
       // Mark yesterday's items based on status
       if (yesterdayCompleted.length > 0) {
         await markItemsDone(ctx.db, userId, dailyName, yesterdayCompleted, todayStr);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayCompleted, 'yesterday_completed');
       }
       if (yesterdayDropped.length > 0) {
         await markItemsDropped(ctx.db, userId, dailyName, yesterdayDropped);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayDropped, 'yesterday_dropped');
       }
       if (yesterdayIncomplete.length > 0) {
         await incrementCarryCount(ctx.db, userId, dailyName, yesterdayIncomplete);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayIncomplete, 'yesterday_incomplete');
       }
       if (yesterdayInProgress.length > 0) {
         await markItemsInProgress(ctx.db, userId, dailyName, yesterdayInProgress);
+        await linkItemsToSubmission(ctx.db, submission.id, userId, dailyName, yesterdayInProgress, 'yesterday_in_progress');
       }
 
-      // Create new work items for today's plans
-      if (todayPlans.length > 0) {
+      // Create new work items for today's plans (with structured source metadata)
+      if (structuredPlans.length > 0) {
         await createWorkItems(
           ctx.db,
-          todayPlans.map(text => ({
+          structuredPlans.map((item, i) => ({
+            slackUserId: userId,
+            dailyName,
+            text: item.text,
+            date: todayStr,
+            submissionId: submission.id,
+            source: item.source,
+            sourceRef: item.sourceRef,
+            sourceUrl: item.sourceUrl,
+            itemType: 'plan' as const,
+          }))
+        );
+      }
+
+      // Create work items for unplanned items
+      if (unplanned.length > 0) {
+        await createWorkItems(
+          ctx.db,
+          unplanned.map((text, i) => ({
             slackUserId: userId,
             dailyName,
             text,
             date: todayStr,
             submissionId: submission.id,
+            source: 'manual' as const,
+            itemType: 'unplanned' as const,
           }))
         );
       }
     } catch (error) {
       // Don't fail the submission if work item tracking fails
       console.error('Failed to track work items:', error);
+    }
+
+    // Mark selected Linear tickets as "In Progress" and comment blockers (if sync-back enabled)
+    try {
+      const linearSyncEnabled = await getLinearSyncBack(ctx.db, userId);
+      const linearConfig = daily ? getLinearConfig(daily) : null;
+      const linearToken = linearConfig && ctx.env ? ctx.env[linearConfig.tokenEnvVar] : undefined;
+      if (linearToken && linearSyncEnabled) {
+        if (linearSelections && linearSelections.length > 0) {
+          const teamId = daily ? getLinearTeamIdForUser(daily, userId) : undefined;
+          if (teamId) {
+            const states = await fetchWorkflowStates(linearToken, teamId);
+            const startedState = states.get('started');
+            if (startedState) {
+              const identifiers = linearSelections.map(opt => opt.value);
+              const idMap = await resolveIdentifiers(linearToken, identifiers);
+              const issueIds = [...idMap.values()];
+              if (issueIds.length > 0) {
+                const result = await markLinearIssuesInProgress(linearToken, issueIds, startedState.id);
+                console.log(`Linear: marked ${result.updated} issues in-progress, ${result.skipped} skipped`);
+              }
+            }
+          }
+        }
+
+        if (blockers) {
+          const refs = extractLinearReferences(blockers);
+          if (refs.length > 0) {
+            const idMap = await resolveIdentifiers(linearToken, refs);
+            for (const [, issueId] of idMap) {
+              await commentOnIssue(linearToken, issueId, `🚧 Blocker reported in standup by <@${userId}>:\n\n${blockers}`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to process Linear actions:', error);
+    }
+
+    // Blocker @-mention DMs: notify mentioned participants
+    if (blockers) {
+      try {
+        const mentionedIds = extractMentionedUserIds(blockers);
+        if (mentionedIds.length > 0) {
+          const participants = await getParticipants(ctx.db, dailyName);
+          const participantIds = new Set(participants.map(p => p.slack_user_id));
+          for (const mentionedId of mentionedIds) {
+            if (mentionedId === userId) continue;
+            if (!participantIds.has(mentionedId)) continue;
+            await sendDM(ctx.slackToken, mentionedId, `🚧 <@${userId}> flagged you in a blocker:\n\n_${blockers}_`);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to send blocker mention DMs:', error);
+      }
     }
 
     // Get carry counts for in-progress items (for attention warnings)
@@ -574,57 +787,59 @@ export async function handleStandupSubmission(
       }
     }
 
-    // Post to channel
-    // NOTE: We do NOT re-fetch PR data here. The user's checkbox selections
-    // are already included in todayPlans — re-fetching would show ALL PRs
-    // regardless of what the user selected.
+    // Post to channel (or update existing post on re-submit)
     if (daily?.channel) {
-      const messageTs = await postStandupToChannel(
-        ctx.slackToken,
-        daily.channel,
-        userId,
-        dailyName,
-        {
-          yesterdayCompleted,
-          yesterdayIncomplete,
-          yesterdayInProgress,
-          yesterdayDropped,
-          unplanned,
-          todayPlans,
-          blockers,
-          customAnswers,
-          questions: daily.questions,
-          fieldOrder: daily.field_order,
-          inProgressCarryCounts,
-        }
-      );
+      const standupData = {
+        yesterdayCompleted,
+        yesterdayIncomplete,
+        yesterdayInProgress,
+        yesterdayDropped,
+        unplanned,
+        todayPlans,
+        blockers,
+        customAnswers,
+        questions: daily.questions,
+        fieldOrder: daily.field_order,
+        inProgressCarryCounts,
+        githubOrg,
+      };
 
-      // Store message timestamp for future reference
-      if (messageTs && submission.id) {
-        await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
+      if (submission.slack_message_ts) {
+        // Re-submit: update the existing channel post in place
+        const blocks = formatStandupBlocks(userId, dailyName, standupData);
+        const fallbackText = `*<@${userId}>* updated their standup`;
+        await updateMessage(ctx.slackToken, daily.channel, submission.slack_message_ts, fallbackText, blocks);
+      } else {
+        // First submit: post new message
+        const messageTs = await postStandupToChannel(
+          ctx.slackToken,
+          daily.channel,
+          userId,
+          dailyName,
+          standupData
+        );
+
+        if (messageTs && submission.id) {
+          await updateSubmissionMessageTs(ctx.db, submission.id, messageTs);
+        }
       }
 
       // Send DM copy if user preference allows
       try {
         const dmEnabled = await getDmStandupPreference(ctx.db, userId);
         if (dmEnabled) {
-          await sendStandupDM(ctx.slackToken, userId, dailyName, daily.channel, {
-            yesterdayCompleted,
-            yesterdayIncomplete,
-            yesterdayInProgress,
-            yesterdayDropped,
-            unplanned,
-            todayPlans,
-            blockers,
-            customAnswers,
-            questions: daily.questions,
-            fieldOrder: daily.field_order,
-            inProgressCarryCounts,
-          });
+          await sendStandupDM(ctx.slackToken, userId, dailyName, daily.channel, standupData);
         }
       } catch (error) {
         console.error('Failed to send standup DM copy:', error);
       }
+    }
+
+    // Refresh App Home so user sees their plan immediately
+    try {
+      await refreshHome(userId, ctx);
+    } catch (error) {
+      console.error('Failed to refresh App Home after submission:', error);
     }
   };
 
@@ -761,10 +976,16 @@ export async function handleHomeStartDaily(
     }
   }
 
-  // Fetch Linear issues and GitHub PRs in parallel
-  const [linearResult, githubResult] = await Promise.all([
+  // Compute "since" date for merged PRs: yesterday relative to user's local date
+  const yesterdayDateHome = new Date(userDate);
+  yesterdayDateHome.setDate(yesterdayDateHome.getDate() - 1);
+  const sinceDateHome = formatDate(yesterdayDateHome);
+
+  // Fetch Linear issues, GitHub PRs, and merged PRs in parallel
+  const [linearResult, githubResult, mergedPRsHome] = await Promise.all([
     fetchLinearIssuesForUser(daily, userId, ctx),
     fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchMergedPRsForUser(daily, userId, ctx, sinceDateHome),
   ]);
 
   // Compute done suppression and auto-completed sets
@@ -812,7 +1033,132 @@ export async function handleHomeStartDaily(
     githubResult.prData,
     githubResult.reviewerMap,
     doneIdentifiers,
-    autoCompletedIds
+    autoCompletedIds,
+    mergedPRsHome.length > 0 ? mergedPRsHome : undefined,
+    getDailySections(daily)
+  );
+
+  return openModal(ctx.slackToken, triggerId, modal);
+}
+
+// ============================================================================
+// Button Handler: Edit Standup
+// ============================================================================
+
+/**
+ * Handle "Edit Standup" button from App Home
+ * Reopens the modal pre-filled with today's submission data
+ */
+export async function handleEditStandup(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const dailyName = payload.actions?.[0]?.value;
+  if (!dailyName) {
+    console.error('No daily name in home_edit_standup action');
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const triggerId = payload.trigger_id;
+
+  const daily = getDaily(dailyName);
+  if (!daily) {
+    console.error(`Daily "${dailyName}" not found`);
+    return false;
+  }
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const userDate = getUserDate(tzOffset);
+  const todayStr = formatDate(userDate);
+
+  // Fetch today's submission for prefill
+  const todaySubmission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+  if (!todaySubmission) {
+    await sendDM(ctx.slackToken, userId, `No standup found for today in *${dailyName}*. Use "Start Daily" to submit one.`);
+    return true;
+  }
+
+  // Build prefill from today's submission
+  const prefill: SubmissionPrefill = {
+    todayPlans: todaySubmission.today_plans || undefined,
+    unplanned: todaySubmission.unplanned || undefined,
+    blockers: todaySubmission.blockers || undefined,
+    customAnswers: todaySubmission.custom_answers || undefined,
+  };
+
+  // Build yesterday data from the submission *before* today (same logic as handleOpenStandup)
+  const previousSubmission = await getPreviousSubmission(ctx.db, userId, dailyName, todayStr);
+
+  let yesterdayData: YesterdayData | null = null;
+  if (previousSubmission) {
+    const todayPlans = previousSubmission.today_plans
+      ? (Array.isArray(previousSubmission.today_plans)
+          ? previousSubmission.today_plans
+          : JSON.parse(previousSubmission.today_plans as unknown as string))
+      : [];
+    const carriedItems = previousSubmission.yesterday_incomplete
+      ? (Array.isArray(previousSubmission.yesterday_incomplete)
+          ? previousSubmission.yesterday_incomplete
+          : JSON.parse(previousSubmission.yesterday_incomplete as unknown as string))
+      : [];
+    const inProgressItems = previousSubmission.yesterday_in_progress
+      ? (Array.isArray(previousSubmission.yesterday_in_progress)
+          ? previousSubmission.yesterday_in_progress
+          : JSON.parse(previousSubmission.yesterday_in_progress as unknown as string))
+      : [];
+    const allPlans = [...inProgressItems, ...carriedItems, ...todayPlans];
+    if (allPlans.length > 0) {
+      yesterdayData = {
+        plans: allPlans,
+        completed: [],
+        incomplete: [],
+        inProgressCount: inProgressItems.length,
+      };
+    }
+  }
+
+  // Fetch integrations in parallel
+  const yesterdayDate = new Date(userDate);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const sinceDate = previousSubmission?.date || formatDate(yesterdayDate);
+
+  const [linearResult, githubResult, mergedPRs] = await Promise.all([
+    fetchLinearIssuesForUser(daily, userId, ctx),
+    fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchMergedPRsForUser(daily, userId, ctx, sinceDate),
+  ]);
+
+  let doneIdentifiers: Set<string> | undefined;
+  let autoCompletedIds: Set<string> | undefined;
+
+  if (linearResult.allActiveIdentifiers.length > 0 || yesterdayData) {
+    try {
+      const recentlyDoneItems = await getRecentlyDoneLinearItems(ctx.db, userId, dailyName);
+      const doneIds = new Set(
+        recentlyDoneItems.map(text => text.match(/^\[([^\]]+)\]/)?.[1]).filter((id): id is string => !!id)
+      );
+      if (doneIds.size > 0) doneIdentifiers = doneIds;
+      if (yesterdayData && linearResult.allActiveIdentifiers.length > 0) {
+        const activeSet = new Set(linearResult.allActiveIdentifiers);
+        const autoDone = new Set<string>();
+        for (const plan of yesterdayData.plans) {
+          const match = plan.match(/^\[([^\]]+)\]\s/);
+          if (match && !activeSet.has(match[1]) && !doneIds.has(match[1])) autoDone.add(match[1]);
+        }
+        if (autoDone.size > 0) autoCompletedIds = autoDone;
+      }
+    } catch (error) {
+      console.error('Failed to compute done/auto-completed sets:', error);
+    }
+  }
+
+  const sects = getDailySections(daily);
+  const modal = buildStandupModal(
+    dailyName, yesterdayData, daily.questions || [], daily.field_order, userDate,
+    'today', prefill, linearResult.issues, githubResult.prData, githubResult.reviewerMap,
+    doneIdentifiers, autoCompletedIds, mergedPRs.length > 0 ? mergedPRs : undefined, sects
   );
 
   return openModal(ctx.slackToken, triggerId, modal);
@@ -996,6 +1342,435 @@ export async function handleToggleDmStandup(
   }
 }
 
+export async function handleToggleLinearSync(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+
+  try {
+    const current = await getLinearSyncBack(ctx.db, userId);
+    await setLinearSyncBack(ctx.db, userId, !current);
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to toggle Linear sync-back preference:', error);
+    return false;
+  }
+}
+
+// ============================================================================
+// Settings Handlers
+// ============================================================================
+
+async function handleSetOOO(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'ooo_set_submission',
+    title: { type: 'plain_text', text: 'Set Out of Office' },
+    submit: { type: 'plain_text', text: 'Set OOO' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'ooo_start',
+        element: { type: 'datepicker', action_id: 'start_date' },
+        label: { type: 'plain_text', text: 'Start date' },
+      },
+      {
+        type: 'input',
+        block_id: 'ooo_end',
+        element: { type: 'datepicker', action_id: 'end_date' },
+        label: { type: 'plain_text', text: 'End date' },
+      },
+    ],
+  };
+
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleClearOOO(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+  try {
+    const dailies = await getUserDailies(ctx.db, userId);
+    for (const d of dailies) {
+      await clearOOO(ctx.db, userId, d.daily_name);
+    }
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to clear OOO:', error);
+    return false;
+  }
+}
+
+async function handleOOOSetSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+  const values = payload.view?.state?.values;
+  const startDate = values?.ooo_start?.start_date?.selected_date;
+  const endDate = values?.ooo_end?.end_date?.selected_date;
+
+  if (!startDate || !endDate) {
+    return { response_action: 'errors', errors: { ooo_start: 'Please select both dates' } };
+  }
+  if (endDate < startDate) {
+    return { response_action: 'errors', errors: { ooo_end: 'End date must be on or after start date' } };
+  }
+
+  try {
+    const dailies = await getUserDailies(ctx.db, userId);
+    for (const d of dailies) {
+      await setOOO(ctx.db, userId, d.daily_name, startDate, endDate);
+    }
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error('Failed to set OOO:', error);
+    return false;
+  }
+}
+
+async function handleSetMaxItems(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'settings_max_items',
+    title: { type: 'plain_text', text: 'Max Items Per List' },
+    submit: { type: 'plain_text', text: 'Save' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'max_items',
+        element: {
+          type: 'static_select',
+          action_id: 'value',
+          placeholder: { type: 'plain_text', text: 'Select limit' },
+          options: [
+            { text: { type: 'plain_text', text: 'No limit' }, value: '0' },
+            { text: { type: 'plain_text', text: '3 items' }, value: '3' },
+            { text: { type: 'plain_text', text: '5 items' }, value: '5' },
+            { text: { type: 'plain_text', text: '10 items' }, value: '10' },
+          ],
+        },
+        label: { type: 'plain_text', text: 'Max PRs and Linear tickets shown' },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleSetStalePrDays(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'settings_stale_pr_days',
+    title: { type: 'plain_text', text: 'Stale PR Threshold' },
+    submit: { type: 'plain_text', text: 'Save' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'stale_pr_days',
+        element: {
+          type: 'static_select',
+          action_id: 'value',
+          placeholder: { type: 'plain_text', text: 'Select threshold' },
+          options: [
+            { text: { type: 'plain_text', text: '1 day' }, value: '1' },
+            { text: { type: 'plain_text', text: '2 days' }, value: '2' },
+            { text: { type: 'plain_text', text: '3 days (default)' }, value: '3' },
+            { text: { type: 'plain_text', text: '5 days' }, value: '5' },
+            { text: { type: 'plain_text', text: '7 days' }, value: '7' },
+          ],
+        },
+        label: { type: 'plain_text', text: 'Flag reviews older than' },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleSetLinearTeams(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const view = {
+    type: 'modal',
+    callback_id: 'settings_linear_teams',
+    title: { type: 'plain_text', text: 'Linear Team Filter' },
+    submit: { type: 'plain_text', text: 'Save' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'linear_teams',
+        optional: true,
+        element: {
+          type: 'plain_text_input',
+          action_id: 'value',
+          placeholder: { type: 'plain_text', text: 'e.g. ENG,PLATFORM (leave empty for all)' },
+        },
+        label: { type: 'plain_text', text: 'Linear team IDs (comma-separated)' },
+      },
+    ],
+  };
+  return openModal(ctx.slackToken, payload.trigger_id, view);
+}
+
+async function handleSettingsSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext,
+  callbackId: string
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+  const values = payload.view?.state?.values;
+
+  try {
+    if (callbackId === 'settings_max_items') {
+      const val = parseInt(values?.max_items?.value?.selected_option?.value || '0', 10);
+      await updateUserSetting(ctx.db, userId, 'max_items', val === 0 ? null : val);
+    } else if (callbackId === 'settings_stale_pr_days') {
+      const val = parseInt(values?.stale_pr_days?.value?.selected_option?.value || '3', 10);
+      await updateUserSetting(ctx.db, userId, 'stale_pr_days', val === 3 ? null : val);
+    } else if (callbackId === 'settings_linear_teams') {
+      const val = values?.linear_teams?.value?.value?.trim() || '';
+      await updateUserSetting(ctx.db, userId, 'linear_team_filter', val || null);
+    }
+    await refreshHome(userId, ctx);
+    return true;
+  } catch (error) {
+    console.error(`Failed to save setting ${callbackId}:`, error);
+    return false;
+  }
+}
+
+// ============================================================================
+// Phase 4: Standup Post Sync
+// ============================================================================
+
+/** Parse JSONB arrays (handles both array and string formats) */
+function parseJsonArray(value: string[] | null): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  try {
+    return JSON.parse(value as unknown as string);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Rebuild and update the standup post in the channel after an App Home mutation.
+ * No-ops if the submission doesn't exist, hasn't been posted, or has no message ts.
+ */
+async function syncStandupPost(
+  db: DbClient,
+  slackToken: string,
+  userId: string,
+  dailyName: string,
+  date: string
+): Promise<void> {
+  const submission = await getSubmissionForDate(db, userId, dailyName, date);
+  if (!submission || !submission.posted || !submission.slack_message_ts) return;
+
+  const daily = getDaily(dailyName);
+  if (!daily || !daily.channel) return;
+
+  // Fetch carry counts for in-progress items (for "Day X" annotations)
+  const inProgressItems = parseJsonArray(submission.yesterday_in_progress);
+  let inProgressCarryCounts: Record<string, number> | undefined;
+  if (inProgressItems.length > 0) {
+    try {
+      inProgressCarryCounts = await getInProgressCarryCounts(db, userId, dailyName, inProgressItems);
+    } catch (error) {
+      console.error('Failed to get in-progress carry counts for sync:', error);
+    }
+  }
+
+  const githubOrg = getGitHubConfig(daily)?.org;
+
+  const data: StandupData = {
+    yesterdayCompleted: parseJsonArray(submission.yesterday_completed),
+    yesterdayIncomplete: parseJsonArray(submission.yesterday_incomplete),
+    yesterdayInProgress: inProgressItems,
+    yesterdayDropped: [], // dropped items aren't tracked on the submission record
+    unplanned: parseJsonArray(submission.unplanned),
+    todayPlans: parseJsonArray(submission.today_plans),
+    blockers: submission.blockers || '',
+    customAnswers: submission.custom_answers || {},
+    questions: daily.questions,
+    fieldOrder: daily.field_order,
+    inProgressCarryCounts,
+    githubOrg,
+  };
+
+  const blocks = formatStandupBlocks(userId, dailyName, data);
+  const fallbackText = `*<@${userId}>*`;
+
+  await updateMessage(slackToken, daily.channel, submission.slack_message_ts, fallbackText, blocks);
+}
+
+// ============================================================================
+// Phase 3: App Home Task Action Handlers
+// ============================================================================
+
+/**
+ * Handle overflow menu selection on a task item (done / in_progress / drop)
+ * action_id: "task_action", value JSON: { itemId, dailyName, action }
+ */
+async function handleTaskAction(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const selectedValue = payload.actions?.[0]?.selected_option?.value;
+  if (!selectedValue) {
+    console.error('No selected_option value in task_action');
+    return false;
+  }
+
+  let parsed: { itemId: number; dailyName: string; action: string };
+  try {
+    parsed = JSON.parse(selectedValue);
+  } catch {
+    console.error('Failed to parse task_action value:', selectedValue);
+    return false;
+  }
+
+  const { itemId, dailyName, action } = parsed;
+  const userId = payload.user.id;
+
+  // Map "drop" → "dropped" for DB; others pass through
+  const dbStatus = action === 'drop' ? 'dropped' : action as 'done' | 'in_progress';
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const todayStr = formatDate(getUserDate(tzOffset));
+
+  await updateWorkItemStatus(ctx.db, itemId, dbStatus, dbStatus === 'done' ? todayStr : undefined);
+
+  const submission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+  if (submission) {
+    await updateSubmissionArrays(ctx.db, submission.id, userId, dailyName, todayStr);
+  }
+
+  await refreshHome(userId, ctx);
+
+  if (submission) {
+    const syncPromise = syncStandupPost(ctx.db, ctx.slackToken, userId, dailyName, todayStr)
+      .catch(err => console.error('syncStandupPost failed:', err));
+    ctx.waitUntil?.(syncPromise);
+  }
+
+  return true;
+}
+
+/**
+ * Handle "Add Item" button click from App Home task list
+ * action_id: "task_add", value: dailyName
+ */
+async function handleTaskAdd(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const dailyName = payload.actions?.[0]?.value;
+  if (!dailyName) {
+    console.error('No dailyName in task_add action');
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const triggerId = payload.trigger_id;
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const todayStr = formatDate(getUserDate(tzOffset));
+
+  const submission = await getSubmissionForDate(ctx.db, userId, dailyName, todayStr);
+  if (!submission) {
+    await sendDM(
+      ctx.slackToken,
+      userId,
+      `You need to submit your *${dailyName}* standup first before adding items.`
+    );
+    return true;
+  }
+
+  const modal = {
+    type: 'modal',
+    callback_id: 'task_add_submission',
+    title: { type: 'plain_text', text: 'Add Item' },
+    submit: { type: 'plain_text', text: 'Add' },
+    private_metadata: JSON.stringify({ dailyName, date: todayStr, submissionId: submission.id }),
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'task_text',
+        label: { type: 'plain_text', text: 'Item' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'task_text_input',
+          placeholder: { type: 'plain_text', text: 'What are you adding?' },
+          multiline: false,
+        },
+      },
+    ],
+  };
+
+  return openModal(ctx.slackToken, triggerId, modal);
+}
+
+/**
+ * Handle "Add Item" modal submission
+ * callback_id: "task_add_submission"
+ */
+async function handleTaskAddSubmission(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<InteractionResult> {
+  const userId = payload.user.id;
+
+  let metadata: { dailyName: string; date: string; submissionId: number };
+  try {
+    metadata = JSON.parse(payload.view!.private_metadata);
+  } catch {
+    console.error('Failed to parse task_add_submission metadata');
+    return false;
+  }
+
+  const { dailyName, date, submissionId } = metadata;
+
+  const text = payload.view!.state.values.task_text?.task_text_input?.value?.trim();
+  if (!text) {
+    return {
+      response_action: 'errors',
+      errors: { task_text: 'Please enter an item' },
+    };
+  }
+
+  await addWorkItem(ctx.db, userId, dailyName, text, date, submissionId);
+  await updateSubmissionArrays(ctx.db, submissionId, userId, dailyName, date);
+
+  // Refresh home and sync post in background so Slack gets a fast 200
+  const bgWork = Promise.all([
+    refreshHome(userId, ctx).catch(err => console.error('refreshHome failed:', err)),
+    syncStandupPost(ctx.db, ctx.slackToken, userId, dailyName, date)
+      .catch(err => console.error('syncStandupPost failed:', err)),
+  ]);
+  ctx.waitUntil?.(bgWork);
+
+  return true;
+}
+
 // ============================================================================
 // Main Router
 // ============================================================================
@@ -1030,6 +1805,12 @@ export async function handleInteraction(
     return handleHomeStartDaily(payload, ctx);
   }
 
+  // Handle "Show all" expand buttons in standup modal
+  if (payload.type === 'block_actions') {
+    const actionId = payload.actions?.[0]?.action_id;
+    if (actionId?.startsWith('show_all_')) return handleShowAllInModal(payload, ctx);
+  }
+
   // Handle link/unlink account buttons from App Home
   if (payload.type === 'block_actions') {
     const actionId = payload.actions?.[0]?.action_id;
@@ -1038,6 +1819,20 @@ export async function handleInteraction(
     if (actionId === 'home_unlink_github') return handleUnlinkGitHub(payload, ctx);
     if (actionId === 'home_unlink_linear') return handleUnlinkLinear(payload, ctx);
     if (actionId === 'home_toggle_dm_standup') return handleToggleDmStandup(payload, ctx);
+    if (actionId === 'home_set_ooo') return handleSetOOO(payload, ctx);
+    if (actionId === 'home_clear_ooo') return handleClearOOO(payload, ctx);
+    if (actionId === 'home_set_max_items') return handleSetMaxItems(payload, ctx);
+    if (actionId === 'home_set_stale_pr_days') return handleSetStalePrDays(payload, ctx);
+    if (actionId === 'home_set_linear_teams') return handleSetLinearTeams(payload, ctx);
+    if (actionId === 'home_toggle_linear_sync') return handleToggleLinearSync(payload, ctx);
+    if (actionId === 'home_edit_standup') return handleEditStandup(payload, ctx);
+    if (actionId === 'task_action') return handleTaskAction(payload, ctx);
+    if (actionId === 'task_add') return handleTaskAdd(payload, ctx);
+  }
+
+  // Handle task_add modal submission
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'task_add_submission') {
+    return handleTaskAddSubmission(payload, ctx);
   }
 
   // Handle modal submission
@@ -1053,6 +1848,120 @@ export async function handleInteraction(
     return handleLinearLinkSubmission(payload, ctx);
   }
 
+  // Handle OOO set submission
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'ooo_set_submission') {
+    return handleOOOSetSubmission(payload, ctx);
+  }
+
+  // Handle mass prompt confirmation
+  if (payload.type === 'view_submission' && payload.view?.callback_id === 'mass_prompt_confirm') {
+    return handleMassPromptConfirm(payload, ctx);
+  }
+
+  // Handle settings modal submissions
+  if (payload.type === 'view_submission') {
+    const callbackId = payload.view?.callback_id || '';
+    if (callbackId.startsWith('settings_')) {
+      return handleSettingsSubmission(payload, ctx, callbackId);
+    }
+  }
+
   // Unknown interaction type
+  return true;
+}
+
+async function handleShowAllInModal(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const actionId = payload.actions?.[0]?.action_id;
+  if (!actionId || !payload.view?.id) return false;
+
+  const sectionMap: Record<string, string> = {
+    show_all_linear: 'linear',
+    show_all_reviews: 'reviews',
+    show_all_my_prs: 'my_prs',
+  };
+  const section = sectionMap[actionId];
+  if (!section) return false;
+
+  let metadata: { dailyName: string; yesterdayPlans?: string[]; mode?: string; targetDate?: string; sections?: { blockers: boolean; unplanned: boolean } };
+  try {
+    metadata = JSON.parse(payload.view.private_metadata);
+  } catch {
+    return false;
+  }
+
+  const userId = payload.user.id;
+  const daily = getDaily(metadata.dailyName);
+  if (!daily) return false;
+
+  // Re-fetch integration data (same as modal open)
+  const [{ prData, reviewerMap }, linearResult] = await Promise.all([
+    fetchGitHubPRsForUser(daily, userId, ctx),
+    fetchLinearIssuesForUser(daily, userId, ctx),
+  ]);
+
+  const userInfo = await getUserTimezone(ctx.slackToken, userId);
+  const tzOffset = userInfo?.tz_offset || 0;
+  const userDate = getUserDate(tzOffset);
+
+  const expandedSections = new Set([section]);
+
+  const modal = buildStandupModal(
+    metadata.dailyName,
+    null,
+    daily.questions || [],
+    daily.field_order,
+    userDate,
+    (metadata.mode as StandupMode) || 'today',
+    undefined,
+    linearResult.issues,
+    prData,
+    reviewerMap,
+    undefined,
+    undefined,
+    undefined,
+    metadata.sections || getDailySections(daily),
+    expandedSections,
+  );
+
+  await updateModal(ctx.slackToken, payload.view.id, modal);
+  return true;
+}
+
+async function handleMassPromptConfirm(
+  payload: InteractionPayload,
+  ctx: InteractionContext
+): Promise<boolean> {
+  const userId = payload.user.id;
+  if (!isAdmin(userId)) return false;
+
+  let metadata: { dailyName: string };
+  try {
+    metadata = JSON.parse(payload.view?.private_metadata || '{}');
+  } catch {
+    return false;
+  }
+
+  const { dailyName } = metadata;
+  if (!dailyName) return false;
+
+  const participants = await getParticipants(ctx.db, dailyName);
+  let sent = 0;
+  let failed = 0;
+
+  for (const p of participants) {
+    const ok = await sendPromptDM(ctx.slackToken, p.slack_user_id, dailyName);
+    if (ok) sent++;
+    else failed++;
+  }
+
+  let summary = `📬 Sent prompts to ${sent} user${sent !== 1 ? 's' : ''} in *${dailyName}*.`;
+  if (failed > 0) {
+    summary += `\n⚠️ ${failed} failed.`;
+  }
+
+  await sendDM(ctx.slackToken, userId, summary);
   return true;
 }

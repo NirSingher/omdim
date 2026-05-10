@@ -5,10 +5,12 @@
  * - Generates daily digests and weekly summaries
  */
 
-import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats } from './db';
+import { Submission, ParticipationStats, TeamMemberStats, BottleneckItem, DropStats, TeamMemberRanking, PeriodStats, BlockerStreak, UnplannedOverload, WorkItem } from './db';
 import { postMessage, sendDM as slackSendDM, sendDMWithBlocks } from './slack';
 import { UserPRData, GitHubPR, formatPRRef, TeamPRData } from './github';
 import { TeamLinearData, CycleProgress } from './linear';
+import { AlignmentResult } from './linear-intelligence';
+import { GitHubAlignmentResult } from './github-intelligence';
 
 // Re-export sendDM for backward compatibility
 export { sendDM as sendDM } from './slack';
@@ -39,15 +41,14 @@ export interface StandupData {
   customAnswers: Record<string, string>;
   questions?: QuestionConfig[];
   fieldOrder?: FieldOrder;
-  prData?: UserPRData; // GitHub PR data for integration
-  reviewerSlackMap?: Map<string, string>; // GitHub login → Slack user ID
   inProgressCarryCounts?: Record<string, number>; // carry counts for attention warnings
+  githubOrg?: string; // GitHub org for building clickable PR links
 }
 
 // Default field order values
 const DEFAULT_FIELD_ORDER = {
-  yesterday: 10,  // Combined completed + unplanned
-  today: 20,      // Combined carried + new plans
+  yesterday: 20,  // Combined completed + unplanned
+  today: 10,      // Combined carried + new plans
   blockers: 30,
 };
 
@@ -84,7 +85,7 @@ export function formatStandupBlocks(
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*<@${userId}>* submitted their standup`,
+      text: `*<@${userId}>*`,
     },
   });
 
@@ -102,24 +103,26 @@ export function formatStandupBlocks(
 
   const sections: OrderedSection[] = [];
 
+  const enrich = (text: string) => enrichItemSource(text, data.githubOrg);
+
   // Yesterday section - completed, unplanned, and dropped items
   sections.push({
     order: yesterdayOrder,
     render: () => {
-      const yesterdayItems: string[] = [];
-      for (const item of data.yesterdayCompleted) {
-        yesterdayItems.push(`☑️ ${item}`);
-      }
-      for (const item of data.unplanned) {
-        yesterdayItems.push(`☑️ ${item} _(unplanned)_`);
-      }
-      for (const item of data.yesterdayDropped || []) {
-        yesterdayItems.push(`❌ ${item} _(dropped)_`);
-      }
-      if (yesterdayItems.length === 0) return null;
+      const doneCount = data.yesterdayCompleted.length;
+      const unplannedCount = data.unplanned.length;
+      const droppedCount = (data.yesterdayDropped || []).length;
+
+      if (doneCount + unplannedCount + droppedCount === 0) return null;
+
+      const parts: string[] = [];
+      if (doneCount > 0) parts.push(`${doneCount} done`);
+      if (unplannedCount > 0) parts.push(`${unplannedCount} unplanned`);
+      if (droppedCount > 0) parts.push(`${droppedCount} dropped`);
+
       return {
         type: 'section',
-        text: { type: 'mrkdwn', text: '*Yesterday:*\n' + yesterdayItems.join('\n') },
+        text: { type: 'mrkdwn', text: `*Yesterday* — ${parts.join(' · ')}` },
       };
     },
   });
@@ -132,18 +135,20 @@ export function formatStandupBlocks(
       // In-progress items first
       for (const item of data.yesterdayInProgress || []) {
         const carryCount = data.inProgressCarryCounts?.[item] || 0;
-        const emoji = carryCount >= 3 ? '⚠️' : '🔄';
-        todayItems.push(`${emoji} ${item} _(in progress)_`);
+        if (carryCount >= 3) {
+          todayItems.push(`⚠️ ${enrich(item)} _(day ${carryCount})_`);
+        } else if (carryCount >= 1) {
+          todayItems.push(`🔄 ${enrich(item)} _(day ${carryCount})_`);
+        } else {
+          todayItems.push(`🔄 ${enrich(item)}`);
+        }
       }
       for (const item of data.yesterdayIncomplete) {
-        todayItems.push(`⬜ ${item} _(carried over)_`);
+        todayItems.push(`➡️ ${enrich(item)}`);
       }
       const carryForwardCount = (data.yesterdayInProgress || []).length + data.yesterdayIncomplete.length;
-      if (carryForwardCount > 0 && data.todayPlans.length > 0) {
-        todayItems.push('───');
-      }
       for (const item of data.todayPlans) {
-        todayItems.push(`⬜ ${item}`);
+        todayItems.push(`🎯 ${enrich(item)}`);
       }
       if (todayItems.length === 0) return null;
       return {
@@ -158,9 +163,14 @@ export function formatStandupBlocks(
     order: blockersOrder,
     render: () => {
       if (!data.blockers || !data.blockers.trim()) return null;
+      const prefixed = data.blockers
+        .split('\n')
+        .filter(line => line.trim())
+        .map(line => `🚧 ${line.trim()}`)
+        .join('\n');
       return {
         type: 'section',
-        text: { type: 'mrkdwn', text: `*🚧 Blockers:*\n${data.blockers}` },
+        text: { type: 'mrkdwn', text: prefixed },
       };
     },
   });
@@ -187,25 +197,6 @@ export function formatStandupBlocks(
       blocks.push(block);
     }
   }
-
-  // PR section (if data available)
-  if (data.prData) {
-    const prBlock = formatPRSectionBlock(data.prData, data.reviewerSlackMap);
-    if (prBlock) {
-      blocks.push(prBlock);
-    }
-  }
-
-  // Context footer
-  blocks.push({
-    type: 'context',
-    elements: [
-      {
-        type: 'mrkdwn',
-        text: `_${dailyName} standup_`,
-      },
-    ],
-  });
 
   return blocks;
 }
@@ -369,6 +360,11 @@ export interface IntegrationStatus {
   linear: boolean;
 }
 
+export interface OOOInfo {
+  slackUserId: string;
+  endDate: string;
+}
+
 export interface DigestOptions {
   dailyName: string;
   period: DigestPeriod;
@@ -378,6 +374,7 @@ export interface DigestOptions {
   stats: TeamMemberStats[];
   totalWorkdays: number;
   missingToday?: string[];
+  oooToday?: OOOInfo[]; // Users currently OOO
   bottlenecks?: BottleneckItem[];
   dropStats?: DropStats[];
   rankings?: TeamMemberRanking[];
@@ -386,6 +383,11 @@ export interface DigestOptions {
   teamPRData?: TeamPRData[]; // GitHub PR data for team
   teamLinearData?: TeamLinearData[]; // Linear data for team
   cycleProgress?: CycleProgress | null; // Linear cycle progress
+  maxPlanItems?: number; // Plan-size threshold for over-plan flagging
+  blockerStreaks?: BlockerStreak[];
+  unplannedOverloads?: UnplannedOverload[];
+  linearAlignment?: AlignmentResult[]; // Phase 1 & 2: plan-vs-Linear alignment
+  githubAlignment?: GitHubAlignmentResult[]; // Phase 4 & 5: plan-vs-GitHub alignment
 }
 
 /**
@@ -437,10 +439,32 @@ export function formatManagerDigest(options: DigestOptions): string {
   // Collect all action items
   const actionItems: string[] = [];
 
-  // Stuck items (bottlenecks)
+  // Stuck items (bottlenecks) — distinguish in-progress from carried
   if (bottlenecks && bottlenecks.length > 0) {
     for (const item of bottlenecks.slice(0, 3)) {
-      actionItems.push(`🔥 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" stuck ${item.days_pending} days`);
+      if (item.status === 'in_progress') {
+        actionItems.push(`🔄 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" in progress Day ${item.carry_count}`);
+      } else {
+        actionItems.push(`🔥 <@${item.slack_user_id}>: "${truncate(item.text, 35)}" stuck ${item.days_pending} days`);
+      }
+    }
+  }
+
+  // Blocker streaks (users blocked 3+ consecutive days)
+  if (options.blockerStreaks) {
+    for (const streak of options.blockerStreaks) {
+      if (streak.current_streak >= 3 && actionItems.length < 6) {
+        actionItems.push(`🚧 <@${streak.slack_user_id}>: blocked ${streak.current_streak} consecutive days`);
+      }
+    }
+  }
+
+  // Unplanned overload (pre-filtered by caller to threshold)
+  if (options.unplannedOverloads) {
+    for (const overload of options.unplannedOverloads) {
+      if (actionItems.length < 6) {
+        actionItems.push(`⚡ <@${overload.slack_user_id}>: ${overload.unplanned_pct}% unplanned work (${overload.unplanned_count}/${overload.completed_count} items)`);
+      }
     }
   }
 
@@ -474,6 +498,16 @@ export function formatManagerDigest(options: DigestOptions): string {
     lines.push(`*Not submitted:* ${missingToday.map(u => `<@${u}>`).join(' · ')}`);
   }
 
+  // OOO users (for daily only)
+  if (period === 'daily' && options.oooToday && options.oooToday.length > 0) {
+    const formatShort = (d: string) => {
+      const date = new Date(d + 'T00:00:00');
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+    const oooList = options.oooToday.map(o => `<@${o.slackUserId}> (back ${formatShort(o.endDate)})`).join(' · ');
+    lines.push(`*🏖️ Out today:* ${oooList}`);
+  }
+
   // Compact team section
   lines.push('');
   lines.push(`👥 *Team*`);
@@ -483,6 +517,21 @@ export function formatManagerDigest(options: DigestOptions): string {
   if (dropStats) {
     for (const ds of dropStats) {
       dropRateMap.set(ds.slack_user_id, ds.drop_rate);
+    }
+  }
+
+  // Build over-plan lookup (average plan count per user across submissions)
+  const overPlanMap = new Map<string, number>();
+  if (options.maxPlanItems && options.maxPlanItems > 0) {
+    const planCounts = new Map<string, number[]>();
+    for (const sub of submissions) {
+      const plans = (sub.today_plans?.length || 0) + (sub.yesterday_incomplete?.length || 0) + (sub.yesterday_in_progress?.length || 0);
+      if (!planCounts.has(sub.slack_user_id)) planCounts.set(sub.slack_user_id, []);
+      planCounts.get(sub.slack_user_id)!.push(plans);
+    }
+    for (const [userId, counts] of planCounts) {
+      const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+      if (avg >= options.maxPlanItems) overPlanMap.set(userId, Math.round(avg));
     }
   }
 
@@ -502,6 +551,12 @@ export function formatManagerDigest(options: DigestOptions): string {
     const dropRate = dropRateMap.get(member.slack_user_id);
     if (dropRate && dropRate > 30) {
       line += ` — ${dropRate}% drops`;
+    }
+
+    // Flag users who routinely over-plan
+    const avgPlan = overPlanMap.get(member.slack_user_id);
+    if (avgPlan) {
+      line += ` — avg ${avgPlan} plans`;
     }
 
     lines.push(line);
@@ -524,6 +579,22 @@ export function formatManagerDigest(options: DigestOptions): string {
     const linearSection = formatLinearDigestSection(options.teamLinearData || [], options.cycleProgress);
     if (linearSection) {
       lines.push(linearSection);
+    }
+  }
+
+  // Linear intelligence: plan-vs-Linear alignment (Phase 1 & 2)
+  if (options.linearAlignment && options.linearAlignment.length > 0) {
+    const alignmentSection = formatLinearAlignmentSection(options.linearAlignment);
+    if (alignmentSection) {
+      lines.push(alignmentSection);
+    }
+  }
+
+  // GitHub intelligence: plan-vs-GitHub alignment (Phase 4 & 5)
+  if (options.githubAlignment && options.githubAlignment.length > 0) {
+    const githubAlignmentSection = formatGitHubAlignmentSection(options.githubAlignment);
+    if (githubAlignmentSection) {
+      lines.push(githubAlignmentSection);
     }
   }
 
@@ -566,6 +637,8 @@ export interface FullReportOptions {
   bottlenecks?: BottleneckItem[];
   dropStats?: DropStats[];
   trends?: TrendData;
+  blockerStreaks?: BlockerStreak[];
+  unplannedOverloads?: UnplannedOverload[];
 }
 
 /**
@@ -573,7 +646,7 @@ export interface FullReportOptions {
  * Used by /standup report command
  */
 export function formatFullReport(options: FullReportOptions): string {
-  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, bottlenecks, dropStats, trends } = options;
+  const { dailyName, period, startDate, endDate, submissions, stats, totalWorkdays, bottlenecks, dropStats, trends, blockerStreaks, unplannedOverloads } = options;
 
   // Format date range
   const formatShortDate = (d: string) => {
@@ -632,6 +705,21 @@ export function formatFullReport(options: FullReportOptions): string {
     completionMap.set(sub.slack_user_id, existing);
   }
 
+  // Build lookup maps for new data
+  const blockerStreakMap = new Map<string, BlockerStreak>();
+  if (blockerStreaks) {
+    for (const streak of blockerStreaks) {
+      blockerStreakMap.set(streak.slack_user_id, streak);
+    }
+  }
+
+  const unplannedOverloadMap = new Map<string, UnplannedOverload>();
+  if (unplannedOverloads) {
+    for (const overload of unplannedOverloads) {
+      unplannedOverloadMap.set(overload.slack_user_id, overload);
+    }
+  }
+
   // Individual member sections
   for (const member of stats) {
     const userId = member.slack_user_id;
@@ -679,16 +767,44 @@ export function formatFullReport(options: FullReportOptions): string {
       lines.push(`Blockers: 0 days`);
     }
 
-    // Stuck items
+    // Blocker streak
+    const streak = blockerStreakMap.get(userId);
+    if (streak && streak.current_streak >= 3) {
+      lines.push(`🚧 Current blocker streak: ${streak.current_streak} days`);
+    }
+
+    // Unplanned overload
+    const overload = unplannedOverloadMap.get(userId);
+    if (overload) {
+      lines.push(`⚡ Unplanned work: ${overload.unplanned_pct}% (${overload.unplanned_count}/${overload.completed_count} items)`);
+    }
+
+    // Stuck items — separate in-progress from carried
     const userBottlenecks = bottleneckMap.get(userId);
     if (userBottlenecks && userBottlenecks.length > 0) {
-      lines.push('');
-      lines.push(`Stuck items:`);
-      for (const item of userBottlenecks.slice(0, 3)) {
-        lines.push(`  🔥 "${truncate(item.text, 40)}" (${item.days_pending} days, carried ${item.carry_count}x)`);
+      const inProgressItems = userBottlenecks.filter(b => b.status === 'in_progress');
+      const carriedItems = userBottlenecks.filter(b => b.status !== 'in_progress');
+
+      if (inProgressItems.length > 0) {
+        lines.push('');
+        lines.push(`In progress — needs attention:`);
+        for (const item of inProgressItems.slice(0, 3)) {
+          lines.push(`  🔄 "${truncate(item.text, 40)}" (Day ${item.carry_count})`);
+        }
+        if (inProgressItems.length > 3) {
+          lines.push(`  _...and ${inProgressItems.length - 3} more_`);
+        }
       }
-      if (userBottlenecks.length > 3) {
-        lines.push(`  _...and ${userBottlenecks.length - 3} more_`);
+
+      if (carriedItems.length > 0) {
+        lines.push('');
+        lines.push(`Stuck items:`);
+        for (const item of carriedItems.slice(0, 3)) {
+          lines.push(`  🔥 "${truncate(item.text, 40)}" (${item.days_pending} days, carried ${item.carry_count}x)`);
+        }
+        if (carriedItems.length > 3) {
+          lines.push(`  _...and ${carriedItems.length - 3} more_`);
+        }
       }
     }
 
@@ -706,6 +822,10 @@ export function formatFullReport(options: FullReportOptions): string {
     lines.push(`Completion: ${completionTrend}`);
     const blockerTrend = formatTrendCompact(trends.current.blocker_rate, trends.previous.blocker_rate, false);
     lines.push(`Blockers: ${blockerTrend}`);
+    if (trends.current.unplanned_rate !== undefined) {
+      const unplannedTrend = formatTrendCompact(trends.current.unplanned_rate, trends.previous.unplanned_rate, false);
+      lines.push(`Unplanned work: ${unplannedTrend}`);
+    }
   }
 
   return lines.join('\n');
@@ -1076,6 +1196,98 @@ export function formatMemberPRSummary(prData: UserPRData): string {
 }
 
 // ============================================================================
+// Linear Intelligence Formatting (Phase 1 & 2)
+// ============================================================================
+
+/**
+ * Format plan-vs-Linear alignment section for manager digest.
+ * Shows per-user cross-reference gaps and priority alignment status.
+ *
+ * Example output:
+ *   🔍 *Plan-Linear Alignment*
+ *     <@U123>: 2 plans not in Linear, 1 ticket unplanned ⚠️ 1 urgent unplanned
+ *     <@U456>: ✅ aligned
+ */
+function formatLinearAlignmentSection(alignment: AlignmentResult[]): string {
+  const lines: string[] = [];
+
+  lines.push('');
+  lines.push('🔍 *Plan-Linear Alignment*');
+
+  for (const result of alignment) {
+    const parts: string[] = [];
+
+    if (result.plansNotInLinear.length > 0) {
+      parts.push(`${result.plansNotInLinear.length} plan${result.plansNotInLinear.length !== 1 ? 's' : ''} not in Linear`);
+    }
+
+    if (result.linearNotInPlans.length > 0) {
+      parts.push(`${result.linearNotInPlans.length} ticket${result.linearNotInPlans.length !== 1 ? 's' : ''} unplanned`);
+    }
+
+    let prioritySuffix = '';
+    if (result.priorityAlignment === 'off-track' && result.missedHighPriority.length > 0) {
+      const urgentCount = result.missedHighPriority.filter(i => i.priority === 1).length;
+      const highCount = result.missedHighPriority.filter(i => i.priority === 2).length;
+      const priorityParts: string[] = [];
+      if (urgentCount > 0) priorityParts.push(`${urgentCount} urgent`);
+      if (highCount > 0) priorityParts.push(`${highCount} high-priority`);
+      prioritySuffix = ` ⚠️ ${priorityParts.join(', ')} unplanned`;
+    }
+
+    if (parts.length === 0 && result.priorityAlignment === 'on-track') {
+      lines.push(`  <@${result.slackUserId}>: ✅ aligned`);
+    } else {
+      const gapText = parts.length > 0 ? parts.join(', ') : 'gaps found';
+      lines.push(`  <@${result.slackUserId}>: ${gapText}${prioritySuffix}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
+// GitHub Intelligence Formatting (Phase 4 & 5)
+// ============================================================================
+
+/**
+ * Format plan-vs-GitHub alignment section for manager digest.
+ * Shows per-user cross-reference gaps between plans and merged PRs.
+ *
+ * Example output:
+ *   🔍 *Plan-GitHub Alignment*
+ *     <@U123>: 2 plans without matching PRs, 1 merged PR unplanned
+ *     <@U456>: ✅ aligned
+ */
+function formatGitHubAlignmentSection(alignment: GitHubAlignmentResult[]): string {
+  const lines: string[] = [];
+
+  lines.push('');
+  lines.push('🔍 *Plan-GitHub Alignment*');
+
+  for (const result of alignment) {
+    const parts: string[] = [];
+
+    if (result.plansWithoutWork.length > 0) {
+      parts.push(`${result.plansWithoutWork.length} plan${result.plansWithoutWork.length !== 1 ? 's' : ''} without matching PRs`);
+    }
+
+    if (result.workWithoutPlans.length > 0) {
+      parts.push(`${result.workWithoutPlans.length} merged PR${result.workWithoutPlans.length !== 1 ? 's' : ''} unplanned`);
+    }
+
+    if (parts.length === 0 && result.alignmentStatus === 'aligned') {
+      lines.push(`  <@${result.slackUserId}>: ✅ aligned`);
+    } else {
+      const gapText = parts.length > 0 ? parts.join(', ') : 'gaps found';
+      lines.push(`  <@${result.slackUserId}>: ${gapText}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
 // Linear Digest Formatting
 // ============================================================================
 
@@ -1120,8 +1332,102 @@ export function formatLinearDigestSection(
 }
 
 // ============================================================================
+// Team Summary Post
+// ============================================================================
+
+export interface TeamSummaryOptions {
+  dailyName: string;
+  channel: string;
+  submissions: Submission[];
+  githubOrg?: string;
+}
+
+export function formatTeamSummary(options: TeamSummaryOptions): string {
+  const { dailyName, channel, submissions, githubOrg } = options;
+  if (submissions.length === 0) return '';
+
+  const lines: string[] = [];
+  lines.push(`📋 *${dailyName} — Team Summary*`);
+  lines.push('');
+
+  const blockers: Array<{ userId: string; text: string }> = [];
+
+  for (const sub of submissions) {
+    const topItems: string[] = [];
+
+    // Pick top 1-2 highest-signal items: blockers first, then today's plans
+    const plans = sub.today_plans || [];
+    for (const item of plans.slice(0, 2)) {
+      topItems.push(enrichItemSource(item, githubOrg));
+    }
+
+    // Build line with message link if available
+    const messageLink = sub.slack_message_ts
+      ? ` <https://slack.com/archives/${channel}/p${sub.slack_message_ts.replace('.', '')}|↗>`
+      : '';
+
+    const summary = topItems.length > 0 ? topItems.join(' · ') : '_no plans_';
+    lines.push(`<@${sub.slack_user_id}>${messageLink}: ${summary}`);
+
+    // Collect blockers
+    if (sub.blockers && sub.blockers.trim()) {
+      for (const line of sub.blockers.split('\n').filter(l => l.trim())) {
+        blockers.push({ userId: sub.slack_user_id, text: line.trim() });
+      }
+    }
+  }
+
+  if (blockers.length > 0) {
+    lines.push('');
+    lines.push('🚧 *Blockers*');
+    for (const b of blockers) {
+      lines.push(`<@${b.userId}>: ${b.text}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * Enrich a plan item with a clickable source link when it has an [identifier] prefix.
+ * - `[repo#42] title` → `<https://github.com/…|📦 repo#42> title`
+ * - `[ENG-123] title` → `<https://linear.app/issue/ENG-123|🎫 ENG-123> title`
+ * - no prefix → returned as-is
+ */
+function enrichItemSource(text: string, githubOrg?: string): string {
+  const match = text.match(/^\[([^\]]+)\]\s+(.*)/);
+  if (!match) return text;
+  const [, id, title] = match;
+  if (id.includes('#')) {
+    // GitHub PR: "repo#42"
+    const [repo, num] = id.split('#');
+    const url = githubOrg
+      ? `https://github.com/${githubOrg}/${repo}/pull/${num}`
+      : `#`;
+    return `<${url}|📦 ${id}> ${title}`;
+  }
+  // Linear ticket: "ENG-123"
+  return `<https://linear.app/issue/${id}|🎫 ${id}> ${title}`;
+}
+
+/**
+ * Enrich a work item entity using its structured source fields (no regex needed).
+ * Falls back to enrichItemSource for items without source metadata.
+ */
+export function enrichItemFromEntity(item: WorkItem, githubOrg?: string): string {
+  if (item.source === 'manual' || !item.source_ref) {
+    return enrichItemSource(item.text, githubOrg);
+  }
+  const icon = item.source === 'github_pr' ? '📦' : '🎫';
+  const url = item.source_url || '#';
+  const ref = item.source_ref;
+  const title = item.text.replace(/^\[[^\]]+\]\s*/, '');
+  return `<${url}|${icon} ${ref}> ${title}`;
+}
 
 /** Parse JSONB arrays from database (handles both array and string formats) */
 function parseJsonArray(value: string[] | null): string[] {
@@ -1132,4 +1438,73 @@ function parseJsonArray(value: string[] | null): string[] {
   } catch {
     return [];
   }
+}
+
+// ============================================================================
+// Weekly Personal Recap
+// ============================================================================
+
+export function formatPersonalWeeklyRecap(
+  dailyName: string,
+  submissions: Submission[]
+): string {
+  if (submissions.length === 0) {
+    return `📊 *Weekly recap — ${dailyName}*\n\nNo standups submitted this week.`;
+  }
+
+  const completed: string[] = [];
+  const carried: string[] = [];
+  const dropped: string[] = [];
+  const blockerTexts: string[] = [];
+
+  for (const sub of submissions) {
+    for (const item of parseJsonArray(sub.yesterday_completed)) {
+      if (!completed.includes(item)) completed.push(item);
+    }
+    for (const item of parseJsonArray(sub.yesterday_incomplete)) {
+      if (!carried.includes(item)) carried.push(item);
+    }
+    // "dropped" aren't stored on the submission — they're in work_items.
+    // Use today_plans that never appeared as completed in later submissions as a proxy:
+    // actually, we can approximate by collecting items from yesterday_in_progress
+    // that were eventually dropped. For v1 just skip "dropped" — it requires cross-referencing
+    // work_items which is out of scope for the simple recap.
+
+    const blocker = sub.blockers?.trim();
+    if (blocker && !blockerTexts.includes(blocker)) {
+      blockerTexts.push(blocker);
+    }
+  }
+
+  const lines: string[] = [`📊 *Weekly recap — ${dailyName}*`];
+  lines.push(`_${submissions.length} standup${submissions.length !== 1 ? 's' : ''} submitted this week_`);
+  lines.push('');
+
+  if (completed.length > 0) {
+    lines.push(`✅ *Completed* (${completed.length})`);
+    for (const item of completed.slice(0, 10)) {
+      lines.push(`  • ${item}`);
+    }
+    if (completed.length > 10) lines.push(`  _…and ${completed.length - 10} more_`);
+    lines.push('');
+  }
+
+  if (carried.length > 0) {
+    lines.push(`➡️ *Still carrying* (${carried.length})`);
+    for (const item of carried.slice(0, 5)) {
+      lines.push(`  • ${item}`);
+    }
+    if (carried.length > 5) lines.push(`  _…and ${carried.length - 5} more_`);
+    lines.push('');
+  }
+
+  if (blockerTexts.length > 0) {
+    lines.push(`🚧 *Blockers reported* (${blockerTexts.length})`);
+    for (const b of blockerTexts.slice(0, 5)) {
+      lines.push(`  • ${b.length > 80 ? b.slice(0, 77) + '...' : b}`);
+    }
+    if (blockerTexts.length > 5) lines.push(`  _…and ${blockerTexts.length - 5} more_`);
+  }
+
+  return lines.join('\n');
 }
