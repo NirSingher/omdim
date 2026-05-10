@@ -103,9 +103,28 @@ vi.mock('../lib/slack', async (importActual) => {
 
 vi.mock('../lib/config', async (importActual) => {
   const real = await importActual<typeof import('../lib/config')>();
+  const TEST_DAILY = {
+    name: 'daily-test',
+    channel: '#test-channel',
+    schedule: 'test-schedule',
+  };
+  const origGetDaily = real.getDaily;
+  const origGetDailies = real.getDailies;
   return {
     ...real,
     loadConfigOverrides: vi.fn(() => Promise.resolve()),
+    getDaily: (name: string) => name === 'daily-test' ? TEST_DAILY : origGetDaily(name),
+    getDailies: () => [TEST_DAILY, ...origGetDailies()],
+    getSchedule: (name: string) => {
+      if (name === 'test-schedule') return { name: 'test-schedule', days: ['mon','tue','wed','thu','fri'], default_time: '10:00', timezone: 'UTC' };
+      return real.getSchedule(name);
+    },
+    getDailySections: (daily: any) => {
+      if (daily.name === 'daily-test') return { blockers: true, unplanned: true };
+      return real.getDailySections(daily);
+    },
+    isDailyEnabled: (name: string) => name === 'daily-test' ? true : real.isDailyEnabled(name),
+    isAdmin: () => true,
   };
 });
 
