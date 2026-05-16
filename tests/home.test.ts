@@ -798,6 +798,87 @@ describe('handleAppHomeOpened - Today\'s Plans from submission', () => {
     expect(addBlock).toBeDefined();
   });
 
+  it('shows carried/in-progress items alongside newly added plans', async () => {
+    vi.mocked(getUserDailies).mockResolvedValueOnce([
+      { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },
+    ]);
+    vi.mocked(getSubmissionForDate)
+      .mockResolvedValueOnce({
+        id: 5,
+        slack_user_id: 'U12345',
+        daily_name: 'daily-test',
+        date: '2025-12-22',
+        submitted_at: new Date(),
+        yesterday_completed: [],
+        yesterday_incomplete: ['Carried task'],
+        yesterday_in_progress: ['WIP task'],
+        unplanned: null,
+        today_plans: ['Extra plan'],
+        blockers: null,
+        custom_answers: null,
+        slack_message_ts: 'ts-abc',
+        posted: true,
+        items_normalized: true,
+      })
+      .mockResolvedValueOnce(null);
+    vi.mocked(getPreviousSubmission).mockResolvedValueOnce(null);
+    // Simulate: carried/in-progress items from prior days + a newly added plan today
+    vi.mocked(getActiveWorkItems).mockResolvedValueOnce([
+      {
+        id: 50, slack_user_id: 'U12345', daily_name: 'daily-test',
+        text: 'WIP task', created_date: '2025-12-21', status: 'in_progress',
+        carry_count: 1, completed_date: null, snoozed_until: null,
+        submission_id: 4, source: 'manual', source_ref: null, source_url: null, item_type: 'plan',
+      },
+      {
+        id: 51, slack_user_id: 'U12345', daily_name: 'daily-test',
+        text: 'Carried task', created_date: '2025-12-21', status: 'carried',
+        carry_count: 1, completed_date: null, snoozed_until: null,
+        submission_id: 4, source: 'manual', source_ref: null, source_url: null, item_type: 'plan',
+      },
+      {
+        id: 60, slack_user_id: 'U12345', daily_name: 'daily-test',
+        text: 'Extra plan', created_date: '2025-12-22', status: 'pending',
+        carry_count: 0, completed_date: null, snoozed_until: null,
+        submission_id: 5, source: 'manual', source_ref: null, source_url: null, item_type: 'plan',
+      },
+    ]);
+    vi.mocked(publishHomeView).mockResolvedValueOnce(true);
+
+    const event: AppHomeOpenedEvent = { type: 'app_home_opened', user: 'U12345', tab: 'home' };
+    const ctx: HomeContext = { db: {} as any, slackToken: 'xoxb-test' };
+
+    await handleAppHomeOpened(event, ctx);
+
+    const publishCall = vi.mocked(publishHomeView).mock.calls[0];
+    const view = publishCall[2] as { blocks: Array<Record<string, unknown>> };
+
+    // All three items must render — carried/in-progress items must not vanish
+    const wipBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('WIP task')
+    );
+    expect(wipBlock).toBeDefined();
+    expect((wipBlock as any).text.text).toContain('🔄 WIP task');
+
+    const carriedBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Carried task')
+    );
+    expect(carriedBlock).toBeDefined();
+    expect((carriedBlock as any).text.text).toContain('➡️ Carried task');
+
+    const extraBlock = view.blocks.find(
+      (b: any) => b.type === 'section' && b.text?.text?.includes('Extra plan')
+    );
+    expect(extraBlock).toBeDefined();
+    expect((extraBlock as any).text.text).toContain('🎯 Extra plan');
+
+    // All items have IDs so they should have overflow menus
+    const blocksWithOverflow = view.blocks.filter(
+      (b: any) => b.type === 'section' && b.accessory?.type === 'overflow'
+    );
+    expect(blocksWithOverflow).toHaveLength(3);
+  });
+
   it('builds tomorrow plan items from scheduled submission', async () => {
     vi.mocked(getUserDailies).mockResolvedValueOnce([
       { id: 1, slack_user_id: 'U12345', daily_name: 'daily-test', schedule_name: 'il-team', time_override: null, created_at: new Date() },

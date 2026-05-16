@@ -399,10 +399,13 @@ export async function getActiveWorkItems(
   date: string
 ): Promise<WorkItem[]> {
   return db.query<WorkItem>(
-    `SELECT * FROM work_items
-     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3
+    `SELECT DISTINCT w.* FROM work_items w
+     LEFT JOIN submission_items si ON si.work_item_id = w.id
+     LEFT JOIN submissions s ON si.submission_id = s.id
+     WHERE w.slack_user_id = $1 AND w.daily_name = $2
+       AND (w.created_date = $3 OR (s.date = $3 AND si.role IN ('yesterday_incomplete', 'yesterday_in_progress')))
      ORDER BY
-       CASE status
+       CASE w.status
          WHEN 'in_progress' THEN 1
          WHEN 'carried'     THEN 2
          WHEN 'pending'     THEN 3
@@ -410,7 +413,7 @@ export async function getActiveWorkItems(
          WHEN 'dropped'     THEN 5
          ELSE 6
        END,
-       id ASC`,
+       w.id ASC`,
     [slackUserId, dailyName, date]
   );
 }
@@ -467,8 +470,11 @@ export async function updateSubmissionArrays(
   date: string
 ): Promise<void> {
   const items = await db.query<WorkItem>(
-    `SELECT * FROM work_items
-     WHERE slack_user_id = $1 AND daily_name = $2 AND created_date = $3`,
+    `SELECT DISTINCT w.* FROM work_items w
+     LEFT JOIN submission_items si ON si.work_item_id = w.id
+     LEFT JOIN submissions s ON si.submission_id = s.id
+     WHERE w.slack_user_id = $1 AND w.daily_name = $2
+       AND (w.created_date = $3 OR (s.date = $3 AND si.role IN ('yesterday_incomplete', 'yesterday_in_progress')))`,
     [slackUserId, dailyName, date]
   );
 
