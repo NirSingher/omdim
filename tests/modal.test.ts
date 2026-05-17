@@ -337,6 +337,81 @@ describe('modal builder', () => {
       expect(linearBlock?.element?.options).toHaveLength(2);
     });
 
+    it('pre-checks Linear issues that are in progress', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: 'Fix authentication bug',
+          state: { name: 'In Progress', type: 'started' },
+          priority: 1,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+        {
+          id: 'issue-2',
+          identifier: 'ENG-124',
+          title: 'Add new dashboard feature',
+          state: { name: 'Todo', type: 'unstarted' },
+          priority: 2,
+          url: 'https://linear.app/issue/ENG-124',
+        },
+        {
+          id: 'issue-3',
+          identifier: 'ENG-125',
+          title: 'Refactor payment module',
+          state: { name: 'In Review', type: 'started' },
+          priority: 3,
+          url: 'https://linear.app/issue/ENG-125',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      const initialOptions = linearBlock?.element?.initial_options;
+
+      expect(initialOptions).toBeDefined();
+      expect(initialOptions).toHaveLength(2);
+      expect(initialOptions?.[0]?.value).toBe('issue-1');
+      expect(initialOptions?.[1]?.value).toBe('issue-3');
+    });
+
+    it('does not set initial_options when no issues are in progress', () => {
+      const linearIssues: LinearIssue[] = [
+        {
+          id: 'issue-1',
+          identifier: 'ENG-123',
+          title: 'Backlog item',
+          state: { name: 'Todo', type: 'unstarted' },
+          priority: 2,
+          url: 'https://linear.app/issue/ENG-123',
+        },
+      ];
+
+      const modal = buildStandupModal(
+        'daily-il',
+        null,
+        [],
+        undefined,
+        undefined,
+        'today',
+        undefined,
+        linearIssues
+      );
+
+      const linearBlock = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      expect(linearBlock?.element?.initial_options).toBeUndefined();
+    });
+
     it('formats Linear issue checkboxes with identifier and title', () => {
       const linearIssues: LinearIssue[] = [
         {
