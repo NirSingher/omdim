@@ -481,15 +481,20 @@ export function buildStandupModal(
             },
             value: issue.id,
           }));
+          const inProgressOptions = linearOptions.filter((_opt, i) => displayIssues[i].state.type === 'started');
+          const checkboxElement: Record<string, unknown> = {
+            type: 'checkboxes',
+            action_id: 'linear_tickets_input',
+            options: linearOptions,
+          };
+          if (inProgressOptions.length > 0) {
+            checkboxElement.initial_options = inProgressOptions;
+          }
           blocks.push({
             type: 'input',
             block_id: 'linear_tickets',
             optional: true,
-            element: {
-              type: 'checkboxes',
-              action_id: 'linear_tickets_input',
-              options: linearOptions,
-            },
+            element: checkboxElement,
             label: {
               type: 'plain_text',
               text: '🎫 Cycle tickets (select to add to plans)',
