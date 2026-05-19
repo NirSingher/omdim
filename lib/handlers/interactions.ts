@@ -1896,6 +1896,21 @@ async function handleShowAllInModal(
   const daily = getDaily(metadata.dailyName);
   if (!daily) return false;
 
+  // Reconstruct yesterday data and dropdown selections from current view state
+  const yesterdayPlans = metadata.yesterdayPlans || [];
+  const yesterdayData: YesterdayData | null = yesterdayPlans.length > 0
+    ? { plans: yesterdayPlans, completed: [], incomplete: [] }
+    : null;
+
+  const values = payload.view.state?.values || {};
+  const yesterdayStatuses: Record<number, string> = {};
+  yesterdayPlans.forEach((_item, index) => {
+    const selected = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
+    if (selected?.value) {
+      yesterdayStatuses[index] = selected.value;
+    }
+  });
+
   // Re-fetch integration data (same as modal open)
   const [{ prData, reviewerMap }, linearResult] = await Promise.all([
     fetchGitHubPRsForUser(daily, userId, ctx),
@@ -1910,7 +1925,7 @@ async function handleShowAllInModal(
 
   const modal = buildStandupModal(
     metadata.dailyName,
-    null,
+    yesterdayData,
     daily.questions || [],
     daily.field_order,
     userDate,
@@ -1924,6 +1939,7 @@ async function handleShowAllInModal(
     undefined,
     metadata.sections || getDailySections(daily),
     expandedSections,
+    Object.keys(yesterdayStatuses).length > 0 ? yesterdayStatuses : undefined,
   );
 
   await updateModal(ctx.slackToken, payload.view.id, modal);
