@@ -117,7 +117,8 @@ export function buildStandupModal(
   autoCompletedIds?: Set<string>,
   mergedPRs?: MergedPR[],
   sections?: { blockers: boolean; unplanned: boolean },
-  expandedSections?: Set<string>
+  expandedSections?: Set<string>,
+  yesterdayStatuses?: Record<number, string>
 ): ModalView {
   const blocks: Block[] = [];
   const isFirstDay = !yesterday || yesterday.plans.length === 0;
@@ -259,9 +260,21 @@ export function buildStandupModal(
     const hasMixedSources = [manualItems, prItems, linearItems].filter(g => g.length > 0).length > 1 && totalYesterdayItems >= 4;
 
     const renderYesterdayItem = (plan: string, index: number) => {
-      const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
-      const linearId = plan.match(/^\[([^\]]+)\]\s/)?.[1];
-      const isAutoCompleted = linearId && autoCompletedIds?.has(linearId);
+      const statusMap: Record<string, number> = { continue: 0, in_progress: 1, done: 2, drop: 3 };
+      let initialOption: typeof YESTERDAY_ITEM_OPTIONS[number];
+
+      if (yesterdayStatuses && index in yesterdayStatuses) {
+        initialOption = YESTERDAY_ITEM_OPTIONS[statusMap[yesterdayStatuses[index]] ?? 0];
+      } else {
+        const isInProgress = yesterday?.inProgressCount != null && index < yesterday.inProgressCount;
+        const linearId = plan.match(/^\[([^\]]+)\]\s/)?.[1];
+        const isAutoCompleted = linearId && autoCompletedIds?.has(linearId);
+        initialOption = isAutoCompleted
+          ? YESTERDAY_ITEM_OPTIONS[2]   // Done
+          : isInProgress
+          ? YESTERDAY_ITEM_OPTIONS[1]   // In progress
+          : YESTERDAY_ITEM_OPTIONS[0];  // Carry over
+      }
 
       blocks.push({
         type: 'section',
@@ -274,11 +287,7 @@ export function buildStandupModal(
           type: 'static_select',
           action_id: `item_status_${index}`,
           options: YESTERDAY_ITEM_OPTIONS,
-          initial_option: isAutoCompleted
-            ? YESTERDAY_ITEM_OPTIONS[2]   // Done
-            : isInProgress
-            ? YESTERDAY_ITEM_OPTIONS[1]   // In progress
-            : YESTERDAY_ITEM_OPTIONS[0],  // Carry over
+          initial_option: initialOption,
         },
       });
     };
