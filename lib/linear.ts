@@ -101,6 +101,7 @@ interface UserAssignedIssuesResponse {
         state: { name: string; type: string };
         priority: number;
         url: string;
+        cycle: { endsAt: string } | null;
       }>;
     };
   };
@@ -123,6 +124,7 @@ const USER_ASSIGNED_ISSUES_QUERY = `
           state { name type }
           priority
           url
+          cycle { endsAt }
         }
       }
     }
@@ -158,7 +160,13 @@ export async function fetchUserAssignedIssues(
     }));
 
     const allActiveIdentifiers = allIssues.map(i => i.identifier);
-    const issues = allIssues.filter((issue) => issue.state.type === 'started' || issue.priority === 1);
+
+    const now = new Date();
+    const issues = allIssues.filter((issue) => {
+      if (issue.state.type === 'started' || issue.priority === 1) return true;
+      if (issue.cycle?.endsAt && new Date(issue.cycle.endsAt) > now) return true;
+      return false;
+    });
 
     // Sort by priority (1=Urgent first) then by state type (started before unstarted)
     const stateOrder: Record<string, number> = {

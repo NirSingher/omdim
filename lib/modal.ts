@@ -476,7 +476,7 @@ export function buildStandupModal(
       case 'today_plans':
         // Integration checkboxes go right above today's plans
         if (linearIssues && linearIssues.length > 0) {
-          const linearLimit = expandedSections?.has('linear') ? 10 : 3;
+          const linearLimit = expandedSections?.has('linear') ? 20 : 3;
           const displayIssues = linearIssues.slice(0, linearLimit);
           const linearOptions = displayIssues.map((issue) => ({
             text: {
