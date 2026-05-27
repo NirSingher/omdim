@@ -199,6 +199,21 @@ export function formatDate(date: Date): string {
 }
 
 /**
+ * Extract YYYY-MM-DD from a DB column that may be a Date object or string.
+ * Neon's driver parses PostgreSQL DATE as midnight local-time, so we use
+ * local-time accessors to recover the original calendar date.
+ */
+export function toDateString(value: Date | string): string {
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(value).split('T')[0];
+}
+
+/**
  * Calculate how many minutes late a user is from their scheduled time
  */
 export function getMinutesLate(scheduleTime: string, userDate: Date): number {
@@ -496,7 +511,7 @@ async function processScheduledSubmission(
   env?: Record<string, string | undefined>
 ): Promise<'posted' | 'skipped' | 'error'> {
   const { slack_user_id: userId, daily_name: dailyName } = submission;
-  const submissionDate = String(submission.date).split('T')[0];
+  const submissionDate = toDateString(submission.date);
 
   // Get daily config
   const daily = getDaily(dailyName);
