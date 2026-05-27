@@ -157,6 +157,7 @@ export async function fetchUserAssignedIssues(
       state: { name: issue.state.name, type: issue.state.type },
       priority: issue.priority,
       url: issue.url,
+      cycle: issue.cycle,
     }));
 
     const allActiveIdentifiers = allIssues.map(i => i.identifier);
