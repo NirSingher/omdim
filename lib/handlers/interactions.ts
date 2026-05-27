@@ -658,6 +658,13 @@ export async function handleStandupSubmission(
       // Send confirmation DM
       const confirmationMsg = `✅ *Standup scheduled!*\n\nYour *${dailyName}* standup for *${dateDisplay}* will be posted to ${daily?.channel} at *${scheduledTime}*.\n\nYou can use \`/daily\` to edit it before then.`;
       await sendDM(ctx.slackToken, userId, confirmationMsg);
+
+      // Refresh App Home so user sees the queued submission immediately
+      try {
+        await refreshHome(userId, ctx);
+      } catch (error) {
+        console.error('Failed to refresh App Home after queued submission:', error);
+      }
       return;
     }
 
