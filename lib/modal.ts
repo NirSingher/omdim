@@ -276,14 +276,19 @@ export function buildStandupModal(
           : YESTERDAY_ITEM_OPTIONS[0];  // Carry over
       }
 
+      // Rendered as an input block (not a section + accessory) so Slack preserves
+      // the chosen status across views.update — e.g. the async integration fill on
+      // modal open, or a "Show all" expansion. Section accessories are not preserved.
       blocks.push({
-        type: 'section',
+        type: 'input',
         block_id: `yesterday_item_${index}`,
-        text: {
-          type: 'mrkdwn',
+        optional: true,
+        label: {
+          type: 'plain_text',
           text: plan.length > 60 ? plan.substring(0, 57) + '...' : plan,
+          emoji: true,
         },
-        accessory: {
+        element: {
           type: 'static_select',
           action_id: `item_status_${index}`,
           options: YESTERDAY_ITEM_OPTIONS,
@@ -350,13 +355,15 @@ export function buildStandupModal(
           const index = yesterdayPlans.length;
           yesterdayPlans.push(planText);
           blocks.push({
-            type: 'section',
+            type: 'input',
             block_id: `yesterday_item_${index}`,
-            text: {
-              type: 'mrkdwn',
+            optional: true,
+            label: {
+              type: 'plain_text',
               text: planText.length > 60 ? planText.substring(0, 57) + '...' : planText,
+              emoji: true,
             },
-            accessory: {
+            element: {
               type: 'static_select',
               action_id: `item_status_${index}`,
               options: YESTERDAY_ITEM_OPTIONS,
@@ -844,18 +851,16 @@ export const EXPANDABLE_SECTIONS = {
 
 export type ExpandableSection = keyof typeof EXPANDABLE_SECTIONS;
 
-/** Minimal shape of the view state Slack echoes back in a block_actions payload. */
-type ViewStateValues = Record<string, Record<string, { selected_option?: { value: string } }>>;
-
 /**
  * Produce the updated block list for a "Show all" expansion without re-fetching
  * the other integration's data. Starts from the modal's current (echoed) blocks and:
  *  - swaps the target section's checkbox block for its freshly-built expanded
- *    version, and replaces or drops the "Show all" button,
- *  - re-applies the user's yesterday-item picks (static_select state is NOT
- *    auto-preserved across views.update, unlike input blocks), and
+ *    version, and replaces or drops the "Show all" button, and
  *  - leaves every other block untouched — including the other integration's
- *    section and the user's typed input — so Slack preserves their state.
+ *    section, the user's typed input, and the yesterday-status selects.
+ *
+ * Everything carried over is in `input` blocks, so Slack preserves the user's
+ * entries/selections across the views.update automatically.
  *
  * `rebuiltBlocks` is a full modal built with ONLY the target integration's data;
  * we pull just the target section's blocks out of it by block_id.
@@ -863,8 +868,7 @@ type ViewStateValues = Record<string, Record<string, { selected_option?: { value
 export function applyExpandedSection(
   currentBlocks: Block[],
   rebuiltBlocks: Block[],
-  section: ExpandableSection,
-  viewState: { values: ViewStateValues } | undefined
+  section: ExpandableSection
 ): Block[] {
   const { inputBlockId, showAllBlockId } = EXPANDABLE_SECTIONS[section];
   // The expanded section may be split across several checkbox chunks (Slack caps
@@ -874,7 +878,6 @@ export function applyExpandedSection(
     !!id && (id === inputBlockId || chunkRe.test(id));
   const newInputBlocks = rebuiltBlocks.filter((b) => isSectionInput(b.block_id));
   const newShowAll = rebuiltBlocks.find((b) => b.block_id === showAllBlockId);
-  const values = viewState?.values || {};
 
   const result: Block[] = [];
   for (const block of currentBlocks) {
@@ -895,17 +898,6 @@ export function applyExpandedSection(
       // Replace with the still-needed button (more than the expanded limit) or drop it.
       if (newShowAll) result.push(newShowAll);
       continue;
-    }
-    const ydayMatch = block.block_id?.match(/^yesterday_item_(\d+)$/);
-    if (ydayMatch && block.accessory) {
-      const index = ydayMatch[1];
-      const selected = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
-      if (selected) {
-        const options = (block.accessory.options as Array<{ value: string }> | undefined) || [];
-        const match = options.find((o) => o.value === selected.value);
-        result.push({ ...block, accessory: { ...block.accessory, initial_option: match ?? selected } });
-        continue;
-      }
     }
     result.push(block);
   }

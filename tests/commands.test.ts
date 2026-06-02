@@ -11,6 +11,9 @@ vi.mock('../lib/config', () => ({
   getAdmins: vi.fn(() => ({ superAdmins: [], dbAdmins: [] })),
   getOverride: vi.fn(() => undefined),
   getDaily: vi.fn(),
+  getLinearConfig: vi.fn(() => null),
+  getGitHubConfig: vi.fn(() => null),
+  getMaxPlanItems: vi.fn(() => 0),
   getSchedule: vi.fn(),
   getDailies: vi.fn(),
   getDailyManagers: vi.fn(() => []),
@@ -30,6 +33,8 @@ vi.mock('../lib/db', () => ({
   getSubmissionsInRange: vi.fn(),
   getParticipationStats: vi.fn(),
   getUserDailies: vi.fn(),
+  getSubmissionForDate: vi.fn(() => Promise.resolve(null)),
+  getPreviousSubmission: vi.fn(() => Promise.resolve(null)),
   getTeamStats: vi.fn(),
   getMissingSubmissions: vi.fn(),
   countWorkdays: vi.fn(),
@@ -49,6 +54,14 @@ vi.mock('../lib/slack', () => ({
   ephemeralResponse: vi.fn((text: string) => ({ response_type: 'ephemeral', text })),
   sendDM: vi.fn(),
   openModal: vi.fn(() => Promise.resolve(true)),
+  openModalAndGetViewId: vi.fn(() => Promise.resolve('V_LOADING')),
+  updateModal: vi.fn(() => Promise.resolve(true)),
+}));
+
+// Mock interactions module (integration fetchers used by /daily)
+vi.mock('../lib/handlers/interactions', () => ({
+  fetchLinearIssuesForUser: vi.fn(() => Promise.resolve({ issues: [], allActiveIdentifiers: [] })),
+  fetchGitHubPRsForUser: vi.fn(() => Promise.resolve({})),
 }));
 
 // Mock prompt module
@@ -76,12 +89,14 @@ import {
   handleWeek,
   handleOOO,
   handleCommand,
+  handleDaily,
   CommandContext,
 } from '../lib/handlers/commands';
 
-import { isAdmin, isSuperAdmin, getAdmins, getOverride, getDaily, getSchedule, getDailies, getDailyManagers, getConfigError, getAllDailiesIncludingDisabled, isDailyEnabled, clearConfigCache, loadConfigOverrides } from '../lib/config';
+import { isAdmin, isSuperAdmin, getAdmins, getOverride, getDaily, getLinearConfig, getGitHubConfig, getSchedule, getDailies, getDailyManagers, getConfigError, getAllDailiesIncludingDisabled, isDailyEnabled, clearConfigCache, loadConfigOverrides } from '../lib/config';
 import { addParticipant, removeParticipant, getParticipants, getSubmissionsInRange, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, setOOO, clearOOO, getUserOOO, setConfigOverride, deleteConfigOverride } from '../lib/db';
-import { parseUserId, sendDM, openModal } from '../lib/slack';
+import { parseUserId, sendDM, openModal, openModalAndGetViewId, updateModal } from '../lib/slack';
+import { fetchLinearIssuesForUser, fetchGitHubPRsForUser } from '../lib/handlers/interactions';
 import { getUserTimezone, getUserDate, formatDate, sendPromptDM } from '../lib/prompt';
 import { formatManagerDigest } from '../lib/format';
 
@@ -956,5 +971,89 @@ describe('command handlers', () => {
       const response = await handlePrompt(createContextWithTrigger(['prompt', 'all']));
       expect(response.text).toContain('Sent prompts for 1 dailies');
     });
+  });
+});
+
+describe('handleDaily — instant modal open + background fill', () => {
+  const makeCtx = (over: Partial<CommandContext> = {}) => {
+    const promises: Promise<unknown>[] = [];
+    const ctx = {
+      userId: 'U12345',
+      args: ['daily-il'],
+      db: {} as any,
+      slackToken: 'xoxb-test',
+      triggerId: 'trig-1',
+      env: {},
+      waitUntil: (p: Promise<unknown>) => { promises.push(p); },
+      ...over,
+    } as CommandContext;
+    return { ctx, promises };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getUserDailies).mockResolvedValue([{ daily_name: 'daily-il' }] as any);
+    vi.mocked(getDaily).mockReturnValue({ name: 'daily-il', questions: [] } as any);
+    vi.mocked(getUserTimezone).mockResolvedValue({ tz_offset: 0 } as any);
+    vi.mocked(getUserDate).mockReturnValue(new Date('2024-01-15'));
+    vi.mocked(formatDate).mockReturnValue('2024-01-15');
+    vi.mocked(openModal).mockResolvedValue(true);
+    vi.mocked(openModalAndGetViewId).mockResolvedValue('V_LOADING');
+    vi.mocked(updateModal).mockResolvedValue(true);
+    vi.mocked(fetchLinearIssuesForUser).mockResolvedValue({ issues: [], allActiveIdentifiers: [] } as any);
+    vi.mocked(fetchGitHubPRsForUser).mockResolvedValue({} as any);
+  });
+
+  it('opens a loading modal immediately, then fills via views.update in the background', async () => {
+    vi.mocked(getLinearConfig).mockReturnValue({ tokenEnvVar: 'LINEAR_TOKEN' } as any);
+    const { ctx, promises } = makeCtx();
+
+    const res = await handleDaily(ctx);
+
+    // Modal opened immediately, with a loading indicator.
+    expect(openModalAndGetViewId).toHaveBeenCalledTimes(1);
+    const loadingView = vi.mocked(openModalAndGetViewId).mock.calls[0][2] as any;
+    expect(loadingView.blocks.some((b: any) => b.block_id === 'integrations_loading')).toBe(true);
+    expect((res as any).text).toContain('Opening standup');
+
+    // The modal is opened BEFORE integrations are fetched (the whole point —
+    // the trigger_id is consumed inside the 3s window, fetches come after).
+    expect(vi.mocked(openModalAndGetViewId).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(fetchLinearIssuesForUser).mock.invocationCallOrder[0]);
+    // The fill (views.update) has NOT happened on the critical path.
+    expect(updateModal).not.toHaveBeenCalled();
+
+    // Background work fetches integrations and updates the same view.
+    await Promise.all(promises);
+    expect(fetchLinearIssuesForUser).toHaveBeenCalledTimes(1);
+    expect(fetchGitHubPRsForUser).toHaveBeenCalledTimes(1);
+    expect(updateModal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateModal).mock.calls[0][1]).toBe('V_LOADING');
+    const filledView = vi.mocked(updateModal).mock.calls[0][2] as any;
+    expect(filledView.blocks.some((b: any) => b.block_id === 'integrations_loading')).toBe(false);
+  });
+
+  it('falls back to a synchronous open (no views.update) when waitUntil is unavailable', async () => {
+    vi.mocked(getLinearConfig).mockReturnValue({ tokenEnvVar: 'LINEAR_TOKEN' } as any);
+    const { ctx } = makeCtx({ waitUntil: undefined });
+
+    await handleDaily(ctx);
+
+    expect(openModal).toHaveBeenCalledTimes(1);
+    expect(openModalAndGetViewId).not.toHaveBeenCalled();
+    expect(updateModal).not.toHaveBeenCalled();
+    expect(fetchLinearIssuesForUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens directly without a background fill when the daily has no integrations', async () => {
+    vi.mocked(getLinearConfig).mockReturnValue(null);
+    vi.mocked(getGitHubConfig).mockReturnValue(null);
+    const { ctx } = makeCtx();
+
+    await handleDaily(ctx);
+
+    expect(openModal).toHaveBeenCalledTimes(1);
+    expect(openModalAndGetViewId).not.toHaveBeenCalled();
+    expect(updateModal).not.toHaveBeenCalled();
   });
 });

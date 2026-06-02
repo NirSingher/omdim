@@ -270,11 +270,11 @@ export async function sendDMWithBlocks(
 /**
  * Open a modal dialog
  */
-export async function openModal(
+export async function openModalAndGetViewId(
   slackToken: string,
   triggerId: string,
   view: unknown
-): Promise<boolean> {
+): Promise<string | null> {
   try {
     const response = await fetch('https://slack.com/api/views.open', {
       method: 'POST',
@@ -288,18 +288,30 @@ export async function openModal(
       }),
     });
 
-    const data = await response.json() as { ok: boolean; error?: string; response_metadata?: { messages?: string[] } };
+    const data = await response.json() as { ok: boolean; error?: string; view?: { id?: string }; response_metadata?: { messages?: string[] } };
 
     if (!data.ok) {
       console.error('Failed to open modal:', data.error, data.response_metadata?.messages);
-      return false;
+      return null;
     }
 
-    return true;
+    return data.view?.id ?? null;
   } catch (error) {
     console.error('Error opening modal:', error);
-    return false;
+    return null;
   }
+}
+
+/**
+ * Open a modal dialog. Returns whether it opened successfully.
+ * Use openModalAndGetViewId when you need to views.update the modal afterward.
+ */
+export async function openModal(
+  slackToken: string,
+  triggerId: string,
+  view: unknown
+): Promise<boolean> {
+  return (await openModalAndGetViewId(slackToken, triggerId, view)) !== null;
 }
 
 /**
