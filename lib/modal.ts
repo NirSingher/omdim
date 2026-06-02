@@ -21,7 +21,7 @@ interface Option {
   value: string;
 }
 
-interface Block {
+export interface Block {
   type: string;
   block_id?: string;
   text?: TextObject;
@@ -812,5 +812,75 @@ export function buildStandupModal(
     },
     blocks,
   };
+}
+
+/**
+ * The three "Show all" expandable sections, each mapped to the input block that
+ * holds its checkboxes and the actions block that holds its expand button. Linear
+ * tickets are backed by the Linear integration; review requests and "my PRs" are
+ * both backed by GitHub, so expanding either only needs a GitHub fetch.
+ */
+export const EXPANDABLE_SECTIONS = {
+  linear: { inputBlockId: 'linear_tickets', showAllBlockId: 'linear_show_all', integration: 'linear' },
+  reviews: { inputBlockId: 'review_requests', showAllBlockId: 'reviews_show_all', integration: 'github' },
+  my_prs: { inputBlockId: 'my_prs', showAllBlockId: 'my_prs_show_all', integration: 'github' },
+} as const;
+
+export type ExpandableSection = keyof typeof EXPANDABLE_SECTIONS;
+
+/** Minimal shape of the view state Slack echoes back in a block_actions payload. */
+type ViewStateValues = Record<string, Record<string, { selected_option?: { value: string } }>>;
+
+/**
+ * Produce the updated block list for a "Show all" expansion without re-fetching
+ * the other integration's data. Starts from the modal's current (echoed) blocks and:
+ *  - swaps the target section's checkbox block for its freshly-built expanded
+ *    version, and replaces or drops the "Show all" button,
+ *  - re-applies the user's yesterday-item picks (static_select state is NOT
+ *    auto-preserved across views.update, unlike input blocks), and
+ *  - leaves every other block untouched — including the other integration's
+ *    section and the user's typed input — so Slack preserves their state.
+ *
+ * `rebuiltBlocks` is a full modal built with ONLY the target integration's data;
+ * we pull just the target section's blocks out of it by block_id.
+ */
+export function applyExpandedSection(
+  currentBlocks: Block[],
+  rebuiltBlocks: Block[],
+  section: ExpandableSection,
+  viewState: { values: ViewStateValues } | undefined
+): Block[] {
+  const { inputBlockId, showAllBlockId } = EXPANDABLE_SECTIONS[section];
+  const newInput = rebuiltBlocks.find((b) => b.block_id === inputBlockId);
+  const newShowAll = rebuiltBlocks.find((b) => b.block_id === showAllBlockId);
+  const values = viewState?.values || {};
+
+  const result: Block[] = [];
+  for (const block of currentBlocks) {
+    if (block.block_id === inputBlockId) {
+      // Expanded checkboxes (more options). Same block_id/action_id, so Slack
+      // keeps the user's existing selections.
+      result.push(newInput ?? block);
+      continue;
+    }
+    if (block.block_id === showAllBlockId) {
+      // Replace with the still-needed button (more than the expanded limit) or drop it.
+      if (newShowAll) result.push(newShowAll);
+      continue;
+    }
+    const ydayMatch = block.block_id?.match(/^yesterday_item_(\d+)$/);
+    if (ydayMatch && block.accessory) {
+      const index = ydayMatch[1];
+      const selected = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
+      if (selected) {
+        const options = (block.accessory.options as Array<{ value: string }> | undefined) || [];
+        const match = options.find((o) => o.value === selected.value);
+        result.push({ ...block, accessory: { ...block.accessory, initial_option: match ?? selected } });
+        continue;
+      }
+    }
+    result.push(block);
+  }
+  return result;
 }
 
