@@ -1,6 +1,8 @@
 import { defineConfig, Plugin } from 'vitest/config';
 import { readFileSync } from 'fs';
 
+// Same YAML-as-text loader the main config uses, so lib/config.ts can
+// `import '../config.yaml'` and load the real config in tests.
 function yamlTextPlugin(): Plugin {
   return {
     name: 'yaml-text',
@@ -18,15 +20,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
-    // e2e tests need the PGlite + Slack-fake setup; run them via vitest.e2e.config.ts
-    exclude: ['tests/e2e/**', 'node_modules/**'],
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'html'],
-      include: ['lib/**/*.ts'],
-      exclude: ['lib/handlers/**/*.ts'],
-    },
+    include: ['tests/e2e/**/*.test.ts'],
+    setupFiles: ['tests/e2e/setup.ts'],
+    // Pin the process timezone so DATE→string conversion (lib/prompt toDateString,
+    // which uses local-time accessors, matching Neon) is deterministic.
+    env: { TZ: 'UTC' },
   },
   resolve: {
     alias: {
