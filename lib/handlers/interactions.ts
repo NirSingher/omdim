@@ -43,7 +43,7 @@ import { handleAppHomeOpened, AppHomeOpenedEvent, HomeContext } from './home';
 import { fetchUserPRData, UserPRData, fetchMergedPRs, MergedPR } from '../github';
 import { fetchUserAssignedIssues, fetchUserLinearData, LinearIssue, UserLinearData, extractLinearReferences, fetchWorkflowStates, markIssuesInProgress as markLinearIssuesInProgress, commentOnIssue, resolveIdentifiers } from '../linear';
 import { postStandupToChannel, sendStandupDM, formatStandupBlocks, StandupData } from '../format';
-import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
+import { buildStandupModal, YesterdayData, SubmissionPrefill, Block, EXPANDABLE_SECTIONS, ExpandableSection, applyExpandedSection } from '../modal';
 import { formatDate, getDateInTimezone, getUserDate, getUserTimezone, hasScheduledTimePassed, sendPromptDM } from '../prompt';
 import { openModal, parseRichText, RichTextBlock, sendDM, updateMessage, extractMentionedUserIds, updateModal } from '../slack';
 import { StandupMode } from '../modal';
@@ -79,6 +79,12 @@ export interface InteractionPayload {
     hash?: string;
     callback_id: string;
     private_metadata: string;
+    // Slack echoes the full rendered view back in block_actions payloads; these
+    // let "Show all" expansions reuse the current blocks instead of re-fetching.
+    title?: unknown;
+    submit?: unknown;
+    close?: unknown;
+    blocks?: Block[];
     state: {
       values: Record<string, Record<string, {
         value?: string;
@@ -1884,7 +1890,7 @@ async function handleShowAllInModal(
   const actionId = payload.actions?.[0]?.action_id;
   if (!actionId || !payload.view?.id) return false;
 
-  const sectionMap: Record<string, string> = {
+  const sectionMap: Record<string, ExpandableSection> = {
     show_all_linear: 'linear',
     show_all_reviews: 'reviews',
     show_all_my_prs: 'my_prs',
@@ -1892,9 +1898,14 @@ async function handleShowAllInModal(
   const section = sectionMap[actionId];
   if (!section) return false;
 
-  let metadata: { dailyName: string; yesterdayPlans?: string[]; mode?: string; targetDate?: string; sections?: { blockers: boolean; unplanned: boolean } };
+  const currentView = payload.view;
+  const viewId = currentView.id;
+  const currentBlocks = currentView.blocks;
+  if (!viewId || !currentBlocks) return false;
+
+  let metadata: { dailyName: string; yesterdayPlans?: string[]; mode?: string; targetDate?: string; sections?: { blockers: boolean; unplanned: boolean }; prReviewerTags?: Record<string, string>; prCategories?: Record<string, string>; unmappedReviewers?: string[] };
   try {
-    metadata = JSON.parse(payload.view.private_metadata);
+    metadata = JSON.parse(currentView.private_metadata);
   } catch {
     return false;
   }
@@ -1903,53 +1914,93 @@ async function handleShowAllInModal(
   const daily = getDaily(metadata.dailyName);
   if (!daily) return false;
 
-  // Reconstruct yesterday data and dropdown selections from current view state
+  // Reconstruct yesterday data for dedup when rebuilding the target section.
   const yesterdayPlans = metadata.yesterdayPlans || [];
   const yesterdayData: YesterdayData | null = yesterdayPlans.length > 0
     ? { plans: yesterdayPlans, completed: [], incomplete: [] }
     : null;
 
-  const values = payload.view.state?.values || {};
-  const yesterdayStatuses: Record<number, string> = {};
-  yesterdayPlans.forEach((_item, index) => {
-    const selected = values[`yesterday_item_${index}`]?.[`item_status_${index}`]?.selected_option;
-    if (selected?.value) {
-      yesterdayStatuses[index] = selected.value;
+  // Fetch ONLY the integration this button expands (Linear button → Linear,
+  // PR buttons → GitHub), then splice the expanded section into the modal's
+  // existing blocks. The other integration's section, the user's typed input,
+  // and yesterday's selections are carried over from the current view — so we
+  // never re-fetch data we're not changing. The work runs in the background to
+  // stay inside Slack's 3-second interaction ack window (same pattern as
+  // handleTaskAddSubmission).
+  const integration = EXPANDABLE_SECTIONS[section].integration;
+  const bgWork = (async () => {
+    let linearIssues: LinearIssue[] | undefined;
+    let prData: UserPRData | undefined;
+    let reviewerMap: Map<string, string> | undefined;
+
+    if (integration === 'linear') {
+      linearIssues = (await fetchLinearIssuesForUser(daily, userId, ctx)).issues;
+    } else {
+      const github = await fetchGitHubPRsForUser(daily, userId, ctx);
+      prData = github.prData;
+      reviewerMap = github.reviewerMap;
     }
-  });
 
-  // Re-fetch integration data (same as modal open)
-  const [{ prData, reviewerMap }, linearResult] = await Promise.all([
-    fetchGitHubPRsForUser(daily, userId, ctx),
-    fetchLinearIssuesForUser(daily, userId, ctx),
-  ]);
+    // Build a throwaway full modal with ONLY the fetched integration's data so we
+    // can lift the freshly-expanded section's blocks (and its updated PR metadata)
+    // out of it. userDate is irrelevant here — we reuse the current view's header
+    // and private_metadata rather than the rebuilt ones.
+    const rebuilt = buildStandupModal(
+      metadata.dailyName,
+      yesterdayData,
+      daily.questions || [],
+      daily.field_order,
+      undefined,
+      (metadata.mode as StandupMode) || 'today',
+      undefined,
+      linearIssues,
+      prData,
+      reviewerMap,
+      undefined,
+      undefined,
+      undefined,
+      metadata.sections || getDailySections(daily),
+      new Set([section]),
+    );
 
-  const userInfo = await getUserTimezone(ctx.slackToken, userId);
-  const tzOffset = userInfo?.tz_offset || 0;
-  const userDate = getUserDate(tzOffset);
+    const blocks = applyExpandedSection(currentBlocks, rebuilt.blocks, section, currentView.state);
 
-  const expandedSections = new Set([section]);
+    // Expanding a PR section reveals PRs whose reviewer/category tags weren't in
+    // the original private_metadata; merge the rebuilt ones in so the submission
+    // handler can still label them. Linear expansion adds no metadata.
+    let privateMetadata = currentView.private_metadata;
+    if (integration === 'github') {
+      try {
+        const rebuiltMeta = JSON.parse(rebuilt.private_metadata) as typeof metadata;
+        privateMetadata = JSON.stringify({
+          ...metadata,
+          ...(rebuiltMeta.prReviewerTags ? { prReviewerTags: { ...metadata.prReviewerTags, ...rebuiltMeta.prReviewerTags } } : {}),
+          ...(rebuiltMeta.prCategories ? { prCategories: { ...metadata.prCategories, ...rebuiltMeta.prCategories } } : {}),
+          ...(rebuiltMeta.unmappedReviewers ? { unmappedReviewers: rebuiltMeta.unmappedReviewers } : {}),
+        });
+      } catch {
+        // Fall back to the existing metadata if the rebuilt copy can't be parsed.
+      }
+    }
 
-  const modal = buildStandupModal(
-    metadata.dailyName,
-    yesterdayData,
-    daily.questions || [],
-    daily.field_order,
-    userDate,
-    (metadata.mode as StandupMode) || 'today',
-    undefined,
-    linearResult.issues,
-    prData,
-    reviewerMap,
-    undefined,
-    undefined,
-    undefined,
-    metadata.sections || getDailySections(daily),
-    expandedSections,
-    Object.keys(yesterdayStatuses).length > 0 ? yesterdayStatuses : undefined,
-  );
+    const updatedView = {
+      type: 'modal' as const,
+      callback_id: currentView.callback_id,
+      private_metadata: privateMetadata,
+      title: currentView.title,
+      submit: currentView.submit,
+      close: currentView.close,
+      blocks,
+    };
 
-  await updateModal(ctx.slackToken, payload.view.id, modal);
+    await updateModal(ctx.slackToken, viewId, updatedView);
+  })().catch(err => console.error('handleShowAllInModal background work failed:', err));
+
+  if (ctx.waitUntil) {
+    ctx.waitUntil(bgWork);
+  } else {
+    await bgWork;
+  }
   return true;
 }
 

@@ -17,9 +17,19 @@ vi.mock('../lib/slack', () => ({
   openModal: vi.fn(),
 }));
 
-import { buildStandupModal, YesterdayData } from '../lib/modal';
+import { buildStandupModal, YesterdayData, applyExpandedSection, type Block } from '../lib/modal';
 import type { LinearIssue } from '../lib/linear';
 import type { UserPRData, GitHubPR } from '../lib/github';
+
+const makeLinearIssues = (n: number): LinearIssue[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `issue-${i}`,
+    identifier: `ENG-${100 + i}`,
+    title: `Issue ${i}`,
+    state: { name: 'Todo', type: 'unstarted' as const },
+    priority: 1,
+    url: `https://linear.app/issue/ENG-${100 + i}`,
+  }));
 
 describe('modal builder', () => {
   describe('buildStandupModal', () => {
@@ -1204,6 +1214,81 @@ describe('modal builder', () => {
 
       expect(modal.blocks.find(b => b.block_id === 'today_plans')).toBeDefined();
       expect(modal.blocks.find(b => b.block_id === 'custom_0')).toBeDefined();
+    });
+  });
+
+  describe('applyExpandedSection', () => {
+    // A collapsed modal (3 linear tickets shown out of 15) plus a PR section and a
+    // yesterday item — the kind of view Slack echoes back on a "Show all" click.
+    const collapsedView = (): Block[] => {
+      const collapsed = buildStandupModal(
+        'daily-il',
+        { plans: ['Ship feature X'], completed: [], incomplete: [], inProgressCount: 1 },
+        [], undefined, undefined, 'today', undefined,
+        makeLinearIssues(15),
+        {
+          reviewRequests: [],
+          awaitingReview: Array.from({ length: 6 }, (_, i): GitHubPR => ({
+            number: i, title: `PR ${i}`, url: `https://github.com/org/repo/pull/${i}`,
+            author: 'me', requestedReviewers: [], isDraft: false,
+          })),
+          readyToMerge: [], draftPRs: [],
+        } as UserPRData,
+        new Map(),
+      );
+      return collapsed.blocks;
+    };
+
+    // A full rebuild with only Linear data (expanded), as the handler produces.
+    const rebuiltLinear = (): Block[] =>
+      buildStandupModal(
+        'daily-il',
+        { plans: ['Ship feature X'], completed: [], incomplete: [] },
+        [], undefined, undefined, 'today', undefined,
+        makeLinearIssues(15),
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        new Set(['linear']),
+      ).blocks;
+
+    it('expands the target section in place (3 → expanded count)', () => {
+      const current = collapsedView();
+      const before = current.find(b => b.block_id === 'linear_tickets');
+      expect((before?.element?.options as unknown[])?.length).toBe(3);
+
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      const after = result.find(b => b.block_id === 'linear_tickets');
+      expect((after?.element?.options as unknown[])?.length).toBeGreaterThan(3);
+    });
+
+    it('leaves the other integration section untouched (no GitHub re-fetch)', () => {
+      const current = collapsedView();
+      const prBefore = current.find(b => b.block_id === 'my_prs');
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      const prAfter = result.find(b => b.block_id === 'my_prs');
+      // Same object content carried over verbatim — the PR section was not rebuilt.
+      expect(prAfter).toEqual(prBefore);
+      expect(result.find(b => b.block_id === 'my_prs_show_all')).toBeDefined();
+    });
+
+    it('drops the Show all button once everything fits the expanded limit', () => {
+      const current = collapsedView();
+      expect(current.find(b => b.block_id === 'linear_show_all')).toBeDefined();
+      // 15 tickets < expanded limit of 20, so the button should disappear.
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      expect(result.find(b => b.block_id === 'linear_show_all')).toBeUndefined();
+    });
+
+    it('re-applies the user\'s yesterday selection from view state', () => {
+      const current = collapsedView();
+      // User changed the first yesterday item to "Done" since the modal opened.
+      const state = {
+        values: {
+          yesterday_item_0: { item_status_0: { selected_option: { value: 'done' } } },
+        },
+      };
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', state);
+      const yday = result.find(b => b.block_id === 'yesterday_item_0');
+      expect((yday?.accessory?.initial_option as { value: string })?.value).toBe('done');
     });
   });
 });
