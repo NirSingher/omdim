@@ -498,8 +498,14 @@ export async function handleStandupSubmission(
 
   const githubOrg = daily ? getGitHubConfig(daily)?.org : undefined;
 
-  const linearSelections = values.linear_tickets?.linear_tickets_input?.selected_options;
-  if (linearSelections && linearSelections.length > 0) {
+  // Linear checkboxes are split into chunks of 10 (Slack's per-element option
+  // cap), so selections live across `linear_tickets` plus any `linear_tickets_chunk_N`
+  // blocks. Gather them all.
+  const linearSelections = Object.entries(values)
+    .filter(([blockId]) => blockId === 'linear_tickets' || /^linear_tickets_chunk_\d+$/.test(blockId))
+    .flatMap(([, actions]) => Object.values(actions))
+    .flatMap((action) => action.selected_options ?? []);
+  if (linearSelections.length > 0) {
     for (const option of linearSelections) {
       const flatText = parseOptionText(option.text?.text || option.value);
       todayPlans.push(flatText);

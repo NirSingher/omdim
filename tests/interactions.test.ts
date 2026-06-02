@@ -1177,6 +1177,54 @@ describe('standup template sections - submission parsing', () => {
   });
 });
 
+describe('Linear ticket selections - submission parsing', () => {
+  const makePayload = (): InteractionPayload => ({
+    type: 'view_submission',
+    trigger_id: 'trigger123',
+    user: { id: 'U12345' },
+    view: {
+      callback_id: 'standup_submission',
+      private_metadata: JSON.stringify({ dailyName: 'daily-il', yesterdayPlans: [], mode: 'today' }),
+      state: {
+        values: {
+          today_plans: { plans_input: { value: '' } },
+          // First checkbox chunk (base block).
+          linear_tickets: {
+            linear_tickets_input: {
+              selected_options: [
+                { value: 'issue-1', text: { type: 'mrkdwn', text: '*ENG-101* First ticket' } },
+              ],
+            },
+          },
+          // Second chunk produced when a user has >10 tickets and clicks "Show all".
+          linear_tickets_chunk_1: {
+            linear_tickets_input_chunk_1: {
+              selected_options: [
+                { value: 'issue-11', text: { type: 'mrkdwn', text: '*ENG-111* Eleventh ticket' } },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(saveSubmission).mockResolvedValue({ id: 1 } as any);
+    vi.mocked(getMaxPlanItems).mockReturnValue(0);
+    vi.mocked(parseRichText).mockReturnValue('');
+  });
+
+  it('collects selections from the base block and chunk blocks', async () => {
+    await handleStandupSubmission(makePayload(), { db: {} as any, slackToken: 'xoxb-test' });
+
+    const saveCall = vi.mocked(saveSubmission).mock.calls[0][1];
+    expect(saveCall.todayPlans).toContain('[ENG-101] First ticket');
+    expect(saveCall.todayPlans).toContain('[ENG-111] Eleventh ticket');
+  });
+});
+
 describe('blocker @-mention DMs', () => {
   const makeSubmissionPayload = (blockerText: string): InteractionPayload => ({
     type: 'view_submission',
