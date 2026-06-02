@@ -9,6 +9,7 @@ See `requirements.md` and `architecture.md`
 - [x] Unit tests for core logic (modal building, formatting, date/timezone)
 - [x] Integration tests for Slack payload parsing
 - [x] Mock Slack API responses for handler testing
+- [x] End-to-end harness (`tests/e2e/`): real worker entry + real signature verification + real SQL via in-process Postgres (PGlite on `schema.sql`) + fake Slack API at the `fetch` boundary. Verifies the bot **persists and posts** correctly across full journeys: first submit, carry-over across days, queued→scheduled-cron post, App Home task actions. Run with `npm run test:e2e`.
 
 ### Automated Digests ✅
 - [x] Scheduled daily digest at 2pm UTC

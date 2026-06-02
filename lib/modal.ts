@@ -478,38 +478,54 @@ export function buildStandupModal(
         if (linearIssues && linearIssues.length > 0) {
           const linearLimit = expandedSections?.has('linear') ? 20 : 3;
           const displayIssues = linearIssues.slice(0, linearLimit);
-          const linearOptions = displayIssues.map((issue) => ({
-            text: {
-              type: 'mrkdwn' as const,
-              text: `*${issue.identifier}* ${issue.title.length > 50 ? issue.title.slice(0, 47) + '...' : issue.title}`,
-            },
-            description: {
-              type: 'plain_text' as const,
-              text: issue.state.name,
-              emoji: true,
-            },
-            value: issue.id,
-          }));
-          const inProgressOptions = linearOptions.filter((_opt, i) => displayIssues[i].state.type === 'started');
-          const checkboxElement: Record<string, unknown> = {
-            type: 'checkboxes',
-            action_id: 'linear_tickets_input',
-            options: linearOptions,
-          };
-          if (inProgressOptions.length > 0) {
-            checkboxElement.initial_options = inProgressOptions;
+          // Slack allows at most 10 options in a single checkboxes element, so
+          // split the displayed tickets into chunks of 10. The first chunk keeps
+          // the original block_id/action_id (so Slack preserves selections on
+          // expand); extra chunks get numbered ids. Selections are recombined
+          // across all chunks on submit.
+          const CHECKBOX_MAX = 10;
+          const chunkCount = Math.ceil(displayIssues.length / CHECKBOX_MAX);
+          for (let c = 0; c < chunkCount; c++) {
+            const start = c * CHECKBOX_MAX;
+            const chunkIssues = displayIssues.slice(start, start + CHECKBOX_MAX);
+            const chunkOptions = chunkIssues.map((issue) => ({
+              text: {
+                type: 'mrkdwn' as const,
+                text: `*${issue.identifier}* ${issue.title.length > 50 ? issue.title.slice(0, 47) + '...' : issue.title}`,
+              },
+              description: {
+                type: 'plain_text' as const,
+                text: issue.state.name,
+                emoji: true,
+              },
+              value: issue.id,
+            }));
+            const inProgressOptions = chunkOptions.filter((_opt, i) => chunkIssues[i].state.type === 'started');
+            const checkboxElement: Record<string, unknown> = {
+              type: 'checkboxes',
+              action_id: c === 0 ? 'linear_tickets_input' : `linear_tickets_input_chunk_${c}`,
+              options: chunkOptions,
+            };
+            if (inProgressOptions.length > 0) {
+              checkboxElement.initial_options = inProgressOptions;
+            }
+            // Single chunk keeps the descriptive label; multiple chunks show the
+            // item range so the split list reads as one continuous group.
+            const label = chunkCount === 1
+              ? '🎫 Cycle tickets (select to add to plans)'
+              : `🎫 Cycle tickets (${start + 1}–${start + chunkIssues.length})`;
+            blocks.push({
+              type: 'input',
+              block_id: c === 0 ? 'linear_tickets' : `linear_tickets_chunk_${c}`,
+              optional: true,
+              element: checkboxElement,
+              label: {
+                type: 'plain_text',
+                text: label,
+                emoji: true,
+              },
+            });
           }
-          blocks.push({
-            type: 'input',
-            block_id: 'linear_tickets',
-            optional: true,
-            element: checkboxElement,
-            label: {
-              type: 'plain_text',
-              text: '🎫 Cycle tickets (select to add to plans)',
-              emoji: true,
-            },
-          });
           if (linearIssues.length > linearLimit) {
             blocks.push({
               type: 'actions',
@@ -851,16 +867,28 @@ export function applyExpandedSection(
   viewState: { values: ViewStateValues } | undefined
 ): Block[] {
   const { inputBlockId, showAllBlockId } = EXPANDABLE_SECTIONS[section];
-  const newInput = rebuiltBlocks.find((b) => b.block_id === inputBlockId);
+  // The expanded section may be split across several checkbox chunks (Slack caps
+  // a checkboxes element at 10 options): the base block plus `<inputBlockId>_chunk_N`.
+  const chunkRe = new RegExp(`^${inputBlockId}_chunk_\\d+$`);
+  const isSectionInput = (id: string | undefined): boolean =>
+    !!id && (id === inputBlockId || chunkRe.test(id));
+  const newInputBlocks = rebuiltBlocks.filter((b) => isSectionInput(b.block_id));
   const newShowAll = rebuiltBlocks.find((b) => b.block_id === showAllBlockId);
   const values = viewState?.values || {};
 
   const result: Block[] = [];
   for (const block of currentBlocks) {
     if (block.block_id === inputBlockId) {
-      // Expanded checkboxes (more options). Same block_id/action_id, so Slack
-      // keeps the user's existing selections.
-      result.push(newInput ?? block);
+      // Expanded checkboxes (more options), possibly chunked. The first chunk
+      // reuses the original block_id/action_id so Slack keeps existing
+      // selections; extra chunks are appended right after it.
+      if (newInputBlocks.length > 0) result.push(...newInputBlocks);
+      else result.push(block);
+      continue;
+    }
+    if (chunkRe.test(block.block_id ?? '')) {
+      // Drop any chunk blocks left over from a previous expansion; the current
+      // set is re-inserted at the base block above.
       continue;
     }
     if (block.block_id === showAllBlockId) {

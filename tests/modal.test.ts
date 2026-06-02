@@ -511,6 +511,37 @@ describe('modal builder', () => {
       expect(linearBlock?.element?.options).toHaveLength(3);
     });
 
+    it('chunks expanded Linear checkboxes into groups of 10 (Slack option cap)', () => {
+      const linearIssues: LinearIssue[] = Array.from({ length: 13 }, (_, i) => ({
+        id: `issue-${i}`,
+        identifier: `ENG-${100 + i}`,
+        title: `Issue ${i}`,
+        state: { name: 'Todo', type: 'unstarted' },
+        priority: 1,
+        url: `https://linear.app/issue/ENG-${100 + i}`,
+      }));
+
+      const modal = buildStandupModal(
+        'daily-il', null, [], undefined, undefined, 'today', undefined,
+        linearIssues, undefined, undefined, undefined, undefined, undefined, undefined,
+        new Set(['linear'])
+      );
+
+      const base = modal.blocks.find(b => b.block_id === 'linear_tickets');
+      const chunk1 = modal.blocks.find(b => b.block_id === 'linear_tickets_chunk_1');
+      expect((base?.element?.options as unknown[])).toHaveLength(10);
+      expect((chunk1?.element?.options as unknown[])).toHaveLength(3);
+      expect(base?.element?.action_id).toBe('linear_tickets_input');
+      expect(chunk1?.element?.action_id).toBe('linear_tickets_input_chunk_1');
+
+      // No checkboxes element may exceed Slack's 10-option maximum.
+      const overCap = modal.blocks.filter(
+        b => (b.element as { type?: string } | undefined)?.type === 'checkboxes'
+          && (b.element?.options as unknown[]).length > 10
+      );
+      expect(overCap).toHaveLength(0);
+    });
+
     it('shows Show all button when more than 3 issues available', () => {
       const linearIssues: LinearIssue[] = Array.from({ length: 15 }, (_, i) => ({
         id: `issue-${i}`,
@@ -1258,6 +1289,29 @@ describe('modal builder', () => {
       const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
       const after = result.find(b => b.block_id === 'linear_tickets');
       expect((after?.element?.options as unknown[])?.length).toBeGreaterThan(3);
+    });
+
+    it('splits the expanded section into chunks of <=10 (Slack option cap)', () => {
+      // Regression: 15 tickets used to render as a single 15-option checkboxes
+      // element, which Slack rejects with invalid_arguments, so "Show all" silently
+      // failed. The expansion must now chunk into <=10-option blocks.
+      const current = collapsedView();
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+
+      const checkboxBlocks = result.filter(
+        (b) => (b.element as { type?: string } | undefined)?.type === 'checkboxes'
+      );
+      for (const b of checkboxBlocks) {
+        expect((b.element?.options as unknown[]).length).toBeLessThanOrEqual(10);
+      }
+
+      // 15 tickets → base block (10) + one chunk (5).
+      const base = result.find((b) => b.block_id === 'linear_tickets');
+      const chunk1 = result.find((b) => b.block_id === 'linear_tickets_chunk_1');
+      expect((base?.element?.options as unknown[]).length).toBe(10);
+      expect((chunk1?.element?.options as unknown[]).length).toBe(5);
+      expect(base?.element?.action_id).toBe('linear_tickets_input');
+      expect(chunk1?.element?.action_id).toBe('linear_tickets_input_chunk_1');
     });
 
     it('leaves the other integration section untouched (no GitHub re-fetch)', () => {

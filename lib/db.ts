@@ -398,12 +398,18 @@ export async function getActiveWorkItems(
   dailyName: string,
   date: string
 ): Promise<WorkItem[]> {
+  // The status-priority ORDER BY must live outside the SELECT DISTINCT: Postgres
+  // rejects a DISTINCT query whose ORDER BY expression (the CASE) isn't in the
+  // select list (SQLSTATE 42P10). Wrapping the DISTINCT in a subquery and
+  // ordering the result keeps the exact same semantics and is valid SQL.
   return db.query<WorkItem>(
-    `SELECT DISTINCT w.* FROM work_items w
-     LEFT JOIN submission_items si ON si.work_item_id = w.id
-     LEFT JOIN submissions s ON si.submission_id = s.id
-     WHERE w.slack_user_id = $1 AND w.daily_name = $2
-       AND (w.created_date = $3 OR (s.date = $3 AND si.role IN ('yesterday_incomplete', 'yesterday_in_progress')))
+    `SELECT * FROM (
+       SELECT DISTINCT w.* FROM work_items w
+       LEFT JOIN submission_items si ON si.work_item_id = w.id
+       LEFT JOIN submissions s ON si.submission_id = s.id
+       WHERE w.slack_user_id = $1 AND w.daily_name = $2
+         AND (w.created_date = $3 OR (s.date = $3 AND si.role IN ('yesterday_incomplete', 'yesterday_in_progress')))
+     ) w
      ORDER BY
        CASE w.status
          WHEN 'in_progress' THEN 1

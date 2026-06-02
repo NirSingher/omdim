@@ -10,7 +10,9 @@
     "lint": "tsc --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "TZ=UTC vitest --config vitest.e2e.config.ts",
+    "test:e2e:run": "TZ=UTC vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
@@ -20,10 +22,11 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251216.0",
+    "@electric-sql/pglite": "^0.5.0",
     "@types/node": "^20.0.0",
     "@vitest/coverage-v8": "^4.0.16",
     "typescript": "^5.0.0",
     "vitest": "^4.0.16",
-    "wrangler": "^4.58.0"
+    "wrangler": "^4.95.0"
   }
 }
