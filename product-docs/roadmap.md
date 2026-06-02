@@ -266,6 +266,12 @@ See `requirements.md` and `architecture.md`
 - [x] Dedup merged PRs against existing yesterday items by source_ref
 - [x] Cap auto-populated merged PRs at 5 (modal block limit)
 
+### Standup Modal Reliability ✅
+- [x] "Show all" expansion acks fast and updates in the background (no 3s timeout)
+- [x] "Show all" chunks Linear tickets into groups of 10 (Slack's per-element checkbox cap) so >10 tickets expand correctly
+- [x] `/standup` opens the modal instantly, then fills Linear/GitHub sections via `views.update` in the background — integration fetches no longer race Slack's 3-second `trigger_id` window
+- [x] Yesterday status selects rendered as `input` blocks so Slack preserves the user's picks across the background fill and "Show all" updates
+
 ---
 
 ## Up Next

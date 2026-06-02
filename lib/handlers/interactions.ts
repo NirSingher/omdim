@@ -1969,7 +1969,7 @@ async function handleShowAllInModal(
       new Set([section]),
     );
 
-    const blocks = applyExpandedSection(currentBlocks, rebuilt.blocks, section, currentView.state);
+    const blocks = applyExpandedSection(currentBlocks, rebuilt.blocks, section);
 
     // Expanding a PR section reveals PRs whose reviewer/category tags weren't in
     // the original private_metadata; merge the rebuilt ones in so the submission

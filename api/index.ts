@@ -51,7 +51,7 @@ export default {
 
       // Slack commands
       if (path === '/api/slack/commands') {
-        return handleSlackCommands(request, env);
+        return handleSlackCommands(request, env, ctx);
       }
 
       // Slack interactions (modals, buttons)
@@ -161,7 +161,7 @@ function handleHealthCheck(): Response {
 }
 
 /** Slack slash commands endpoint */
-async function handleSlackCommands(request: Request, env: Env): Promise<Response> {
+async function handleSlackCommands(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 });
   }
@@ -198,6 +198,7 @@ async function handleSlackCommands(request: Request, env: Env): Promise<Response
       slackToken: env.SLACK_BOT_TOKEN,
       triggerId: payload.trigger_id,
       env,
+      waitUntil: ctx.waitUntil.bind(ctx),
     });
 
     return new Response(JSON.stringify(response), {

@@ -88,8 +88,8 @@ describe('modal builder', () => {
       expect(dropdownBlocks).toHaveLength(2);
 
       // Check first item
-      expect(dropdownBlocks[0].text?.text).toContain('Task A');
-      expect(dropdownBlocks[0].accessory?.type).toBe('static_select');
+      expect(dropdownBlocks[0].label?.text).toContain('Task A');
+      expect(dropdownBlocks[0].element?.type).toBe('static_select');
     });
 
     it('truncates long plan items in dropdown', () => {
@@ -105,8 +105,8 @@ describe('modal builder', () => {
       const dropdownBlock = modal.blocks.find(b =>
         b.block_id === 'yesterday_item_0'
       );
-      expect(dropdownBlock?.text?.text?.length).toBeLessThanOrEqual(60);
-      expect(dropdownBlock?.text?.text).toContain('...');
+      expect(dropdownBlock?.label?.text?.length).toBeLessThanOrEqual(60);
+      expect(dropdownBlock?.label?.text).toContain('...');
     });
 
     it('includes today_plans input block', () => {
@@ -229,7 +229,7 @@ describe('modal builder', () => {
       const dropdownBlock = modal.blocks.find(b =>
         b.block_id === 'yesterday_item_0'
       );
-      const options = dropdownBlock?.accessory?.options as any[];
+      const options = dropdownBlock?.element?.options as any[];
       expect(options).toHaveLength(4);
       expect(options.map((o: any) => o.value)).toEqual(['continue', 'in_progress', 'done', 'drop']);
       expect(options[1].text.text).toContain('In progress');
@@ -248,7 +248,7 @@ describe('modal builder', () => {
         b.block_id === 'yesterday_item_0'
       );
 
-      expect(dropdownBlock?.accessory?.initial_option?.text?.text).toContain('Carry over');
+      expect(dropdownBlock?.element?.initial_option?.text?.text).toContain('Carry over');
     });
 
     it('interleaves custom questions with standard fields based on order', () => {
@@ -872,11 +872,11 @@ describe('modal builder', () => {
       const item2 = modal.blocks.find(b => b.block_id === 'yesterday_item_2');
 
       // ENG-100 should default to Done
-      expect(item0?.accessory?.initial_option?.value).toBe('done');
+      expect(item0?.element?.initial_option?.value).toBe('done');
       // "Write tests" (not a Linear item) should default to Carry over
-      expect(item1?.accessory?.initial_option?.value).toBe('continue');
+      expect(item1?.element?.initial_option?.value).toBe('continue');
       // ENG-200 (not auto-completed) should default to Carry over
-      expect(item2?.accessory?.initial_option?.value).toBe('continue');
+      expect(item2?.element?.initial_option?.value).toBe('continue');
     });
 
     it('auto-completed overrides in-progress default', () => {
@@ -895,7 +895,7 @@ describe('modal builder', () => {
 
       const item0 = modal.blocks.find(b => b.block_id === 'yesterday_item_0');
       // Auto-completed takes precedence over in-progress
-      expect(item0?.accessory?.initial_option?.value).toBe('done');
+      expect(item0?.element?.initial_option?.value).toBe('done');
     });
 
     it('does not include Linear block when no issues provided', () => {
@@ -1286,7 +1286,7 @@ describe('modal builder', () => {
       const before = current.find(b => b.block_id === 'linear_tickets');
       expect((before?.element?.options as unknown[])?.length).toBe(3);
 
-      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear');
       const after = result.find(b => b.block_id === 'linear_tickets');
       expect((after?.element?.options as unknown[])?.length).toBeGreaterThan(3);
     });
@@ -1296,7 +1296,7 @@ describe('modal builder', () => {
       // element, which Slack rejects with invalid_arguments, so "Show all" silently
       // failed. The expansion must now chunk into <=10-option blocks.
       const current = collapsedView();
-      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear');
 
       const checkboxBlocks = result.filter(
         (b) => (b.element as { type?: string } | undefined)?.type === 'checkboxes'
@@ -1317,7 +1317,7 @@ describe('modal builder', () => {
     it('leaves the other integration section untouched (no GitHub re-fetch)', () => {
       const current = collapsedView();
       const prBefore = current.find(b => b.block_id === 'my_prs');
-      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear');
       const prAfter = result.find(b => b.block_id === 'my_prs');
       // Same object content carried over verbatim — the PR section was not rebuilt.
       expect(prAfter).toEqual(prBefore);
@@ -1328,21 +1328,20 @@ describe('modal builder', () => {
       const current = collapsedView();
       expect(current.find(b => b.block_id === 'linear_show_all')).toBeDefined();
       // 15 tickets < expanded limit of 20, so the button should disappear.
-      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', undefined);
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear');
       expect(result.find(b => b.block_id === 'linear_show_all')).toBeUndefined();
     });
 
-    it('re-applies the user\'s yesterday selection from view state', () => {
+    it('carries yesterday status selects through unchanged (Slack preserves input state)', () => {
+      // Yesterday statuses are input-block static_selects, so Slack preserves the
+      // user's pick across views.update automatically — applyExpandedSection just
+      // needs to pass the block through untouched (same block_id/action_id).
       const current = collapsedView();
-      // User changed the first yesterday item to "Done" since the modal opened.
-      const state = {
-        values: {
-          yesterday_item_0: { item_status_0: { selected_option: { value: 'done' } } },
-        },
-      };
-      const result = applyExpandedSection(current, rebuiltLinear(), 'linear', state);
-      const yday = result.find(b => b.block_id === 'yesterday_item_0');
-      expect((yday?.accessory?.initial_option as { value: string })?.value).toBe('done');
+      const before = current.find(b => b.block_id === 'yesterday_item_0');
+      const result = applyExpandedSection(current, rebuiltLinear(), 'linear');
+      const after = result.find(b => b.block_id === 'yesterday_item_0');
+      expect(after).toEqual(before);
+      expect((after?.element as { type?: string } | undefined)?.type).toBe('static_select');
     });
   });
 });

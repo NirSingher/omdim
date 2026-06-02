@@ -3,12 +3,12 @@
  * Handles: help, prompt, add, remove, list, digest, week, daily
  */
 
-import { getDailies, getDaily, getSchedule, isAdmin, isSuperAdmin, getAdmins, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getLinearTeamIdForUser, clearConfigCache, loadConfigOverrides, isDailyEnabled, getAllDailiesIncludingDisabled, getDailyManagers, getOverride } from '../config';
+import { getDailies, getDaily, getSchedule, isAdmin, isSuperAdmin, getAdmins, getConfigError, getBottleneckThreshold, getGitHubUsernameFromConfig, getLinearUserIdFromConfig, getLinearConfig, getGitHubConfig, getLinearTeamIdForUser, clearConfigCache, loadConfigOverrides, isDailyEnabled, getAllDailiesIncludingDisabled, getDailyManagers, getOverride } from '../config';
 import { DbClient, addParticipant, removeParticipant, getParticipants, getSubmissionsForDate, getSubmissionsInRange, getParticipationStats, getUserDailies, getTeamStats, getMissingSubmissions, countWorkdays, getBottleneckItems, getHighDropUsers, getPeriodStats, setOOO, clearOOO, getUserOOO, getActiveOOOForDaily, OOORecord, getSubmissionForDate, getPreviousSubmission, getGitHubUsername, setGitHubUsername, getLinearUserId, setLinearUserId, setConfigOverride, deleteConfigOverride, getAllConfigOverrides, getBlockerStreaks, getUnplannedOverload } from '../db';
 import { formatDailyDigest, formatWeeklySummary, formatManagerDigest, formatFullReport, DigestPeriod, TrendData } from '../format';
 import { fetchLinearIssuesForUser, fetchGitHubPRsForUser } from './interactions';
 import { formatDate, getUserDate, getUserTimezone, sendPromptDM } from '../prompt';
-import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse, openModal } from '../slack';
+import { parseUserId, ephemeralResponse, sendDM, SlackCommandResponse, openModal, openModalAndGetViewId, updateModal } from '../slack';
 import { buildStandupModal, YesterdayData, SubmissionPrefill } from '../modal';
 
 // ============================================================================
@@ -23,6 +23,7 @@ export interface CommandContext {
   devMode?: boolean;
   triggerId?: string; // For opening modals directly from slash commands
   env?: Record<string, string | undefined>; // For accessing integration tokens
+  waitUntil?: (promise: Promise<unknown>) => void; // Run work after the HTTP response (Workers ExecutionContext.waitUntil)
 }
 
 /** Re-export for convenience */
@@ -883,15 +884,14 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       }
     }
 
-    // Fetch Linear issues and GitHub PRs in parallel
     const interactionCtx = { db: ctx.db, slackToken: ctx.slackToken, env: ctx.env || {} };
-    const [linearResult, githubResult] = await Promise.all([
-      fetchLinearIssuesForUser(daily, ctx.userId, interactionCtx),
-      fetchGitHubPRsForUser(daily, ctx.userId, interactionCtx),
-    ]);
 
-    // Build and open modal
-    const modal = buildStandupModal(
+    // Everything passed to buildStandupModal except the integration data.
+    const buildModal = (
+      linearIssues?: Awaited<ReturnType<typeof fetchLinearIssuesForUser>>['issues'],
+      prData?: Awaited<ReturnType<typeof fetchGitHubPRsForUser>>['prData'],
+      reviewerMap?: Awaited<ReturnType<typeof fetchGitHubPRsForUser>>['reviewerMap'],
+    ) => buildStandupModal(
       targetDailyName,
       yesterdayData,
       daily.questions || [],
@@ -899,25 +899,67 @@ export async function handleDaily(ctx: CommandContext): Promise<CommandResponse>
       targetDate,
       mode,
       prefill,
-      linearResult.issues,
-      githubResult.prData,
-      githubResult.reviewerMap
+      linearIssues,
+      prData,
+      reviewerMap,
     );
+
+    const message = mode === 'tomorrow'
+      ? (prefill
+          ? `📝 Editing *tomorrow's* scheduled standup for *${targetDailyName}*...`
+          : `📅 Opening *tomorrow's* standup for *${targetDailyName}*...`)
+      : `📋 Opening standup for *${targetDailyName}*...`;
+
+    const hasIntegrations = !!getLinearConfig(daily) || !!getGitHubConfig(daily);
+
+    // Fast path: open the modal immediately (well inside Slack's 3-second
+    // trigger_id window) without waiting on Linear/GitHub, then fill those
+    // sections in the background via views.update — which has no time limit.
+    // Slack preserves typed input across the update by block_id, so anything the
+    // user types before the fill lands is kept.
+    if (ctx.waitUntil && hasIntegrations) {
+      const loadingModal = buildModal();
+      const plansIdx = loadingModal.blocks.findIndex(b => b.block_id === 'today_plans');
+      loadingModal.blocks.splice(plansIdx >= 0 ? plansIdx : loadingModal.blocks.length, 0, {
+        type: 'context',
+        block_id: 'integrations_loading',
+        elements: [{ type: 'mrkdwn', text: '⏳ Loading your Linear tickets & GitHub PRs…' }],
+      });
+
+      const viewId = await openModalAndGetViewId(ctx.slackToken, ctx.triggerId, loadingModal);
+      if (!viewId) {
+        return ephemeralResponse('❌ Failed to open standup form. Please try again.');
+      }
+
+      ctx.waitUntil((async () => {
+        try {
+          const [linearResult, githubResult] = await Promise.all([
+            fetchLinearIssuesForUser(daily, ctx.userId, interactionCtx),
+            fetchGitHubPRsForUser(daily, ctx.userId, interactionCtx),
+          ]);
+          const filledModal = buildModal(linearResult.issues, githubResult.prData, githubResult.reviewerMap);
+          await updateModal(ctx.slackToken, viewId, filledModal);
+        } catch (err) {
+          console.error('Failed to fill standup modal with integrations:', err);
+        }
+      })());
+
+      return ephemeralResponse(message);
+    }
+
+    // Legacy path: no background execution available (e.g. tests) or no
+    // integrations to load — fetch synchronously, then open the full modal.
+    const [linearResult, githubResult] = await Promise.all([
+      fetchLinearIssuesForUser(daily, ctx.userId, interactionCtx),
+      fetchGitHubPRsForUser(daily, ctx.userId, interactionCtx),
+    ]);
+    const modal = buildModal(linearResult.issues, githubResult.prData, githubResult.reviewerMap);
 
     const opened = await openModal(ctx.slackToken, ctx.triggerId, modal);
     if (!opened) {
       return ephemeralResponse('❌ Failed to open standup form. Please try again.');
     }
 
-    // Return empty response (modal is shown)
-    let message: string;
-    if (mode === 'tomorrow') {
-      message = prefill
-        ? `📝 Editing *tomorrow's* scheduled standup for *${targetDailyName}*...`
-        : `📅 Opening *tomorrow's* standup for *${targetDailyName}*...`;
-    } else {
-      message = `📋 Opening standup for *${targetDailyName}*...`;
-    }
     return ephemeralResponse(message);
   } catch (err) {
     console.error('Failed to handle /daily:', err);
